@@ -1,0 +1,11 @@
+name: Org Boundary Execution
+on:
+  push:
+    paths: ['org-boundary/**','.github/workflows/org-boundary-execution.yml']
+  workflow_dispatch:
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 org-boundary/tests/test_process_boundary.py
