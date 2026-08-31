@@ -1,0 +1,14 @@
+{
+  "schema_version": "stegverse.org-resident-runtime.activation.v1",
+  "organization": "StegGhost",
+  "canonical_repository": "StegGhost/.github",
+  "activation_owner": "StegGhost/.github",
+  "entrypoint": "resident-runtime/run_once.py",
+  "ingress_egress_owner": "StegGhost/.github",
+  "intr_transport": "org-boundary/runtime/intr_transport.py",
+  "boundary_processor": "org-boundary/runtime/process_boundary.py",
+  "state": "SOURCE_INSTALLED_NOT_RUNTIME_OBSERVED",
+  "github_actions_is_runtime_authority": false,
+  "hb_carrier_grants_authority": false,
+  "application_repositories_are_activation_authority": false
+}
