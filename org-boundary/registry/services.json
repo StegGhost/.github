@@ -3,6 +3,18 @@
   "organization": "StegGhost",
   "services": [
     {
+      "service_id": "stegghost.org-control",
+      "repository": "StegGhost/.github",
+      "boundary_role": "BOUNDARY_LOCAL_CONTROL",
+      "profile_status": "ACTIVE",
+      "accepts": [
+        "ecosystem.communication",
+        "ecosystem.monitor.request",
+        "ecosystem.work.request"
+      ],
+      "runtime_required_for_consumption": false
+    },
+    {
       "service_id": "stegghost.boundary-diagnostic",
       "repository": "StegGhost/.github",
       "boundary_role": "BOUNDARY_LOCAL_DIAGNOSTIC",
