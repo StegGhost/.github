@@ -75,14 +75,26 @@ def dispatch(root:Path, packet:dict[str,Any])->dict[str,Any]:
     if packet["destination"]["org"]!=registry["organization"]: raise ValueError("wrong_destination_org")
     service=next((s for s in registry["services"] if s["service_id"]==packet["destination"]["service"]),None)
     if service is None: raise ValueError("unknown_service")
-    if service.get("boundary_role")!="BOUNDARY_LOCAL_DIAGNOSTIC":
+    role=service.get("boundary_role")
+    if role not in {"BOUNDARY_LOCAL_DIAGNOSTIC","BOUNDARY_LOCAL_CONTROL"}:
         raise ValueError("endpoint_adapter_not_installed")
     prev=None; receipts=[]
     for kind in ("INGRESS_ACCEPTED","DISPATCHED","CONSUMED","RESULT_BOUND","EGRESS_EMITTED"):
         r=receipt(kind,packet["packet_id"],service["service_id"],prev,{"payload_hash":sha(packet["payload"])})
         receipts.append(r); prev=r["receipt_id"]
+    if role=="BOUNDARY_LOCAL_CONTROL":
+        application_result={
+          "message_received":True,
+          "message_class":packet["payload"].get("message_class"),
+          "communication_id":packet["payload"].get("communication_id"),
+          "requested_action":packet["payload"].get("requested_action"),
+          "execution_authority_inferred":False,
+          "execution_authority_effect":packet["transition"]["authority_effect"]
+        }
+    else:
+        application_result={"echo":packet["payload"]}
     return {"schema_version":SCHEMA,"organization":registry["organization"],"packet_id":packet["packet_id"],
-            "service_id":service["service_id"],"consumed":True,"application_result":{"echo":packet["payload"]},
+            "service_id":service["service_id"],"consumed":True,"application_result":application_result,
             "authority_effect":packet["transition"]["authority_effect"],"receipts":receipts,
             "reconstruction":{"same_execution_required":True,"status":"RECONSTRUCTED","terminal_receipt_id":prev}}
 
@@ -179,3 +191,82 @@ def consume_addressed_frames(repo_root:Path, *, mesh_root:Path|None=None, seen:s
         result=ingest_frame(repo_root,item["frame"])
         results.append({"path":item["path"],"result":result})
     return results
+
+
+# --- Ecosystem-wide communication v1.2 additions ---
+def organization_slug(organization:str)->str:
+    return "".join(ch.lower() if ch.isalnum() else "-" for ch in organization).strip("-")
+
+def build_ecosystem_packets(*, origin_org:str, origin_service:str, organizations:list[str],
+                            message_class:str, subject:str, body:dict[str,Any],
+                            requested_action:str|None=None, transition_reference:str="ecosystem.communication.v1",
+                            authority_effect:str="NONE", communication_id:str|None=None)->dict[str,Any]:
+    ordered=sorted(dict.fromkeys(organizations))
+    if not ordered:
+        raise ValueError("organizations_required")
+    comm_id=communication_id or "ecosystem-"+hashlib.sha256(canon({
+        "origin_org":origin_org,"origin_service":origin_service,"organizations":ordered,
+        "message_class":message_class,"subject":subject,"body":body,
+        "requested_action":requested_action,"transition_reference":transition_reference
+    })).hexdigest()[:24]
+    packets=[]
+    for org in ordered:
+        service=organization_slug(org)+".org-control"
+        payload={
+          "communication_id":comm_id,
+          "message_class":message_class,
+          "subject":subject,
+          "body":body,
+          "requested_action":requested_action,
+          "audience":"ECOSYSTEM",
+          "target_organization":org,
+          "target_count":len(ordered)
+        }
+        packet=build_packet(
+          origin_org=origin_org,
+          origin_service=origin_service,
+          destination_org=org,
+          destination_service=service,
+          payload=payload,
+          transition_reference=transition_reference,
+          authority_effect=authority_effect,
+          packet_id=comm_id+":"+organization_slug(org)
+        )
+        packets.append(packet)
+    return {"communication_id":comm_id,"organization_count":len(ordered),"packets":packets}
+
+def publish_ecosystem_message(*, origin_org:str, origin_service:str, organizations:list[str],
+                              message_class:str, subject:str, body:dict[str,Any],
+                              requested_action:str|None=None, transition_reference:str="ecosystem.communication.v1",
+                              authority_effect:str="NONE", communication_id:str|None=None,
+                              root:Path|None=None, now_ns:int|None=None)->dict[str,Any]:
+    built=build_ecosystem_packets(
+      origin_org=origin_org,origin_service=origin_service,organizations=organizations,
+      message_class=message_class,subject=subject,body=body,requested_action=requested_action,
+      transition_reference=transition_reference,authority_effect=authority_effect,
+      communication_id=communication_id
+    )
+    publications=[publish_packet(packet,root=root,now_ns=now_ns) for packet in built["packets"]]
+    return {"communication_id":built["communication_id"],"organization_count":built["organization_count"],
+            "published_count":len(publications),"publications":publications}
+
+def aggregate_ecosystem_results(communication_id:str, results_by_org:dict[str,list[dict[str,Any]]])->dict[str,Any]:
+    rows=[]
+    for org,items in sorted(results_by_org.items()):
+        matched=[]
+        for item in items:
+            result=item.get("result") or {}
+            packet=result.get("packet") or {}
+            payload=packet.get("payload") or {}
+            if payload.get("communication_id")==communication_id:
+                matched.append(item)
+        status="CONSUMED" if any((x.get("result") or {}).get("status")=="CONSUMED" for x in matched) else "NOT_OBSERVED"
+        terminal=None
+        for x in matched:
+            er=(x.get("result") or {}).get("execution_result") or {}
+            terminal=(er.get("reconstruction") or {}).get("terminal_receipt_id") or terminal
+        rows.append({"organization":org,"status":status,"terminal_receipt_id":terminal})
+    consumed=sum(1 for row in rows if row["status"]=="CONSUMED")
+    return {"communication_id":communication_id,"organization_count":len(rows),
+            "consumed_count":consumed,"pending_count":len(rows)-consumed,
+            "complete":consumed==len(rows) and len(rows)>0,"organizations":rows}
