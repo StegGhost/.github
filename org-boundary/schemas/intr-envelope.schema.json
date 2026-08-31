@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stegghost.stegverse.org/schemas/intr-envelope.schema.json",
+  "title": "StegGhost Organizational InTr Envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "packet_id",
+    "direction",
+    "origin",
+    "destination",
+    "carrier",
+    "intr_profile",
+    "transition",
+    "payload",
+    "evidence"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "stegghost.intr-envelope.v1"
+    },
+    "packet_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "direction": {
+      "enum": [
+        "INGRESS",
+        "EGRESS"
+      ]
+    },
+    "origin": {
+      "$ref": "#/$defs/endpoint"
+    },
+    "destination": {
+      "$ref": "#/$defs/endpoint"
+    },
+    "carrier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "reference"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "HB",
+            "HB_DERIVED",
+            "LOCAL_DIRECT",
+            "OTHER_GOVERNED"
+          ]
+        },
+        "reference": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observed_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      }
+    },
+    "intr_profile": {
+      "type": "string",
+      "minLength": 1
+    },
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reference",
+        "authority_effect"
+      ],
+      "properties": {
+        "reference": {
+          "type": "string",
+          "minLength": 1
+        },
+        "authority_effect": {
+          "enum": [
+            "NONE",
+            "ADMIT",
+            "DENY",
+            "DEFER",
+            "CONDITIONAL"
+          ]
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "payload": {
+      "type": "object"
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ingress_receipt",
+        "dispatch_receipt",
+        "consumption_receipt",
+        "egress_receipt",
+        "reconstruction_reference"
+      ],
+      "properties": {
+        "ingress_receipt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dispatch_receipt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "consumption_receipt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "egress_receipt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reconstruction_reference": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "org",
+        "service"
+      ],
+      "properties": {
+        "org": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repository": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "service": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtime_instance": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}
