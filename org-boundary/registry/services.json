@@ -3,6 +3,13 @@
   "organization": "StegGhost",
   "services": [
     {
+      "service_id": "stegghost.boundary-diagnostic",
+      "repository": "StegGhost/.github",
+      "boundary_role": "BOUNDARY_LOCAL_DIAGNOSTIC",
+      "profile_status": "ACTIVE",
+      "runtime_required_for_consumption": false
+    },
+    {
       "service_id": "stegghost.entity-sandbox-runner",
       "repository": "StegGhost/entity-sandbox-runner",
       "boundary_role": "INTERNAL_ENDPOINT",
