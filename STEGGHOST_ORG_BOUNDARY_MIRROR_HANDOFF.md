@@ -37,3 +37,16 @@ Source presence, CI success, merge, deployment, activation, ingress receipt, dis
 
 ## Next
 Replace generic INTERNAL_ENDPOINT entries with tighter endpoint-specific profiles as each repository's own handoff and runtime contract are reconciled.
+
+
+## Canonical resident-runtime activation rule — 2026-08-31
+- Every StegGhost resident runtime activation surface MUST be kept in `StegGhost/.github`.
+- No application repository is the organization resident-runtime activation authority.
+- Application repositories expose capabilities/endpoints to the organizational boundary; the organization `.github` owns activation, ingress, egress, and organization-crossing transport behavior.
+- All communication crossing the StegGhost organizational boundary MUST be generated through this `.github` boundary using Interlock/InTr semantics.
+- Ingress responsibilities: carrier observation, InTr envelope validation, provenance binding, transition-context binding, destination/profile resolution, dispatch evidence.
+- Egress responsibilities: result/evidence validation, destination-org resolution, InTr envelope generation, egress evidence, reconstruction linkage.
+- HB/HB-derived carrier presence remains non-authorizing. Authority is determined by applicable transition elements.
+- GitHub Actions may validate or transport evidence, but GitHub-hosted workflow execution is not required as sovereign runtime authority.
+- Canonical implementation paths: `org-boundary/runtime/`, `org-boundary/registry/`, `org-boundary/schemas/`, `org-boundary/evidence/`, `resident-runtime/`.
+- Any legacy resident activation implementation outside `StegGhost/.github` becomes an endpoint/provider to this boundary or must be migrated here; it must not remain a competing organizational activation point.
