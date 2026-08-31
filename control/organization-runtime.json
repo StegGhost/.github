@@ -1,0 +1,21 @@
+{
+  "schema": "stegverse.organization-resident-runtime/v1",
+  "organization": "StegGhost",
+  "runtime_owner_repo": "StegGhost/.github",
+  "state": "SOURCE_CONFIGURED_RUNTIME_NOT_CLAIMED",
+  "activation_root": "runtime/activations",
+  "ingress_root": "runtime/ingress",
+  "egress_root": "runtime/egress",
+  "interlock_protocol": "Interlock",
+  "intr_protocol": "InTr",
+  "universal_intr_schema": "stegverse.universal-intr-transport/v1",
+  "receipt_schema": "stegverse.intr.hop_receipt/v1",
+  "cross_boundary_communication_requires_interlock_intr": true,
+  "heartbeat": {
+    "substrate": "HB_100HZ_OR_DETERMINISTIC_DERIVED_CARRIER",
+    "grants_authority": false
+  },
+  "credential_authority": "TV/TVC",
+  "github_actions_runtime_authority": "NONE",
+  "authority_effect": "NONE_SOURCE_ONLY"
+}
