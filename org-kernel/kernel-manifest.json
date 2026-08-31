@@ -1,6 +1,6 @@
 {
   "schema_version": "stegverse.org-resident-kernel-manifest/v1",
-  "kernel_version": "1.2.0",
+  "kernel_version": "1.3.0",
   "canonical_source": "StegVerse-Labs/.github/org-kernel",
   "organization_neutral": true,
   "modules": [
@@ -15,7 +15,11 @@
     "addressed HB-derived InTr frame publish/scan/consume",
     "ecosystem-wide multicast fanout",
     "org-control message consumption",
-    "ecosystem result aggregation"
+    "ecosystem result aggregation",
+    "resident status responses",
+    "durable ecosystem work intake",
+    "governed request-response frames",
+    "federation directory consumption"
   ],
   "authority": {
     "heartbeat": "NONE",
@@ -49,6 +53,10 @@
     "common_communication_id": true,
     "per_org_receipts": true,
     "rollup_reconstruction": true,
-    "receipt_grants_execution_authority": false
+    "receipt_grants_execution_authority": false,
+    "response_path": "PER_ORG_GOVERNED_RESPONSE_TO_ORIGIN",
+    "monitoring": "REQUEST_STATUS_AND_COLLECT_RESPONSES",
+    "work": "QUEUE_FOR_LOCAL_ADMISSION_EVALUATION",
+    "work_request_receipt_grants_execution_authority": false
   }
 }
