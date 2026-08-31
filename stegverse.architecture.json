@@ -1,0 +1,50 @@
+{
+  "schema_version": "1.0",
+  "repo_id": "StegGhost/.github",
+  "enforcement": "warn",
+  "purpose": "Canonical StegGhost organizational ingress/egress boundary definition",
+  "expected_structure": {
+    "STEGGHOST_ORG_BOUNDARY_MIRROR_HANDOFF.md": {
+      "required": true
+    },
+    "org-boundary/": {
+      "required": true,
+      "subdirs": {
+        "schemas/": {
+          "required": true
+        },
+        "registry/": {
+          "required": true
+        },
+        "evidence/": {
+          "required": true
+        }
+      }
+    },
+    "org-boundary/README.md": {
+      "required": true
+    },
+    "org-boundary/schemas/intr-envelope.schema.json": {
+      "required": true
+    },
+    "org-boundary/evidence/receipt-chain.schema.json": {
+      "required": true
+    },
+    "org-boundary/registry/services.json": {
+      "required": true
+    }
+  },
+  "migration_rules": {
+    "review_needed_path": "review_needed/",
+    "legacy_path": "legacy/",
+    "auto_migrate": false,
+    "require_approval": true,
+    "syntax_issue_patterns": []
+  },
+  "file_rules": {
+    "forbidden_patterns": [],
+    "naming_conventions": {
+      "python": "snake_case"
+    }
+  }
+}
