@@ -1,6 +1,6 @@
 {
   "schema_version": "stegverse.org-resident-kernel-manifest/v1",
-  "kernel_version": "1.1.0",
+  "kernel_version": "1.2.0",
   "canonical_source": "StegVerse-Labs/.github/org-kernel",
   "organization_neutral": true,
   "modules": [
@@ -12,7 +12,10 @@
     "same-execution reconstruction",
     "write-once federation outbox",
     "shared sovereign federation spool",
-    "addressed HB-derived InTr frame publish/scan/consume"
+    "addressed HB-derived InTr frame publish/scan/consume",
+    "ecosystem-wide multicast fanout",
+    "org-control message consumption",
+    "ecosystem result aggregation"
   ],
   "authority": {
     "heartbeat": "NONE",
@@ -35,5 +38,17 @@
     "github_runtime_required": false,
     "carrier": "HB_DERIVED_INTR_FRAME",
     "authority_effect": "NONE"
+  },
+  "ecosystem_communications": {
+    "message_classes": [
+      "ecosystem.communication",
+      "ecosystem.monitor.request",
+      "ecosystem.work.request"
+    ],
+    "fanout": "ONE_GOVERNED_COMMUNICATION_TO_N_ADDRESSED_INTR_PACKETS",
+    "common_communication_id": true,
+    "per_org_receipts": true,
+    "rollup_reconstruction": true,
+    "receipt_grants_execution_authority": false
   }
 }
