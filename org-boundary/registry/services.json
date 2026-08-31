@@ -1,0 +1,49 @@
+{
+  "schema_version": "stegghost.service-registry.v1",
+  "organization": "StegGhost",
+  "services": [
+    {
+      "service_id": "stegghost.entity-sandbox-runner",
+      "repository": "StegGhost/entity-sandbox-runner",
+      "boundary_role": "INTERNAL_ENDPOINT",
+      "profile_status": "NEEDS_REPOSITORY_HANDOFF_RECONCILIATION",
+      "runtime_required_for_consumption": true
+    },
+    {
+      "service_id": "stegghost.telemetry",
+      "repository": "StegGhost/telemetry",
+      "boundary_role": "INTERNAL_ENDPOINT",
+      "profile_status": "NEEDS_REPOSITORY_HANDOFF_RECONCILIATION",
+      "runtime_required_for_consumption": true
+    },
+    {
+      "service_id": "stegghost.automated-buildout",
+      "repository": "StegGhost/automated_buildout",
+      "boundary_role": "INTERNAL_ENDPOINT",
+      "profile_status": "NEEDS_REPOSITORY_HANDOFF_RECONCILIATION",
+      "runtime_required_for_consumption": true
+    },
+    {
+      "service_id": "stegghost.stegverse-sandbox",
+      "repository": "StegGhost/stegverse-sandbox",
+      "boundary_role": "INTERNAL_ENDPOINT",
+      "profile_status": "NEEDS_REPOSITORY_HANDOFF_RECONCILIATION",
+      "runtime_required_for_consumption": true
+    },
+    {
+      "service_id": "stegghost.stegcge",
+      "repository": "StegGhost/StegCGE",
+      "boundary_role": "INTERNAL_ENDPOINT",
+      "profile_status": "NEEDS_REPOSITORY_HANDOFF_RECONCILIATION",
+      "runtime_required_for_consumption": true
+    },
+    {
+      "service_id": "stegghost.ghost-pat-lab",
+      "repository": "StegGhost/ghost-pat-lab",
+      "boundary_role": "INTERNAL_ENDPOINT",
+      "profile_status": "NEEDS_REPOSITORY_HANDOFF_RECONCILIATION",
+      "runtime_required_for_consumption": true
+    }
+  ],
+  "boundary_rule": "Cross-organization ingress/egress semantics are defined by the organization boundary; endpoint authority remains transition-governed."
+}
