@@ -1,0 +1,3 @@
+# StegGhost organization coordination
+
+Existing ingress/egress and execution authority remains defined by [`STEGGHOST_ORG_BOUNDARY_MIRROR_HANDOFF.md`](STEGGHOST_ORG_BOUNDARY_MIRROR_HANDOFF.md). The [source-owned root-license inventory](docs/OPEN_SOURCE_ORGANIZATION_INVENTORY_20260926.json) records 7 known repositories under central `ECOSYSTEM-OPEN-SOURCE-STRATEGY-001` / COSV `20010010100000`. `LICENSE` and `LICENSE.md` were not found at their inspected default-branch roots. No historical or file-level absence conclusion, rights-holder clearance, new license, runtime effect or release authorization is implied. Public central census uses aggregate counts only.
