@@ -1,0 +1,63 @@
+{
+  "schema": "stegverse.organization-open-source-inventory/v1",
+  "organization": "StegGhost",
+  "snapshot_date": "2026-09-26",
+  "canonical_goal": "ECOSYSTEM-OPEN-SOURCE-STRATEGY-001",
+  "cosv": "20010010100000",
+  "scope": "Authenticated organization repository listing and default-branch LICENSE and LICENSE.md root reads. Not historical or complete file-level rights audit.",
+  "visibility": "INTERNAL_SOURCE_OWNER_EVIDENCE",
+  "counts": {
+    "repositories": 7,
+    "public": 0,
+    "private": 6,
+    "internal": 1,
+    "root_license_found": 0,
+    "checked_root_paths_missing": 7,
+    "copyright_title_verified": 0,
+    "release_authorizations": 0
+  },
+  "repositories": [
+    {
+      "repository": "StegGhost/entity-sandbox-runner",
+      "visibility": "private",
+      "root_license_observation": "LICENSE_AND_LICENSE_MD_NOT_FOUND"
+    },
+    {
+      "repository": "StegGhost/telemetry",
+      "visibility": "private",
+      "root_license_observation": "LICENSE_AND_LICENSE_MD_NOT_FOUND"
+    },
+    {
+      "repository": "StegGhost/automated_buildout",
+      "visibility": "private",
+      "root_license_observation": "LICENSE_AND_LICENSE_MD_NOT_FOUND"
+    },
+    {
+      "repository": "StegGhost/stegverse-sandbox",
+      "visibility": "private",
+      "root_license_observation": "LICENSE_AND_LICENSE_MD_NOT_FOUND"
+    },
+    {
+      "repository": "StegGhost/StegCGE",
+      "visibility": "private",
+      "root_license_observation": "LICENSE_AND_LICENSE_MD_NOT_FOUND"
+    },
+    {
+      "repository": "StegGhost/ghost-pat-lab",
+      "visibility": "private",
+      "root_license_observation": "LICENSE_AND_LICENSE_MD_NOT_FOUND"
+    },
+    {
+      "repository": "StegGhost/.github",
+      "visibility": "internal",
+      "root_license_observation": "LICENSE_AND_LICENSE_MD_NOT_FOUND"
+    }
+  ],
+  "dispositions": [
+    "ROOT_ONLY_LICENSE_SCOPE_UNVERIFIED",
+    "CONTRIBUTOR_RIGHTS_UNVERIFIED",
+    "THIRD_PARTY_RIGHTS_UNVERIFIED",
+    "RELEASE_NOT_AUTHORIZED"
+  ],
+  "central_disclosure": "AGGREGATE_COUNTS_ONLY_NO_NONPUBLIC_REPOSITORY_NAMES"
+}
