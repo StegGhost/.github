@@ -50,3 +50,8 @@ Replace generic INTERNAL_ENDPOINT entries with tighter endpoint-specific profile
 - GitHub Actions may validate or transport evidence, but GitHub-hosted workflow execution is not required as sovereign runtime authority.
 - Canonical implementation paths: `org-boundary/runtime/`, `org-boundary/registry/`, `org-boundary/schemas/`, `org-boundary/evidence/`, `resident-runtime/`.
 - Any legacy resident activation implementation outside `StegGhost/.github` becomes an endpoint/provider to this boundary or must be migrated here; it must not remain a competing organizational activation point.
+
+
+## 2026-09-26 — bounded source-owned open-source audit
+
+Central existing task `ECOSYSTEM-OPEN-SOURCE-STRATEGY-001` / COSV `20010010100000` holds ecosystem aggregation; this native inventory covers 7 repository entries (0 public, 6 private, 1 internal). Both root `LICENSE` and `LICENSE.md` were not found on inspected default branches. Detailed evidence: `docs/OPEN_SOURCE_ORGANIZATION_INVENTORY_20260926.json` (nonpublic source-owner custody). Source file/historical licensing, contributor and third-party rights remain unverified, no release authorized. The central public census may consume aggregate counts only. Preserve all existing organization boundary and runtime authority.
