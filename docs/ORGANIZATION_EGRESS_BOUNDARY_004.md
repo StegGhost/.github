@@ -90,6 +90,16 @@ first run of the suite emitted `standing={}` with disposition ALLOW.
   `attestation_is_unavailable_at_this_organization: true` alongside
   `NOT_PROVEN`. A reader of the chain cannot take that `NOT_PROVEN` for an
   attestation that was attempted and failed.
+
+  **Superseded.** `ORGANIZATION-ORIGIN-ATTESTATION-SEAM-006` built the seam:
+  `emit` takes a credential authority and reaches `PROVEN` on that authority's
+  verification receipt, so the claim above that no code path here could reach
+  it no longer holds. What remains true is the ceiling, and it is now declared
+  in the overlay and enforced by the boundary validator rather than stated in
+  a record field: the authority's key is on a TV/TVC resident host this
+  organization cannot reach, so every crossing emitted here today is still
+  unattested. The field named above was replaced by `signer_supplied`, which
+  distinguishes no authority offered from one offered that failed.
 * **No propagation to `master-records`.** The reference declares
   `propagation_target: master-records/.github` and carries a submitter to
   perform it. This organization carries no submitter, so the field is `null` and
