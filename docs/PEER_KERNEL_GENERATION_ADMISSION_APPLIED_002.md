@@ -116,8 +116,10 @@ one whose standing was checked, not one whose origin was authenticated.
 
 ## What remains open at this organization's egress
 
-Two gaps found alongside this one are **not** closed here, and this document
-does not imply they are:
+Two gaps found alongside this one are **not** closed in this change, and this
+document does not imply they are. Both are answered separately by
+`docs/EGRESS_CLOSABILITY_AND_RECEIPT_RECOMPUTATION_003.md`, which depends on
+this change and does not replace it:
 
 * There is no `resolve`/`emit`/`close` egress boundary. A payload declaring a
   `message_class` the transport profile does not answer is published, consumed

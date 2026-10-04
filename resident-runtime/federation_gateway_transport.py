@@ -130,6 +130,11 @@ def publish_ecosystem_via_gateway(
     for packet in built["packets"]:
         frame = K.carrier_frame(packet)
         stored = submit_frame(frame)
+        # Recorded after the gateway accepted the frame, for the same reason the
+        # spool lane records after publishing: the record is of an emission.
+        # Without it this lane's closure would have nothing to recompute the far
+        # side against and would be back to trusting the carried terminal.
+        K.persist_outbox(repo_root, frame)
         results.append({
             "organization": packet["destination"]["org"],
             "packet_id": packet["packet_id"],
@@ -162,6 +167,10 @@ def _persist_response(repo_root: Path, packet: dict[str, Any], execution_result:
         "origin_org": packet["origin"]["org"],
         "message_class": payload.get("message_class"),
         "application_result": execution_result.get("application_result"),
+        "request_packet_id": (payload.get("body") or {}).get("request_packet_id"),
+        # Stored so closure can recompute it. The response's own assertion is
+        # what gets checked, so it has to survive to the point of checking.
+        "receipt_terminal": (payload.get("body") or {}).get("receipt_terminal"),
         "reconstruction": execution_result.get("reconstruction"),
         "authority_effect": execution_result.get("authority_effect"),
     }
@@ -224,7 +233,15 @@ def resident_gateway_cycle(repo_root: Path) -> dict[str, Any]:
 
 
 def collect_local_responses(repo_root: Path, communication_id: str) -> dict[str, Any]:
+    """Collect gateway-lane responses, recomputing each far-side receipt chain.
+
+    A response observation is checked against this organization's own emission
+    record, exactly as the spool lane's collection is: a terminal receipt that
+    does not recompute did not come from a boundary that ran the packet, so the
+    response is refused rather than counted.
+    """
     directory = repo_root / "resident-runtime" / "control" / "responses.d"
+    emissions = K.recorded_emissions(repo_root, communication_id)
     rows = []
     if directory.exists():
         for path in sorted(directory.glob("*.json")):
@@ -234,10 +251,36 @@ def collect_local_responses(repo_root: Path, communication_id: str) -> dict[str,
                 continue
             if value.get("communication_id") == communication_id:
                 rows.append(value)
-    orgs = sorted({row.get("origin_org") for row in rows if row.get("origin_org")})
+    verified, refused = [], []
+    for row in rows:
+        org = row.get("origin_org")
+        if not org:
+            continue
+        emission = emissions.get(str(row.get("request_packet_id")))
+        if emission is None:
+            refused.append({"organization": org,
+                            "finding": "THIS_ORGANIZATION_HAS_NO_EMISSION_RECORD_FOR_THIS_PACKET:"
+                                       + str(row.get("request_packet_id"))})
+            continue
+        recomputed = K.far_side_receipt_chain(
+            emission["packet_id"], emission["far_side_service_id"],
+            emission["far_side_payload_hash"])[-1]
+        if row.get("receipt_terminal") != recomputed:
+            refused.append({"organization": org,
+                            "finding": "FAR_SIDE_TERMINAL_RECEIPT_DOES_NOT_RECOMPUTE:"
+                                       + str(row.get("receipt_terminal"))})
+            continue
+        verified.append(org)
+    orgs = sorted(set(verified))
+    directory_rows = K.load_federation_directory(repo_root).get("organizations", [])
     return {
         "communication_id": communication_id,
         "response_count": len(orgs),
         "organizations": orgs,
-        "complete": len(orgs) == 14,
+        "refused_count": len(refused),
+        "refused": refused,
+        "far_side_receipts_recomputed_here": True,
+        # Read from the directory rather than hard-coded, so the denominator
+        # tracks the peer set instead of drifting from it.
+        "complete": bool(directory_rows) and len(orgs) == len(directory_rows),
     }

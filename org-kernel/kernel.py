@@ -259,6 +259,12 @@ def build_ecosystem_packets(*, origin_org:str, origin_service:str, organizations
           "target_organization":org,
           "target_count":len(ordered)
         }
+        unclosable=closability_refusal(payload)
+        if unclosable is not None:
+            # Refused before anything is published: a crossing that could be
+            # consumed and never answered is not emitted at all, rather than
+            # left for a caller to discover as a response that never arrives.
+            raise ValueError(unclosable)
         packet=build_packet(
           origin_org=origin_org,
           origin_service=origin_service,
@@ -277,16 +283,27 @@ def publish_ecosystem_message(*, origin_org:str, origin_service:str, organizatio
                               standing:dict[str,Any], message_class:str, subject:str, body:dict[str,Any],
                               requested_action:str|None=None, transition_reference:str="ecosystem.communication.v1",
                               authority_effect:str="NONE", communication_id:str|None=None,
-                              root:Path|None=None, now_ns:int|None=None)->dict[str,Any]:
+                              root:Path|None=None, now_ns:int|None=None,
+                              repo_root:Path|None=None)->dict[str,Any]:
     built=build_ecosystem_packets(
       origin_org=origin_org,origin_service=origin_service,organizations=organizations,standing=standing,
       message_class=message_class,subject=subject,body=body,requested_action=requested_action,
       transition_reference=transition_reference,authority_effect=authority_effect,
       communication_id=communication_id
     )
-    publications=[publish_packet(packet,root=root,now_ns=now_ns) for packet in built["packets"]]
+    publications=[]
+    for packet in built["packets"]:
+        published=publish_packet(packet,root=root,now_ns=now_ns)
+        if repo_root is not None:
+            # Written after the frame is published, because the record is of an
+            # emission and carries the frame's digest. Recording it first would
+            # claim a crossing that had not happened yet. Write-once, so a
+            # replayed publish cannot rewrite what closure recomputes against.
+            persist_outbox(repo_root,published["frame"])
+        publications.append(published)
     return {"communication_id":built["communication_id"],"organization_count":built["organization_count"],
-            "published_count":len(publications),"publications":publications}
+            "published_count":len(publications),"publications":publications,
+            "emissions_recorded":repo_root is not None}
 
 def aggregate_ecosystem_results(communication_id:str, results_by_org:dict[str,list[dict[str,Any]]])->dict[str,Any]:
     rows=[]
@@ -382,12 +399,64 @@ def handle_control_message(root:Path, packet:dict[str,Any], registry:dict[str,An
         result["response_acknowledged"]=True
     return result
 
+#: The request classes this boundary answers, each mapped to the acknowledgement
+#: it is answered with. `consume_and_respond` responds to exactly these keys, so
+#: this is the set a crossing must declare to be closable at all -- which is why
+#: emission reads it too rather than keeping a second copy.
+RESPONDED_REQUEST_CLASSES={
+  "ecosystem.monitor.request":"ecosystem.monitor.response",
+  "ecosystem.work.request":"ecosystem.work.ack",
+  "ecosystem.communication":"ecosystem.communication.ack"
+}
+ACK_CLASSES=frozenset(RESPONDED_REQUEST_CLASSES.values())
+
 def response_message_class(request_class:str|None)->str:
-    return {
-      "ecosystem.monitor.request":"ecosystem.monitor.response",
-      "ecosystem.work.request":"ecosystem.work.ack",
-      "ecosystem.communication":"ecosystem.communication.ack"
-    }.get(request_class or "","ecosystem.communication.ack")
+    return RESPONDED_REQUEST_CLASSES.get(request_class or "","ecosystem.communication.ack")
+
+def closability_refusal(payload:dict[str,Any])->str|None:
+    """Why this payload's crossing could never close, or None if it can.
+
+    A payload declaring a class outside `RESPONDED_REQUEST_CLASSES` is still
+    published, consumed and receipted by the far side -- and never answered. Its
+    closure is not pending, which is a crossing still in flight; it is
+    unreachable, which is a different state that a pending count cannot express.
+    Closure also correlates a response by `communication_id`, so a blank one
+    leaves nothing to correlate.
+
+    Both conditions are readable in this organization's own payload before
+    anything is published, which is why they are refused here rather than
+    discovered as a crossing that never comes back.
+    """
+    declared=payload.get("message_class")
+    if declared not in RESPONDED_REQUEST_CLASSES:
+        return ("unclosable_crossing:message_class_is_answered_by_no_acknowledgement:"
+                +repr(declared)+"; answered: "+", ".join(sorted(RESPONDED_REQUEST_CLASSES)))
+    identifier=payload.get("communication_id")
+    if not isinstance(identifier,str) or not identifier.strip():
+        return ("unclosable_crossing:closure_correlates_on_communication_id_and_this_payload_declares:"
+                +repr(identifier))
+    return None
+
+#: The boundary receipt kinds `dispatch` mints, in order.
+RECEIPT_KINDS=("INGRESS_ACCEPTED","DISPATCHED","CONSUMED","RESULT_BOUND","EGRESS_EMITTED")
+
+def far_side_receipt_chain(packet_id:str, service_id:str, payload_hash:str)->list[str]:
+    """Recompute the receipt chain the far side must have minted for this packet.
+
+    Not a claim about the far side's honesty -- a recomputation. A receipt id is
+    derived by `receipt()` from the kind, the packet id, the subject service and
+    the payload hash, and every input is something the emitting organization
+    already holds: the packet id it minted, the service it addressed from its
+    own directory, and the digest of its own payload. So a terminal receipt that
+    comes back on a response is checkable rather than carried, and a response
+    whose terminal does not recompute did not come from a boundary that ran this
+    packet.
+    """
+    chain,previous=[],None
+    for kind in RECEIPT_KINDS:
+        rid=receipt(kind,packet_id,service_id,previous,{"payload_hash":payload_hash})["receipt_id"]
+        chain.append(rid); previous=rid
+    return chain
 
 def build_control_response(request_packet:dict[str,Any], execution_result:dict[str,Any])->dict[str,Any]:
     req_payload=request_packet.get("payload") or {}
@@ -442,18 +511,61 @@ def consume_and_respond(repo_root:Path, *, mesh_root:Path|None=None, seen:set[st
         out.append({"path":item["path"],"result":result,"response_publication":response_publication,"seen_marker":str(marker)})
     return out
 
-def collect_ecosystem_responses(origin_org:str, communication_id:str, *, mesh_root:Path|None=None)->dict[str,Any]:
+def recorded_emissions(repo_root:Path, communication_id:str)->dict[str,dict[str,Any]]:
+    """What this organization recorded emitting for a communication, by packet id.
+
+    Read off the write-once outbox rather than from the responses, because a
+    closure is verified against what this organization recorded emitting, not
+    against what the response asserts. Each record yields the three inputs
+    `far_side_receipt_chain` needs: the packet id this organization minted, the
+    service it addressed, and the digest of its own payload.
+    """
+    out=repo_root/"resident-runtime/federation/outbox"
+    emissions={}
+    if not out.exists():
+        return emissions
+    for path in sorted(out.glob("*.json")):
+        try:
+            frame=json.loads(path.read_text())
+            packet=recover_packet(frame)
+        except Exception:
+            # An unreadable or tampered outbox record is not an emission this
+            # organization can verify against, so it is not offered as one.
+            continue
+        payload=packet.get("payload") or {}
+        if payload.get("communication_id")!=communication_id:
+            continue
+        emissions[packet["packet_id"]]={
+          "packet_id":packet["packet_id"],
+          "destination_org":packet["destination"]["org"],
+          "far_side_service_id":packet["destination"]["service"],
+          "far_side_payload_hash":sha(payload),
+          "frame_sha256":frame.get("frame_sha256")
+        }
+    return emissions
+
+def collect_ecosystem_responses(origin_org:str, communication_id:str, *, mesh_root:Path|None=None,
+                                repo_root:Path|None=None)->dict[str,Any]:
+    """Collect the responses to a communication, recomputing each far-side chain.
+
+    With `repo_root`, each response's `receipt_terminal` is recomputed from this
+    organization's own emission record and a response whose terminal does not
+    recompute is refused rather than counted. Without it there is no emission to
+    recompute against, and the result says so in
+    `far_side_receipts_recomputed_here` rather than reporting a carried terminal
+    as a checked one.
+    """
+    emissions={} if repo_root is None else recorded_emissions(repo_root,communication_id)
     responses=[]
     for item in scan_addressed_frames(origin_org,root=mesh_root):
         packet=recover_packet(item["frame"])
         payload=packet.get("payload") or {}
         if payload.get("communication_id")!=communication_id:
             continue
-        if payload.get("message_class") not in {
-            "ecosystem.monitor.response","ecosystem.work.ack","ecosystem.communication.ack"}:
+        if payload.get("message_class") not in ACK_CLASSES:
             continue
         body=payload.get("body") or {}
-        responses.append({
+        row={
           "organization":body.get("responding_organization") or packet["origin"]["org"],
           "message_class":payload.get("message_class"),
           "request_packet_id":body.get("request_packet_id"),
@@ -461,16 +573,54 @@ def collect_ecosystem_responses(origin_org:str, communication_id:str, *, mesh_ro
           "receipt_terminal":body.get("receipt_terminal"),
           "response_packet_id":packet["packet_id"],
           "frame_sha256":item["frame"].get("frame_sha256")
-        })
+        }
+        if repo_root is None:
+            # Stated, not implied: the terminal on this row was carried and
+            # nothing checked it.
+            row["receipt_terminal_recomputes"]=None
+            row["far_side_terminal_receipt_recomputed"]=None
+            row["findings"]=[]
+        else:
+            row.update(_verified_response(row,emissions))
+        responses.append(row)
     dedup={}
     for row in responses:
         dedup[row["organization"]]=row
-    rows=[dedup[k] for k in sorted(dedup)]
+    ordered=[dedup[k] for k in sorted(dedup)]
+    rows=[row for row in ordered if row["receipt_terminal_recomputes"] is not False]
+    refused=[row for row in ordered if row["receipt_terminal_recomputes"] is False]
     return {
       "communication_id":communication_id,
       "response_count":len(rows),
-      "organizations":rows
+      "organizations":rows,
+      "refused_count":len(refused),
+      "refused":refused,
+      "far_side_receipts_recomputed_here":repo_root is not None,
+      "emission_record_count":len(emissions)
     }
+
+def _verified_response(row:dict[str,Any], emissions:dict[str,dict[str,Any]])->dict[str,Any]:
+    """Whether a response's terminal receipt recomputes against our own emission."""
+    findings=[]
+    emission=emissions.get(str(row.get("request_packet_id")))
+    if emission is None:
+        # A crossing this organization has no record of emitting is not one it
+        # can close, whatever the response asserts about it.
+        findings.append("THIS_ORGANIZATION_HAS_NO_EMISSION_RECORD_FOR_THIS_PACKET:"
+                        +str(row.get("request_packet_id")))
+        return {"receipt_terminal_recomputes":False,"far_side_terminal_receipt_recomputed":None,
+                "findings":findings}
+    if row.get("organization")!=emission["destination_org"]:
+        findings.append("RESPONSE_CAME_FROM_A_DIFFERENT_ORGANIZATION:"+str(row.get("organization")))
+    recomputed=far_side_receipt_chain(emission["packet_id"],emission["far_side_service_id"],
+                                      emission["far_side_payload_hash"])[-1]
+    terminal=row.get("receipt_terminal")
+    if not isinstance(terminal,str) or not terminal.strip():
+        findings.append("RESPONSE_CARRIES_NO_FAR_SIDE_TERMINAL_RECEIPT")
+    elif terminal!=recomputed:
+        findings.append("FAR_SIDE_TERMINAL_RECEIPT_DOES_NOT_RECOMPUTE:"+terminal)
+    return {"receipt_terminal_recomputes":not findings,
+            "far_side_terminal_receipt_recomputed":recomputed,"findings":findings}
 
 def publish_ecosystem_from_directory(repo_root:Path, *, standing:dict[str,Any], message_class:str, subject:str, body:dict[str,Any],
                                      requested_action:str|None=None, authority_effect:str="NONE",
@@ -492,7 +642,8 @@ def publish_ecosystem_from_directory(repo_root:Path, *, standing:dict[str,Any], 
       authority_effect=authority_effect,
       communication_id=communication_id,
       root=mesh_root,
-      now_ns=now_ns
+      now_ns=now_ns,
+      repo_root=repo_root
     )
 
 
