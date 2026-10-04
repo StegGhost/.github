@@ -107,9 +107,18 @@ still construct an unclosable packet, here as there.
 This is not the reference organization's full `resolve`/`emit`/`close` boundary.
 That boundary records every emission and closure on a transition ledger, carries
 credential-authority attestation, and returns an explicit `PENDING` disposition
-for a crossing still in flight. This organization carries none of that
+for a crossing still in flight. This organization carried none of that
 infrastructure, and porting it was not attempted here: what is closed is the two
 gaps that were probed, with the machinery this repository already has.
+
+**Superseded in part.** `ORGANIZATION-EGRESS-BOUNDARY-004` subsequently built
+that boundary at this organization -- both ledger levels, all four steps and the
+`PENDING` disposition -- and reuses the two surfaces this change added rather
+than reimplementing them: `closability_refusal` decides closability for it, and
+`far_side_receipt_chain` is the derivation its closure recomputes against.
+Credential-authority attestation remains unported and is recorded as
+unavailable rather than absent. See
+`docs/ORGANIZATION_EGRESS_BOUNDARY_004.md`.
 
 So:
 

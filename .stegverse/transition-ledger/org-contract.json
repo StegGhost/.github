@@ -1,0 +1,24 @@
+{
+  "schema": "stegverse.organization-transition-ledger-contract/v1",
+  "organization": "StegGhost",
+  "ledger_level": "ORGANIZATION",
+  "consumes": [
+    "stegverse.repo-transition-receipt/v1"
+  ],
+  "emits": "stegverse.organization-transition-receipt/v1",
+  "replay_rule": "ORGANIZATION_REPLAY_MUST_REQUIRE_ONLY_VERIFIED_REPO_RECEIPTS_AND_ORG_RECEIPTS_NOT_ECOSYSTEM_REPLAY",
+  "preserves_repo_receipt": true,
+  "append_only_receipts": true,
+  "authority_effect": "NONE_CONTRACT_ONLY",
+  "organization_scope_rule": "EVERY_STATE_TRANSITION_OCCURRING_WITHIN_THE_ORGANIZATION_EMITS_AN_ORGANIZATION_RECEIPT",
+  "ledger_root_is_organization_runtime_reality_locus": true,
+  "runtime_reality_authority": "Organization",
+  "ledger_lock": "ORGANIZATION_LEDGER_LOCK",
+  "write_mode": "MANIFEST_DIRECTED_APPEND",
+
+  "_consumes_is_narrower_than_the_reference": "StegVerse-org also consumes stegverse.canonical-state-transition-receipt/v1. This organization runs no canonical state transition emitter, so admitting that schema would declare an intake nothing here produces. It is added when such an emitter exists, not before.",
+
+  "propagation_target": null,
+  "organization_batch_propagation_implemented": false,
+  "_why_propagation_is_null": "The reference declares propagation_target master-records/.github and carries resident-runtime/submit_org_transition_to_master_records.py to perform it. This organization carries no such submitter, so naming a propagation target would be a declared capability with nothing enforcing it -- the exact defect PEER_KERNEL_GENERATION_ADMISSION_APPLIED_002 records at this organization's kernel. The field stays null until a submitter exists."
+}
