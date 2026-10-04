@@ -11,6 +11,10 @@ on:
       - resident-runtime/aggregate_repo_transition.py
       - resident-runtime/ledger_store.py
       - resident-runtime/tests/test_organization_egress_boundary.py
+      - resident-runtime/tests/test_origin_attestation_seam.py
+      - org-boundary/runtime/origin_attestation.py
+      - org-runtime/interlock-intr.json
+      - org-runtime/runtime_boundary.py
       - org-kernel/kernel.py
       - .github/workflows/organization-egress-boundary-validation.yml
   push:
@@ -21,6 +25,10 @@ on:
       - resident-runtime/aggregate_repo_transition.py
       - resident-runtime/ledger_store.py
       - resident-runtime/tests/test_organization_egress_boundary.py
+      - resident-runtime/tests/test_origin_attestation_seam.py
+      - org-boundary/runtime/origin_attestation.py
+      - org-runtime/interlock-intr.json
+      - org-runtime/runtime_boundary.py
       - org-kernel/kernel.py
       - .github/workflows/organization-egress-boundary-validation.yml
   workflow_dispatch:
@@ -40,7 +48,9 @@ jobs:
         run: |
           set -eu
           python3 resident-runtime/tests/test_organization_egress_boundary.py
+          python3 resident-runtime/tests/test_origin_attestation_seam.py
           python3 -m py_compile \
+            org-boundary/runtime/origin_attestation.py \
             resident-runtime/organization_egress_boundary.py \
             resident-runtime/aggregate_repo_transition.py \
             resident-runtime/ledger_store.py \
@@ -84,14 +94,48 @@ jobs:
           assert 'kernel.closability_refusal(' in boundary
           # The far side is recomputed from the kernel's own derivation.
           assert 'kernel.far_side_receipt_chain(' in boundary
-          # Attestation is recorded unavailable rather than merely absent.
-          assert 'attestation_is_unavailable_at_this_organization' in boundary
-          # The invariant is about the value assigned, not the word: the prose
-          # above the record explains that no path here reaches PROVEN, so a
-          # bare-word search would flag its own explanation.
-          assert '"origin_attestation_state": "NOT_PROVEN"' in boundary
-          assert '"origin_attestation_state": "PROVEN"' not in boundary, \
-              'no code path here reaches PROVEN; do not assign it'
+          # Attestation: the seam exists and the ceiling is declared. These
+          # assertions replaced an earlier pair that asserted no path to PROVEN
+          # existed -- true until the seam was built, and the right thing to
+          # have failed when it was.
+          assert 'credential_authority: Mapping[str, Any] | None = None' in boundary, \
+              'emit must take a credential authority'
+          # Signed after the packet exists (the statement binds the packet id)
+          # and before it is published (the signature travels inside it).
+          assert boundary.index('attestation_module.attest(') \
+               < boundary.index('published = kernel.publish_packet('), \
+              'the statement must be attested before the frame is published'
+          # An offered attestation that fails refuses the emission rather than
+          # recording it as an ordinary unattested crossing.
+          assert 'raise EgressRefused(refused.failed_predicate, refused.reason)' in boundary
+          # Which case an unattested record is: no signer, not a failed attempt.
+          assert '"signer_supplied": True' in boundary and '"signer_supplied": False' in boundary
+          # The unattested record is the authority module's own, so the boundary
+          # cannot drift from its vocabulary about its own absence.
+          assert 'attestation_module.unattested_record()' in boundary
+
+          # No credential algorithm anywhere here: a second implementation would
+          # make this organization a second credential authority, which the
+          # TV/TVC split exists to prevent.
+          for relative in ('org-boundary/runtime/origin_attestation.py',
+                           'resident-runtime/organization_egress_boundary.py',
+                           'org-kernel/kernel.py'):
+              text = Path(relative).read_text(encoding='utf-8')
+              for token in ('import hmac', 'hmac.new', 'compare_digest'):
+                  assert token not in text, (relative, token)
+
+          # The ceiling is declared in the overlay, not left to be inferred, and
+          # the boundary validator holds it.
+          overlay = json.loads(Path('org-runtime/interlock-intr.json').read_text())
+          attest = (overlay.get('egress') or {}).get('origin_attestation')
+          assert isinstance(attest, dict), 'the overlay must declare the attestation binding'
+          assert attest['credential_authority_resident_host_available_to_this_organization'] is False
+          assert attest['signer_is_supplied_by_the_operator_not_held_here'] is True
+          assert attest['every_crossing_emitted_here_today_is_unattested'] is True
+          assert attest['boundary_holds_key_material'] is False
+          assert attest['verification_algorithm_implemented_here'] is False
+          # The overclaim the record refuses: signing is not authenticating.
+          assert attest['proves_the_authority_authenticated_the_asker'] is False
           # An absence is not a transition.
           assert 'absence_is_not_a_transition' in boundary
           print('EGRESS_LEDGER_CONTRACTS_DECLARE_ONLY_WHAT_IS_ENFORCED=PASS')

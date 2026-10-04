@@ -40,13 +40,24 @@ be addressed is a refusal to record, not a packet to send hopefully.
 
 Three things this records honestly rather than claiming:
 
-* **Origin is asserted, not attested.** The frame says it came from this
-  organization and nothing verifies that. Any writer of the shared mesh can
-  publish a frame claiming any origin. `credential_authority` is TV/TVC and
-  `origin_attestation_state` stays `NOT_PROVEN`. Unlike the reference boundary
-  this organization carries no `origin_attestation` module and no wired
-  credential authority, so there is no code path here that could ever reach
-  `PROVEN` -- see `attestation_is_unavailable_at_this_organization` below.
+* **Origin is attested only when an authority is supplied, and is asserted
+  otherwise.** The frame says it came from this organization, and without an
+  attestation nothing verifies that: any writer of the shared mesh can publish
+  a frame claiming any origin. `emit` takes a `credential_authority` and, given
+  one, asks it to sign a statement binding this origin to this packet and then
+  asks it to confirm its own signature -- only the authority's verification
+  receipt moves the state to `PROVEN`. An attestation that was offered and
+  failed refuses the emission rather than recording it as an ordinary
+  unattested crossing.
+
+  What this organization cannot do is supply the authority. The key lives on a
+  TV/TVC resident host it has no access to by design, so the signer is the
+  operator's to pass in, and every crossing emitted here today is unattested.
+  `signer_supplied` records which case a record is, so `NOT_PROVEN` cannot be
+  read as an attempt that failed. No signing or verification algorithm appears
+  in this repository, and the boundary validator refuses if one does: a second
+  implementation here would make this organization a second credential
+  authority, which the TV/TVC split exists to prevent.
 * **The far side's receipt is recomputed, not carried.** A boundary receipt id
   is derived from the packet id, the service id and the payload digest, all of
   which this organization already holds, so the terminal id that comes back is
@@ -125,6 +136,8 @@ organization_ledger = _module("aggregate_repo_transition",
 ledger_store = _module("ledger_store", "resident-runtime/ledger_store.py")
 disclosure_module = _module("emission_chain_disclosure",
                             "org-boundary/runtime/emission_chain_disclosure.py")
+attestation_module = _module("origin_attestation",
+                             "org-boundary/runtime/origin_attestation.py")
 
 #: The acknowledgement classes a response may carry. Read from the kernel rather
 #: than restated, so this boundary cannot disagree with the surface that mints
@@ -258,30 +271,35 @@ def resolve_standing(standing: Mapping[str, Any], root: Path | None = None):
     return (None, resolved)
 
 
-def _attestation() -> dict[str, Any]:
-    """What this boundary can say about who sent the packet: nothing, and it says so.
+def _attestation(attested: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """What this boundary can say about who sent the packet.
 
-    A frame in a shared mesh carries whatever origin its writer put in it. The
-    reference boundary can reach `PROVEN` when a credential authority signs a
-    statement naming the origin for the packet; this organization carries no
-    `origin_attestation` module and no wired credential authority, so no code
-    path here reaches it. That is recorded as unavailable rather than merely
-    absent, so a reader of the chain cannot take `NOT_PROVEN` for an attestation
-    that was attempted and failed.
+    With an attestation record, that record is what is carried: the credential
+    authority signed a statement naming this origin for this packet and
+    confirmed its own signature, so `origin_attestation_state` is `PROVEN`
+    rather than the assertion it replaces.
+
+    Without one the gap is recorded rather than hidden. A frame in a shared mesh
+    carries whatever origin its writer put in it, and an unattested crossing
+    says so. The unattested record is the module's own, so this boundary cannot
+    drift from the authority's vocabulary about its own absence.
+
+    What changed with the seam is narrow and worth stating exactly: a path to
+    `PROVEN` now exists, and nothing in this organization reaches it on its own.
+    The authority's key lives on a TV/TVC resident host this organization
+    cannot reach, so the signer is the operator's to supply and every crossing
+    emitted here today is unattested. `signer_supplied` records which of those
+    two it was, so an unattested record cannot be read as a failed attempt.
     """
-    return {
-        "origin_attestation_state": "NOT_PROVEN",
-        "credential_authority": CREDENTIAL_AUTHORITY,
-        "origin_is_attested_by_the_credential_authority": False,
-        "origin_is_asserted_by_the_frame_writer": True,
-        "attestation_is_unavailable_at_this_organization": True,
-        "attestation_was_attempted": False,
-    }
+    if attested is not None:
+        return {**dict(attested), "signer_supplied": True}
+    return {**attestation_module.unattested_record(), "signer_supplied": False}
 
 
 def emission_record(resolved: Mapping[str, Any], origin: str, packet: Mapping[str, Any],
                     frame: Mapping[str, Any], payload: Mapping[str, Any],
-                    standing: Mapping[str, Any]) -> dict[str, Any]:
+                    standing: Mapping[str, Any],
+                    attested: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """What an emitted crossing recorded.
 
     Digests, not payloads: the body a caller sent is its own, and what the chain
@@ -332,7 +350,7 @@ def emission_record(resolved: Mapping[str, Any], origin: str, packet: Mapping[st
         "far_side_payload_hash": kernel.sha(dict(payload)),
         "crossed_an_organization_boundary": True,
         "interlock_intr_involved": True,
-        **_attestation(),
+        **_attestation(attested),
         "authority_effect": "NONE_EGRESS_RECORD_ONLY",
     }
 
@@ -425,6 +443,7 @@ def _record(transition_id: str, transition_class: str, predecessor: str, success
 
 def emit(destination_organization: Any, payload: Mapping[str, Any], *,
          standing: Mapping[str, Any],
+         credential_authority: Mapping[str, Any] | None = None,
          transition_reference: str = "ecosystem.transition.interorg.v1",
          root: Path | None = None, mesh_root: Path | None = None,
          hb_epoch: int | None = None) -> dict[str, Any]:
@@ -450,6 +469,26 @@ def emit(destination_organization: Any, payload: Mapping[str, Any], *,
             destination_service=resolved["destination_service"],
             payload=dict(payload), standing=dict(standing),
             transition_reference=transition_reference, authority_effect="NONE")
+        # Attested after the packet exists, because the statement binds the
+        # packet id, and before it is published, because the signature travels
+        # inside the packet where `packet_sha256` binds it. The statement itself
+        # does not include the signature, so attaching it changes nothing the
+        # authority signed.
+        attested = None
+        if credential_authority is not None:
+            declared = attestation_module.statement_from_packet(
+                packet, kernel.sha(dict(payload)))
+            try:
+                signature, receipt = attestation_module.attest(
+                    declared, credential_authority)
+            except attestation_module.AttestationRefused as refused:
+                # An attestation was offered and did not establish. Emitting
+                # anyway would record it as an ordinary unattested crossing and
+                # lose the fact that one was attempted and failed, so the
+                # emission is refused instead.
+                raise EgressRefused(refused.failed_predicate, refused.reason) from None
+            attested = attestation_module.record(declared, signature, receipt)
+            packet = {**packet, "attestation": signature}
         published = kernel.publish_packet(packet, root=mesh_root)
     except EgressRefused as exc:
         record = emit_refusal_record(exc.failed_predicate, exc.reason,
@@ -465,7 +504,7 @@ def emit(destination_organization: Any, payload: Mapping[str, Any], *,
         return _refusal_result(record, appended)
 
     record = emission_record(resolved, origin, packet, published["frame"], payload,
-                             standing_disposition)
+                             standing_disposition, attested)
     appended = _record(EMITTED_CLASS + ":" + packet["packet_id"], EMITTED_CLASS,
                        record["payload_sha256"], sha(record), record, hb_epoch)
     return {
@@ -481,7 +520,7 @@ def emit(destination_organization: Any, payload: Mapping[str, Any], *,
                                   "frame_sha256", "crossed_an_organization_boundary",
                                   "origin_attestation_state",
                                   "origin_is_attested_by_the_credential_authority",
-                                  "attestation_is_unavailable_at_this_organization")},
+                                  "signer_supplied")},
         "emission_record": record,
         "emission_transition_class": EMITTED_CLASS,
         "emission_repository_receipt_sha256": appended["repository_receipt"]["receipt_sha256"],

@@ -111,11 +111,15 @@ with tempfile.TemporaryDirectory() as td:
     assert record["standing_resolved_through_this_organizations_ingress_contract"] is True
     # Standing admitted is not origin authenticated, and the record says so.
     assert record["structural_standing_is_authenticated_standing"] is False
-    # Origin is asserted, and this organization has no path to attesting it.
+    # Origin is asserted here, because no credential authority was supplied.
+    # The seam exists and is proven separately in test_origin_attestation_seam.py;
+    # what this asserts is that an emission without one records the absence as
+    # an absence rather than as an attempt that failed.
     assert record["origin_attestation_state"] == "NOT_PROVEN"
     assert record["origin_is_attested_by_the_credential_authority"] is False
-    assert record["attestation_is_unavailable_at_this_organization"] is True
-    assert record["attestation_was_attempted"] is False
+    assert record["signer_supplied"] is False
+    assert record["no_attestation_was_offered"] is True
+    assert record["origin_is_asserted_by_the_sender"] is True
     # The record carries the two inputs closure recomputes the far side from.
     assert record["far_side_service_id"] == PEER_SERVICE
     assert record["far_side_payload_hash"] == K.sha(payload(comm))
