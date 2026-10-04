@@ -18,6 +18,12 @@ def main():
         p.add_argument("--body-json",required=True)
         p.add_argument("--requested-action")
         p.add_argument("--communication-id")
+        # Required, with no default. Every outbound crossing declares canonical
+        # node standing, and a standing this runtime manufactured for itself
+        # would be the gate answering its own question. The operator supplies
+        # the declaration; `node_standing` checks its shape at the far side.
+        p.add_argument("--standing",required=True,
+                       help="JSON file declaring mode, node_ref and the predecessor key")
         p.set_defaults(message_class=cls)
     p=sub.add_parser("collect")
     p.add_argument("--communication-id",required=True)
@@ -36,9 +42,11 @@ def main():
         print(json.dumps(result,indent=2,sort_keys=True))
         return
     body=json.loads(args.body_json)
+    standing=json.loads(Path(args.standing).read_text())
     if os.getenv("STEGVERSE_ORG_FEDERATION_GATEWAY_URL","").strip():
         out=GW.publish_ecosystem_via_gateway(
             repo_root=ROOT,
+            standing=standing,
             message_class=args.message_class,
             subject=args.subject,
             body=body,
@@ -48,6 +56,7 @@ def main():
     else:
         out=K.publish_ecosystem_from_directory(
             ROOT,
+            standing=standing,
             message_class=args.message_class,
             subject=args.subject,
             body=body,

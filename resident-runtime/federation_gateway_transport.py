@@ -105,6 +105,7 @@ def acknowledge_frame(organization: str, frame: dict[str, Any], state: str) -> d
 def publish_ecosystem_via_gateway(
     *,
     repo_root: Path,
+    standing: dict[str, Any],
     message_class: str,
     subject: str,
     body: dict[str, Any],
@@ -118,6 +119,7 @@ def publish_ecosystem_via_gateway(
         origin_org=registry["organization"],
         origin_service=K.organization_slug(registry["organization"]) + ".org-control",
         organizations=orgs,
+        standing=standing,
         message_class=message_class,
         subject=subject,
         body=body,
