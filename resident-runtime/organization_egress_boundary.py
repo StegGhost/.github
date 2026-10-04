@@ -90,9 +90,18 @@ CREDENTIAL_AUTHORITY = "TV/TVC"
 INTENDED_ACTION_EMIT = "CROSS_AN_ORGANIZATION_BOUNDARY_OUTBOUND"
 INTENDED_ACTION_CLOSE = "OBSERVE_THE_FAR_SIDE_CLOSURE_OF_AN_OUTBOUND_CROSSING"
 
+#: The third transition an outbound crossing can reach, after emit and close.
+#: Separate from both because it is separated in time from both and can be
+#: refused on its own: closure verifies the chain the packet determines, the
+#: match asks the claimed origin's own chain whether it records emitting it.
+INTENDED_ACTION_MATCH = "CORROBORATE_A_CLAIMED_ORIGIN_AGAINST_ITS_OWN_CHAIN"
+MATCH_SCHEMA = "stegghost.organization-bilateral-match-record/v1"
+
 #: One class per disposition, so no reader can mistake a refusal for a crossing
 #: that left, or an unverified response for a closed one.
 EMITTED_CLASS = "ORGANIZATION_EGRESS_EMITTED"
+MATCH_SATISFIED_CLASS = "ORGANIZATION_BILATERAL_MATCH_SATISFIED"
+MATCH_REFUSED_CLASS = "ORGANIZATION_BILATERAL_MATCH_REFUSED"
 EMIT_REFUSED_CLASS = "ORGANIZATION_EGRESS_REFUSED"
 CLOSED_CLASS = "ORGANIZATION_EGRESS_CLOSED"
 CLOSURE_REFUSED_CLASS = "ORGANIZATION_EGRESS_CLOSURE_REFUSED"
@@ -114,6 +123,8 @@ repository_ledger = _module("repo_transition_emit", ".stegverse/transition-ledge
 organization_ledger = _module("aggregate_repo_transition",
                               "resident-runtime/aggregate_repo_transition.py")
 ledger_store = _module("ledger_store", "resident-runtime/ledger_store.py")
+disclosure_module = _module("emission_chain_disclosure",
+                            "org-boundary/runtime/emission_chain_disclosure.py")
 
 #: The acknowledgement classes a response may carry. Read from the kernel rather
 #: than restated, so this boundary cannot disagree with the surface that mints
@@ -378,7 +389,15 @@ def closure_record(resolved: Mapping[str, Any], origin: str, packet_id: str,
         "reconstruction_proves_the_boundary_ran_this_packet": verified,
         "reconstruction_proves_who_the_far_side_is": False,
         "reconstruction_proves_the_far_side_persisted_its_chain": False,
+        # Still required, and still not established by closure: a closure
+        # verifies the chain this packet determines, which is a different
+        # question from whose boundary minted it. What changed is that the
+        # match is now a reachable operation rather than an acknowledged gap,
+        # and this organization serves the half a peer would ask of it.
         "bilateral_match_requires_the_far_side_chain_to_be_readable": True,
+        "bilateral_match_is_a_separate_transition": (
+            "resident-runtime/organization_egress_boundary.py::observe_bilateral_match"),
+        "this_organization_serves_its_half_of_the_bilateral_match": True,
         "closure_findings": findings,
         "crossed_an_organization_boundary": True,
         "interlock_intr_involved": True,
@@ -655,3 +674,135 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+# --------------------------------------------------------------------------
+# The bilateral match: corroborate a claimed origin against its own chain.
+#
+# Recomputing a far-side receipt chain proves a boundary ran the packet and not
+# whose boundary it was, because every input is held by the recomputing side.
+# The other half is the claimed origin's own ledger holding an emission receipt
+# for that packet id, addressed here -- which a forged origin cannot produce,
+# because it cannot write that organization's chain.
+#
+# Two operations, for the same reason emit and close are two: asking and
+# observing are separated in time and either can be refused on its own. The ask
+# is itself an ordinary governed crossing, emitted and recorded like any other,
+# so the match does not need a transport of its own.
+# --------------------------------------------------------------------------
+
+def request_bilateral_match(claimed_origin: str, packet_id: str, *,
+                            standing: Mapping[str, Any],
+                            communication_id: str | None = None,
+                            root: Path | None = None, mesh_root: Path | None = None,
+                            hb_epoch: int | None = None) -> dict[str, Any]:
+    """Ask a claimed origin whether its own chain records emitting this packet.
+
+    Emitted through `emit`, deliberately. The ask crosses an organization
+    boundary outbound, so it is that transition and is recorded as one; giving
+    it a private path would be the outbound boundary exempting its own traffic
+    from the record it exists to keep.
+    """
+    identifier = communication_id or ("bilateral-match:" + str(packet_id))
+    payload = {
+        "message_class": disclosure_module.REQUEST_CLASS,
+        "communication_id": identifier,
+        "subject": "emission-chain-disclosure",
+        "body": {"request_packet_id": str(packet_id),
+                 "asks_only_about_this_packet": True,
+                 "asks_for_no_payload": True},
+        "requested_action": None,
+        "audience": "ORIGIN",
+        "target_organization": claimed_origin,
+        "target_count": 1,
+    }
+    result = emit(claimed_origin, payload, standing=standing, root=root,
+                  mesh_root=mesh_root, hb_epoch=hb_epoch)
+    return {**result, "bilateral_match_communication_id": identifier,
+            "bilateral_match_subject_packet_id": str(packet_id)}
+
+
+def observe_bilateral_match(claimed_origin: str, packet_id: str,
+                            communication_id: str, *,
+                            root: Path | None = None, mesh_root: Path | None = None,
+                            hb_epoch: int | None = None) -> dict[str, Any]:
+    """Observe the disclosure a claimed origin returned, and record the match.
+
+    `PENDING` when nothing has come back, recording nothing, for the reason
+    `close` does the same: an absence is not an arrival, and appending a refusal
+    per poll would record the polling rather than the crossing.
+
+    A peer that answers it serves no disclosure is a refusal with its own
+    finding, not a pass and not an error. Most peers answer exactly that today:
+    this organization serves its half first, and the match completes only where
+    a peer serves the other.
+    """
+    asker = this_organization(root)
+    resolved = resolve_destination(claimed_origin, root=root)
+    collected = kernel.collect_ecosystem_responses(asker, communication_id,
+                                                   mesh_root=mesh_root)
+    responses = [row for row in collected.get("organizations", [])
+                 if row.get("organization") == resolved["destination_organization"]]
+    if not responses:
+        return {
+            "schema": RESULT_SCHEMA,
+            "operation": OPERATION_ID,
+            "disposition": PENDING,
+            "bilateral_match_satisfied": False,
+            "match_recorded": False,
+            "absence_is_not_a_transition": True,
+            "communication_id": communication_id,
+            "request_packet_id": str(packet_id),
+            "claimed_origin_organization": resolved["destination_organization"],
+            "authority_effect": "NONE_OBSERVATION_ONLY",
+        }
+    response = responses[0]
+    disclosure = ((response.get("application_result") or {}).get("emission_disclosure"))
+    match = disclosure_module.match(disclosure, packet_id=str(packet_id),
+                                    claimed_origin=resolved["destination_organization"],
+                                    asker=asker)
+    record = {
+        "schema": MATCH_SCHEMA,
+        "operation": OPERATION_ID,
+        "owner_repository": OWNER_REPOSITORY,
+        "intended_action": INTENDED_ACTION_MATCH,
+        "disposition": ALLOW if match["bilateral_match_satisfied"] else DENY,
+        "asking_organization": asker,
+        "claimed_origin_organization": resolved["destination_organization"],
+        "request_packet_id": str(packet_id),
+        "communication_id": communication_id,
+        "disclosure": dict(disclosure) if isinstance(disclosure, Mapping) else None,
+        **{k: match[k] for k in (
+            "bilateral_match_satisfied", "bilateral_match_findings",
+            "peer_chain_was_readable", "peer_emission_receipt_sha256",
+            "corroborates_the_claimed_origin_against_its_own_chain",
+            "makes_standing_authenticated",
+            "makes_origin_attested_by_the_credential_authority")},
+        "crossed_an_organization_boundary": True,
+        "interlock_intr_involved": True,
+        **_attestation(),
+        "authority_effect": "NONE_MATCH_RECORD_ONLY",
+    }
+    transition_class = (MATCH_SATISFIED_CLASS if match["bilateral_match_satisfied"]
+                        else MATCH_REFUSED_CLASS)
+    appended = _record(transition_class + ":" + str(packet_id), transition_class,
+                       sha({"packet_id": str(packet_id),
+                            "communication_id": communication_id}),
+                       sha(record), record, hb_epoch)
+    return {
+        "schema": RESULT_SCHEMA,
+        "operation": OPERATION_ID,
+        "disposition": record["disposition"],
+        "bilateral_match_satisfied": match["bilateral_match_satisfied"],
+        "match_recorded": True,
+        "bilateral_match_findings": match["bilateral_match_findings"],
+        "peer_chain_was_readable": match["peer_chain_was_readable"],
+        "communication_id": communication_id,
+        "request_packet_id": str(packet_id),
+        "claimed_origin_organization": resolved["destination_organization"],
+        "match_record": record,
+        "match_transition_class": transition_class,
+        "match_repository_receipt_sha256": appended["repository_receipt"]["receipt_sha256"],
+        "match_organization_receipt_sha256": appended["organization_receipt"]["receipt_sha256"],
+        "authority_effect": "NONE_MATCH_RECORD_ONLY",
+    }

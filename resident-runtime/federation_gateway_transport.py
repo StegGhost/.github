@@ -206,13 +206,16 @@ def resident_gateway_cycle(repo_root: Path) -> dict[str, Any]:
     if result.get("status") == "CONSUMED":
         execution = result["execution_result"]
         message_class = (packet.get("payload") or {}).get("message_class")
-        if message_class in {"ecosystem.monitor.request", "ecosystem.work.request", "ecosystem.communication"}:
+        # The map, not a third copy of it. This lane had the same literal set
+        # as the spool lane and would answer three of the four classes the map
+        # declares answered.
+        if message_class in K.RESPONDED_REQUEST_CLASSES:
             response = K.build_control_response(packet, execution)
             response_frame = K.carrier_frame(response)
             submit_frame(response_frame)
             response_emitted = 1
             response_ref = response_frame["frame_sha256"]
-        elif message_class in {"ecosystem.monitor.response", "ecosystem.work.ack", "ecosystem.communication.ack"}:
+        elif message_class in K.ACK_CLASSES:
             _persist_response(repo_root, packet, execution)
         ack_state = "CONSUMED"
     else:
