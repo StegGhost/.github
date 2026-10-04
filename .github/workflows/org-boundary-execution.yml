@@ -1,5 +1,7 @@
 name: Org Boundary Execution
 on:
+  pull_request:
+    paths: ['org-boundary/**','.github/workflows/org-boundary-execution.yml']
   push:
     paths: ['org-boundary/**','.github/workflows/org-boundary-execution.yml']
   workflow_dispatch:

@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
-import argparse, hashlib, json
+import argparse, hashlib, importlib.util, json
 from pathlib import Path
+
+ROOT=Path(__file__).resolve().parents[2]
+# Standing is an ingress precondition. This file is a separately invocable
+# ingress surface -- `resident-runtime/run_once.py` runs it directly as a
+# subprocess, never through `kernel.dispatch` -- so a gate that lives only in
+# the kernel leaves this lane ungated. It is resolved here too, before any
+# receipt is minted.
+_NSSPEC=importlib.util.spec_from_file_location(
+    "node_standing", Path(__file__).resolve().parent/"node_standing.py")
+node_standing=importlib.util.module_from_spec(_NSSPEC)
+_NSSPEC.loader.exec_module(node_standing)
 KINDS=["INGRESS_ACCEPTED","DISPATCHED","CONSUMED","RESULT_BOUND","EGRESS_EMITTED"]
 def canon(v): return json.dumps(v,sort_keys=True,separators=(",",":")).encode()
 def hid(prefix,v): return prefix+"-"+hashlib.sha256(canon(v)).hexdigest()[:24]
@@ -15,11 +26,14 @@ def main():
  svc=next((s for s in reg["services"] if s["service_id"]==env["destination"]["service"]),None)
  if not svc: raise SystemExit("unknown-service")
  if svc.get("boundary_role")!="BOUNDARY_LOCAL_DIAGNOSTIC": raise SystemExit("endpoint-adapter-not-installed")
+ # Resolved before any receipt is minted: a refused crossing must not leave a
+ # chain implying it was consumed.
+ standing=node_standing.require(node_standing.load_contract(ROOT),env)
  base={"packet_id":env["packet_id"],"service_id":svc["service_id"],"payload_hash":hashlib.sha256(canon(env["payload"])).hexdigest()}
  receipts=[]; prev=None
  for kind in KINDS:
   subject={**base,"kind":kind,"previous_receipt_id":prev}; rid=hid(kind.lower(),subject)
   receipts.append({"kind":kind,"receipt_id":rid,"subject":svc["service_id"],"evidence_hash":hashlib.sha256(canon(subject)).hexdigest(),"previous_receipt_id":prev}); prev=rid
- result={"schema_version":reg["organization"].lower().replace(" ","-")+".boundary-execution.v1","packet_id":env["packet_id"],"organization":reg["organization"],"service_id":svc["service_id"],"consumed":True,"application_result":{"echo":env["payload"]},"authority_effect":env["transition"]["authority_effect"],"receipts":receipts,"reconstruction":{"same_execution_required":True,"status":"RECONSTRUCTED","terminal_receipt_id":prev}}
+ result={"schema_version":reg["organization"].lower().replace(" ","-")+".boundary-execution.v1","packet_id":env["packet_id"],"organization":reg["organization"],"service_id":svc["service_id"],"consumed":True,"application_result":{"echo":env["payload"]},"authority_effect":env["transition"]["authority_effect"],**standing,"receipts":receipts,"reconstruction":{"same_execution_required":True,"status":"RECONSTRUCTED","terminal_receipt_id":prev}}
  Path(a.out).parent.mkdir(parents=True,exist_ok=True); Path(a.out).write_text(json.dumps(result,indent=2,sort_keys=True)+"\n"); print(json.dumps({"status":"PASS","terminal_receipt_id":prev}))
 if __name__=="__main__": main()

@@ -5,7 +5,7 @@ Organization-neutral runtime behavior extracted from StegVerse-Labs/.github.
 No GitHub, hosted scheduler, provider, or carrier grants authority.
 """
 from __future__ import annotations
-import base64, hashlib, json, os
+import base64, hashlib, importlib.util, json, os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -70,11 +70,46 @@ def receipt(kind:str, packet_id:str, subject:str, previous:str|None, detail:dict
 def load_registry(root:Path)->dict[str,Any]:
     return json.loads((root/"org-boundary/registry/services.json").read_text())
 
+def node_standing(root:Path):
+    """Load the organization's node-standing module from its boundary runtime.
+
+    Standing is a precondition of ingress, not a capability, so it resolves here
+    rather than being something a crossing can be addressed to. Resolved from the
+    dispatch root because this kernel is organization-neutral, and a root without
+    it fails closed: a boundary that cannot validate the predecessor it is
+    required to carry must not admit a crossing claiming one.
+    """
+    path=root/"org-boundary/runtime/node_standing.py"
+    if not path.is_file(): raise ValueError("org_boundary_node_standing_missing")
+    spec=importlib.util.spec_from_file_location("node_standing",path)
+    module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    return module
+
+def carried_standing(request_packet:dict[str,Any])->dict[str,Any]:
+    """Carry a request's standing onto its response, unchanged and marked as carried.
+
+    A response is not a new crossing and has no standing of its own to establish,
+    so the only truthful options are to carry the request's standing forward or
+    to refuse.
+    """
+    declared=request_packet.get("standing")
+    if not isinstance(declared,dict): raise ValueError("response_requires_request_standing")
+    return {**declared,"standing_carried_forward_from_request":True}
+
 def dispatch(root:Path, packet:dict[str,Any])->dict[str,Any]:
     registry=load_registry(root)
     if packet["destination"]["org"]!=registry["organization"]: raise ValueError("wrong_destination_org")
     service=next((s for s in registry["services"] if s["service_id"]==packet["destination"]["service"]),None)
     if service is None: raise ValueError("unknown_service")
+    # Resolved before any receipt is minted, and before the role branch, because
+    # the contract covers every ingress class rather than every boundary role.
+    # Refused as the contract's own disposition rather than a bare error, so a
+    # caller is never left guessing which of ALLOW/DENY/FAIL_CLOSED it earned.
+    standing_module=node_standing(root)
+    try:
+        standing=standing_module.require(standing_module.load_contract(root),packet)
+    except SystemExit as refused:
+        raise ValueError("node_standing_refused:"+str(refused)) from None
     role=service.get("boundary_role")
     if role not in {"BOUNDARY_LOCAL_DIAGNOSTIC","BOUNDARY_LOCAL_CONTROL"}:
         raise ValueError("endpoint_adapter_not_installed")
@@ -88,6 +123,7 @@ def dispatch(root:Path, packet:dict[str,Any])->dict[str,Any]:
         application_result={"echo":packet["payload"]}
     return {"schema_version":SCHEMA,"organization":registry["organization"],"packet_id":packet["packet_id"],
             "service_id":service["service_id"],"consumed":True,"application_result":application_result,
+            **standing,
             "authority_effect":packet["transition"]["authority_effect"],"receipts":receipts,
             "reconstruction":{"same_execution_required":True,"status":"RECONSTRUCTED","terminal_receipt_id":prev}}
 
@@ -152,8 +188,15 @@ def scan_addressed_frames(organization:str, *, root:Path|None=None, seen:set[str
     return out
 
 def build_packet(*, origin_org:str, origin_service:str, destination_org:str, destination_service:str,
-                 payload:dict[str,Any], transition_reference:str="federation.v1",
+                 payload:dict[str,Any], standing:dict[str,Any], transition_reference:str="federation.v1",
                  authority_effect:str="NONE", packet_id:str|None=None)->dict[str,Any]:
+    """Build an ingress packet. `standing` is required and has no default.
+
+    Every ingress class the contract covers requires canonical node standing, so
+    a standing-less packet is not a packet this boundary can construct. A default
+    here would be a caller-editable claim, and the contract holds that a
+    caller-editable classification does not establish identity.
+    """
     pid=packet_id or "pkt-"+hashlib.sha256(canon({
         "origin_org":origin_org,"origin_service":origin_service,"destination_org":destination_org,
         "destination_service":destination_service,"payload":payload,"transition_reference":transition_reference
@@ -168,6 +211,7 @@ def build_packet(*, origin_org:str, origin_service:str, destination_org:str, des
       "intr_profile":"stegverse.intr.org-boundary.v1",
       "transition":{"reference":transition_reference,"authority_effect":authority_effect,"conditions":[]},
       "payload":payload,
+      "standing":standing,
       "evidence":{"ingress_receipt":None,"dispatch_receipt":None,"consumption_receipt":None,"egress_receipt":None,"reconstruction_reference":None}
     }
 
@@ -190,7 +234,7 @@ def consume_addressed_frames(repo_root:Path, *, mesh_root:Path|None=None, seen:s
 def organization_slug(organization:str)->str:
     return "".join(ch.lower() if ch.isalnum() else "-" for ch in organization).strip("-")
 
-def build_ecosystem_packets(*, origin_org:str, origin_service:str, organizations:list[str],
+def build_ecosystem_packets(*, origin_org:str, origin_service:str, organizations:list[str], standing:dict[str,Any],
                             message_class:str, subject:str, body:dict[str,Any],
                             requested_action:str|None=None, transition_reference:str="ecosystem.communication.v1",
                             authority_effect:str="NONE", communication_id:str|None=None)->dict[str,Any]:
@@ -221,6 +265,7 @@ def build_ecosystem_packets(*, origin_org:str, origin_service:str, organizations
           destination_org=org,
           destination_service=service,
           payload=payload,
+          standing=standing,
           transition_reference=transition_reference,
           authority_effect=authority_effect,
           packet_id=comm_id+":"+organization_slug(org)
@@ -229,12 +274,12 @@ def build_ecosystem_packets(*, origin_org:str, origin_service:str, organizations
     return {"communication_id":comm_id,"organization_count":len(ordered),"packets":packets}
 
 def publish_ecosystem_message(*, origin_org:str, origin_service:str, organizations:list[str],
-                              message_class:str, subject:str, body:dict[str,Any],
+                              standing:dict[str,Any], message_class:str, subject:str, body:dict[str,Any],
                               requested_action:str|None=None, transition_reference:str="ecosystem.communication.v1",
                               authority_effect:str="NONE", communication_id:str|None=None,
                               root:Path|None=None, now_ns:int|None=None)->dict[str,Any]:
     built=build_ecosystem_packets(
-      origin_org=origin_org,origin_service=origin_service,organizations=organizations,
+      origin_org=origin_org,origin_service=origin_service,organizations=organizations,standing=standing,
       message_class=message_class,subject=subject,body=body,requested_action=requested_action,
       transition_reference=transition_reference,authority_effect=authority_effect,
       communication_id=communication_id
@@ -370,6 +415,7 @@ def build_control_response(request_packet:dict[str,Any], execution_result:dict[s
       destination_org=origin_org,
       destination_service=organization_slug(origin_org)+".org-control",
       payload=payload,
+      standing=carried_standing(request_packet),
       transition_reference=str((request_packet.get("transition") or {}).get("reference") or "ecosystem.communication.v1")+".response",
       authority_effect="NONE",
       packet_id=str(req_payload.get("communication_id"))+":response:"+organization_slug(local_org)
@@ -426,7 +472,7 @@ def collect_ecosystem_responses(origin_org:str, communication_id:str, *, mesh_ro
       "organizations":rows
     }
 
-def publish_ecosystem_from_directory(repo_root:Path, *, message_class:str, subject:str, body:dict[str,Any],
+def publish_ecosystem_from_directory(repo_root:Path, *, standing:dict[str,Any], message_class:str, subject:str, body:dict[str,Any],
                                      requested_action:str|None=None, authority_effect:str="NONE",
                                      communication_id:str|None=None, mesh_root:Path|None=None,
                                      now_ns:int|None=None)->dict[str,Any]:
@@ -438,6 +484,7 @@ def publish_ecosystem_from_directory(repo_root:Path, *, message_class:str, subje
       origin_org=origin,
       origin_service=organization_slug(origin)+".org-control",
       organizations=organizations,
+      standing=standing,
       message_class=message_class,
       subject=subject,
       body=body,
