@@ -1,0 +1,113 @@
+name: Organization Egress Boundary Validation
+
+on:
+  # No branches filter, for the reason node-standing-ingress-validation.yml
+  # records: a pull request based on anything but main matched nothing and ran
+  # no check at all.
+  pull_request:
+    paths:
+      - .stegverse/transition-ledger/**
+      - resident-runtime/organization_egress_boundary.py
+      - resident-runtime/aggregate_repo_transition.py
+      - resident-runtime/ledger_store.py
+      - resident-runtime/tests/test_organization_egress_boundary.py
+      - org-kernel/kernel.py
+      - .github/workflows/organization-egress-boundary-validation.yml
+  push:
+    branches: [main]
+    paths:
+      - .stegverse/transition-ledger/**
+      - resident-runtime/organization_egress_boundary.py
+      - resident-runtime/aggregate_repo_transition.py
+      - resident-runtime/ledger_store.py
+      - resident-runtime/tests/test_organization_egress_boundary.py
+      - org-kernel/kernel.py
+      - .github/workflows/organization-egress-boundary-validation.yml
+  workflow_dispatch:
+
+# This repository is internal; an unpermissioned GITHUB_TOKEN cannot read it and
+# checkout fails before any test body runs.
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prove this organization can initiate a crossing and record it
+        run: |
+          set -eu
+          python3 resident-runtime/tests/test_organization_egress_boundary.py
+          python3 -m py_compile \
+            resident-runtime/organization_egress_boundary.py \
+            resident-runtime/aggregate_repo_transition.py \
+            resident-runtime/ledger_store.py \
+            .stegverse/transition-ledger/emit.py \
+            org-kernel/kernel.py
+
+      - name: Assert the ledger contracts declare nothing they do not enforce
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          repo = json.loads(Path('.stegverse/transition-ledger/contract.json').read_text())
+          org = json.loads(Path('.stegverse/transition-ledger/org-contract.json').read_text())
+          assert repo['repository'] == 'StegGhost/.github', repo['repository']
+          assert org['organization'] == 'StegGhost', org['organization']
+
+          # The defect PEER_KERNEL_GENERATION_ADMISSION_APPLIED_002 recorded was a
+          # declaration with nothing enforcing it. These two assertions keep the
+          # ledger contracts from repeating it.
+          assert org['propagation_target'] is None, \
+              'a propagation target needs a submitter in this repository to perform it'
+          assert org['organization_batch_propagation_implemented'] is False
+          submitter = Path('resident-runtime/submit_org_transition_to_master_records.py')
+          assert not submitter.exists(), \
+              'a submitter exists, so propagation_target must stop being null'
+
+          # The organization ledger admits only schemas something here emits.
+          assert org['consumes'] == ['stegverse.repo-transition-receipt/v1'], org['consumes']
+
+          boundary = Path('resident-runtime/organization_egress_boundary.py').read_text()
+          # Standing resolves through this organization's own ingress contract
+          # before anything is published, or the boundary emits outbound what it
+          # would refuse inbound.
+          assert 'def resolve_standing(' in boundary
+          assert boundary.index('standing_refused, standing_disposition = resolve_standing(') \
+               < boundary.index('published = kernel.publish_packet('), \
+              'standing must resolve before the frame is published'
+          # Closability is decided by the kernel, not restated here.
+          assert 'kernel.closability_refusal(' in boundary
+          # The far side is recomputed from the kernel's own derivation.
+          assert 'kernel.far_side_receipt_chain(' in boundary
+          # Attestation is recorded unavailable rather than merely absent.
+          assert 'attestation_is_unavailable_at_this_organization' in boundary
+          # The invariant is about the value assigned, not the word: the prose
+          # above the record explains that no path here reaches PROVEN, so a
+          # bare-word search would flag its own explanation.
+          assert '"origin_attestation_state": "NOT_PROVEN"' in boundary
+          assert '"origin_attestation_state": "PROVEN"' not in boundary, \
+              'no code path here reaches PROVEN; do not assign it'
+          # An absence is not a transition.
+          assert 'absence_is_not_a_transition' in boundary
+          print('EGRESS_LEDGER_CONTRACTS_DECLARE_ONLY_WHAT_IS_ENFORCED=PASS')
+          print('EGRESS_BOUNDARY_STRUCTURE_PASS')
+          PY
+
+      - name: Record what the boundary does and does not establish
+        run: |
+          echo 'ORGANIZATION_EGRESS_BOUNDARY_VALIDATION_PASS'
+          echo 'This organization can now resolve a declared peer, emit a crossing, and'
+          echo 'close it against a recomputed far-side receipt chain -- each half recorded'
+          echo 'at both ledger levels under its own disposition class.'
+          echo 'Origin is asserted, not attested: no code path here reaches PROVEN, and'
+          echo 'attestation_is_unavailable_at_this_organization says so rather than leaving'
+          echo 'NOT_PROVEN to read as an attestation that was attempted.'
+          echo 'Recomputation proves a boundary ran this packet. It does not prove which'
+          echo 'organization that boundary belongs to, nor that it persisted its own chain:'
+          echo 'the bilateral match needs the far side chain readable and is not available.'
+          echo 'Standing admitted is not origin authenticated.'
