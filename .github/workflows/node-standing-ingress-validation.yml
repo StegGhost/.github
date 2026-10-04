@@ -108,6 +108,24 @@ jobs:
           assert 'RESPONDED_REQUEST_CLASSES={' in kernel
           assert kernel.count('"ecosystem.monitor.request":"ecosystem.monitor.response"') == 1, \
               'the answered-class map must not be restated'
+          # A literal set of the answered classes is the bug this caught: the
+          # map declared four and the responder answered three, so a crossing
+          # the closability gate admitted was consumed and never answered. Every
+          # surface that decides what is answered reads the map.
+          gateway = Path('resident-runtime/federation_gateway_transport.py').read_text(encoding='utf-8')
+          for name, source in (('kernel', kernel), ('gateway', gateway)):
+              literal = '"ecosystem.monitor.request", "ecosystem.work.request"'
+              compact = '"ecosystem.monitor.request","ecosystem.work.request"'
+              assert literal not in source and compact not in source, \
+                  name + ' restates the answered-class set instead of reading the map'
+          assert 'message_class in RESPONDED_REQUEST_CLASSES' in kernel, \
+              'the responder must read the map'
+          assert 'K.RESPONDED_REQUEST_CLASSES' in gateway, \
+              'the gateway lane must read the map'
+          # Likewise the acknowledgement set.
+          for name, source in (('kernel', kernel), ('gateway', gateway)):
+              assert '"ecosystem.monitor.response","ecosystem.work.ack"' not in source, name
+              assert '"ecosystem.monitor.response", "ecosystem.work.ack"' not in source, name
           assert kernel.index('unclosable=closability_refusal(payload)') \
                < kernel.index('packets.append(packet)'), \
               'an unclosable crossing must be refused before it is collected for publishing'

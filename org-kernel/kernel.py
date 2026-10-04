@@ -124,6 +124,23 @@ def node_standing(root:Path):
     module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
     return module
 
+def emission_chain_disclosure(root:Path):
+    """Load this organization's emission-chain disclosure surface from its root.
+
+    Resolved from the dispatch root for the same reason `node_standing` is: the
+    kernel is organization-neutral and runs against whichever root it is handed.
+    Unlike `node_standing` a missing module is not fail-closed, because serving
+    a disclosure is this organization's offer rather than a precondition of
+    ingress -- a root that does not carry one answers that no disclosure is
+    available, which is what a peer must be told.
+    """
+    path=root/"org-boundary/runtime/emission_chain_disclosure.py"
+    if not path.is_file(): return None
+    spec=importlib.util.spec_from_file_location("emission_chain_disclosure",path)
+    module=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 def carried_standing(request_packet:dict[str,Any])->dict[str,Any]:
     """Carry a request's standing onto its response, unchanged and marked as carried.
 
@@ -434,7 +451,25 @@ def handle_control_message(root:Path, packet:dict[str,Any], registry:dict[str,An
         result["work_intake"]=persist_work_request(root,packet)
     elif message_class=="ecosystem.communication":
         result["communication_acknowledged"]=True
-    elif message_class in {"ecosystem.monitor.response","ecosystem.work.ack","ecosystem.communication.ack"}:
+    elif message_class=="ecosystem.emission.disclosure.request":
+        # This organization's half of the bilateral match: it answers, from its
+        # own chain, whether it records emitting the packet the asker names. The
+        # answer is narrow by construction -- one packet id, digests and the
+        # recorded destination, never a payload and never another packet.
+        surface=emission_chain_disclosure(root)
+        body=payload.get("body") or {}
+        if surface is None:
+            result["emission_disclosure"]={
+              "schema":"stegghost.emission-chain-disclosure/v1",
+              "disposition":"DISCLOSURE_NOT_AVAILABLE",
+              "holds_emission_receipt":False,
+              "detail":"this root carries no emission chain disclosure surface",
+              "authority_effect":"NONE_DISCLOSURE_ONLY"}
+        else:
+            result["emission_disclosure"]=surface.disclose(
+              root, body.get("request_packet_id"), packet["origin"]["org"])
+        result["disclosure_grants_no_authority"]=True
+    elif message_class in ACK_CLASSES:
         result["response_acknowledged"]=True
     return result
 
@@ -445,7 +480,13 @@ def handle_control_message(root:Path, packet:dict[str,Any], registry:dict[str,An
 RESPONDED_REQUEST_CLASSES={
   "ecosystem.monitor.request":"ecosystem.monitor.response",
   "ecosystem.work.request":"ecosystem.work.ack",
-  "ecosystem.communication":"ecosystem.communication.ack"
+  "ecosystem.communication":"ecosystem.communication.ack",
+  # The bilateral match's asking half. Declared here rather than given its own
+  # transport because an emission disclosure is a governed request answered by
+  # an acknowledgement, which is exactly what this map is: adding it makes the
+  # crossing closable by construction, so `closability_refusal` admits it with
+  # no special case and `close` correlates it like any other.
+  "ecosystem.emission.disclosure.request":"ecosystem.emission.disclosure.response"
 }
 ACK_CLASSES=frozenset(RESPONDED_REQUEST_CLASSES.values())
 
@@ -542,8 +583,13 @@ def consume_and_respond(repo_root:Path, *, mesh_root:Path|None=None, seen:set[st
         message_class=payload.get("message_class")
         result=ingest_frame(repo_root,item["frame"])
         response_publication=None
-        if result.get("status")=="CONSUMED" and message_class in {
-            "ecosystem.monitor.request","ecosystem.work.request","ecosystem.communication"}:
+        # Read from RESPONDED_REQUEST_CLASSES, not a second copy of it. A
+        # literal set here disagreed with the map the moment the map gained a
+        # class: it declared four answered classes while this responded to
+        # three, so an emission the closability gate admitted was consumed and
+        # never answered -- the unclosable crossing, arriving through the one
+        # surface that is supposed to decide what is closable.
+        if result.get("status")=="CONSUMED" and message_class in RESPONDED_REQUEST_CLASSES:
             response=build_control_response(packet,result["execution_result"])
             response_publication=publish_packet(response,root=mesh_root,now_ns=now_ns)
         marker=mark_federation_frame_seen(repo_root,item["path"],item["frame"],result)
