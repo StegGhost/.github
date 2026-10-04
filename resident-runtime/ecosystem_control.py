@@ -38,7 +38,7 @@ def main():
         if os.getenv("STEGVERSE_ORG_FEDERATION_GATEWAY_URL","").strip():
             result=GW.collect_local_responses(ROOT,args.communication_id)
         else:
-            result=K.collect_ecosystem_responses(org,args.communication_id)
+            result=K.collect_ecosystem_responses(org,args.communication_id,repo_root=ROOT)
         print(json.dumps(result,indent=2,sort_keys=True))
         return
     body=json.loads(args.body_json)

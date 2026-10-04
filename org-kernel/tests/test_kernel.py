@@ -107,3 +107,105 @@ with tempfile.TemporaryDirectory() as td:
     assert response["standing"]["standing_carried_forward_from_request"] is True
     assert response["standing"]["mode"]==STANDING["mode"]
 print("NODE_STANDING_GATE_PASS")
+
+
+# Egress closability and far-side receipt recomputation. Before this, a payload
+# declaring a class the profile answers with nothing was published, consumed and
+# receipted by the far side and never answered, and a response carrying a forged
+# terminal receipt was accepted and counted complete.
+with tempfile.TemporaryDirectory() as td:
+    mesh=Path(td)/"mesh"
+    a=Path(td)/"a"; b=Path(td)/"b"
+    for root,org in ((a,"Org-A"),(b,"Org-B")):
+        (root/"org-boundary/registry").mkdir(parents=True); provision_standing(root)
+        slug=org.lower()
+        reg={"organization":org,"services":[{"service_id":slug+".org-control","repository":org+"/.github","boundary_role":"BOUNDARY_LOCAL_CONTROL","accepts":list(k.RESPONDED_REQUEST_CLASSES)}]}
+        (root/"org-boundary/registry/services.json").write_text(json.dumps(reg))
+
+    # An unanswerable class is refused at emission rather than published.
+    try:
+        k.build_ecosystem_packets(origin_org="Org-A",origin_service="org-a.org-control",
+                                  organizations=["Org-B"],standing=STANDING,
+                                  message_class="ecosystem.status.query",subject="unclosable",
+                                  body={},communication_id="unclosable-001")
+        raise AssertionError("an unclosable crossing was emitted")
+    except ValueError as refused:
+        assert str(refused).startswith("unclosable_crossing:message_class_is_answered_by_no_acknowledgement"), refused
+    assert not (mesh/"frames.d").exists(), "a refused crossing published a frame"
+
+    # A blank communication_id leaves closure nothing to correlate on.
+    try:
+        k.build_ecosystem_packets(origin_org="Org-A",origin_service="org-a.org-control",
+                                  organizations=["Org-B"],standing=STANDING,
+                                  message_class="ecosystem.communication",subject="blank",
+                                  body={},communication_id="   ")
+        raise AssertionError("a crossing with a blank communication_id was emitted")
+    except ValueError as refused:
+        assert "closure_correlates_on_communication_id" in str(refused), refused
+
+    # Every answered class is emittable, so the refusal is the profile's set and
+    # not a narrower one invented here.
+    for cls in k.RESPONDED_REQUEST_CLASSES:
+        built=k.build_ecosystem_packets(origin_org="Org-A",origin_service="org-a.org-control",
+                                        organizations=["Org-B"],standing=STANDING,
+                                        message_class=cls,subject="closable",body={},
+                                        communication_id="closable-"+cls)
+        assert len(built["packets"])==1
+
+    # A real crossing: emit, let the far side answer, then recompute its chain.
+    COMM="recompute-001"
+    out=k.publish_ecosystem_message(origin_org="Org-A",origin_service="org-a.org-control",
+                                    organizations=["Org-B"],standing=STANDING,
+                                    message_class="ecosystem.communication",subject="recompute",
+                                    body={"probe":"recompute"},communication_id=COMM,
+                                    root=mesh,repo_root=a)
+    assert out["emissions_recorded"] is True
+    pid=out["publications"][0]["packet"]["packet_id"]
+    served=k.consume_and_respond(b,mesh_root=mesh)
+    assert [x["result"]["status"] for x in served]==["CONSUMED"]
+    assert served[0]["response_publication"] is not None
+
+    collected=k.collect_ecosystem_responses("Org-A",COMM,mesh_root=mesh,repo_root=a)
+    assert collected["far_side_receipts_recomputed_here"] is True
+    assert collected["response_count"]==1, collected
+    assert collected["refused_count"]==0, collected["refused"]
+    row=collected["organizations"][0]
+    assert row["receipt_terminal_recomputes"] is True, row
+    assert row["receipt_terminal"]==row["far_side_terminal_receipt_recomputed"]
+    assert row["findings"]==[]
+    # The recomputation matches what the far side actually minted, so this is a
+    # recomputation of the real chain and not two copies of one derivation.
+    assert row["receipt_terminal"]==served[0]["result"]["execution_result"]["reconstruction"]["terminal_receipt_id"]
+
+    # Without an emission to recompute against, the absence is stated rather
+    # than a carried terminal being reported as a checked one.
+    unchecked=k.collect_ecosystem_responses("Org-A",COMM,mesh_root=mesh)
+    assert unchecked["far_side_receipts_recomputed_here"] is False
+    assert unchecked["organizations"][0]["receipt_terminal_recomputes"] is None
+    assert unchecked["organizations"][0]["far_side_terminal_receipt_recomputed"] is None
+
+    # A forged terminal receipt is refused, not counted.
+    import base64
+    for path in sorted((mesh/"frames.d").glob("*.json")):
+        frame=json.loads(path.read_text())
+        if frame["destination_org"]!="Org-A": continue
+        forged_packet=k.recover_packet(frame)
+        forged_packet["payload"]["body"]["receipt_terminal"]="egress_emitted-"+("0"*24)
+        raw=k.canon(forged_packet)
+        body={key:value for key,value in frame.items() if key!="frame_sha256"}
+        body["packet_base64"]=base64.b64encode(raw).decode("ascii"); body["packet_sha256"]=k.sha(raw)
+        path.write_text(json.dumps({**body,"frame_sha256":k.sha(body)},indent=2,sort_keys=True)+"\n")
+    forged=k.collect_ecosystem_responses("Org-A",COMM,mesh_root=mesh,repo_root=a)
+    assert forged["response_count"]==0, forged
+    assert forged["refused_count"]==1, forged
+    assert any(f.startswith("FAR_SIDE_TERMINAL_RECEIPT_DOES_NOT_RECOMPUTE")
+               for f in forged["refused"][0]["findings"]), forged["refused"]
+
+    # A response to a crossing this organization has no record of emitting is
+    # refused too, whatever its terminal asserts.
+    assert k.recorded_emissions(b,COMM)=={}
+    stranger=k.collect_ecosystem_responses("Org-A",COMM,mesh_root=mesh,repo_root=b)
+    assert stranger["response_count"]==0, stranger
+    assert any(f.startswith("THIS_ORGANIZATION_HAS_NO_EMISSION_RECORD_FOR_THIS_PACKET")
+               for f in stranger["refused"][0]["findings"]), stranger["refused"]
+print("EGRESS_CLOSABILITY_AND_RECOMPUTATION_PASS")
