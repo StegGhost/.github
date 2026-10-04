@@ -1,8 +1,12 @@
 name: Node Standing Ingress Validation
 
 on:
+  # No branches filter on pull_request, deliberately. With `branches: [main]` a
+  # pull request based on anything else -- a stacked branch, for instance --
+  # matched nothing and ran no check at all, so its gate was unproven while its
+  # checks list looked merely empty rather than absent. Any pull request
+  # touching these files proves the gate, whatever it targets.
   pull_request:
-    branches: [main]
     paths:
       - docs/CANONICAL_NODE_INGRESS_CONTRACT_001.json
       - org-boundary/runtime/node_standing.py
