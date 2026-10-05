@@ -1,0 +1,99 @@
+{
+  "schema": "stegverse.organization-role-runtime-reality-deployment/v1",
+  "declaration_id": "ORGANIZATION-ROLE-RUNTIME-REALITY-DEPLOYMENT-001",
+  "organization": "StegGhost",
+  "declared_on": "2026-10-05",
+  "completion_evidence_contract_version": "v1",
+  "evidence_class": "SOURCE_IMPLEMENTED",
+  "authority_effect": "NONE_DECLARATION_ONLY",
+  "deployment_scope": "THIS_ORGANIZATION_ONLY_EACH_ORGANIZATION_DEPLOYS_IN_ITS_OWN_DOT_GITHUB",
+
+  "_why_this_exists_here": "The canonical declaration's deployment_scope is THIS_ORGANIZATION_ONLY_EACH_ORGANIZATION_DEPLOYS_IN_ITS_OWN_DOT_GITHUB. This organization carried no declaration and no exemption register, while carrying surfaces that cannot satisfy the standard. silent_non_conformance_allowed is false, so the absence of the register was itself the non-conformance.",
+
+  "role_change": {
+    "invariant_key": "runtime_reality_authority",
+    "previous_value": "Master Records",
+    "current_value": "Organization",
+    "reality_locus": "ORGANIZATION_LEDGER_ROOT",
+    "reality_lock": "ORGANIZATION_LEDGER_LOCK",
+    "reality_write_mode": "MANIFEST_DIRECTED_APPEND",
+    "organization_ledger_contract": ".stegverse/transition-ledger/org-contract.json",
+    "organization_receipt_schema": "stegverse.organization-transition-receipt/v1",
+    "organization_scope_rule": "EVERY_STATE_TRANSITION_OCCURRING_WITHIN_THE_ORGANIZATION_EMITS_AN_ORGANIZATION_RECEIPT"
+  },
+
+  "conformance_standard": {
+    "actions_by_manifest_required": true,
+    "state_transition_dependent": true,
+    "external_machine_awaiting_allowed": false,
+    "destination_sufficiency_rule": "MANIFEST_DETERMINES_THE_DESTINATION_AND_AN_EXISTING_DESTINATION_IS_SUFFICIENT_FOR_INGRESS_AND_EGRESS",
+    "destination_liveness_is_transition_predicate": false,
+    "receiver_unavailable_disposition": "DURABLE_QUEUE_OR_EVENT_EPHEMERAL_MATERIALIZATION",
+    "always_on_receiver_required": false,
+    "post_closure_authentic_observer_gate_allowed": false,
+    "non_conforming_surface_disposition": "DECLARED_EXEMPTION_REQUIRED",
+    "non_conforming_surface_failure_code": "ORGANIZATION_ROLE_CONFORMANCE_NOT_DECLARED"
+  },
+
+  "processing_selection": {
+    "invariant": "SDK-GENERIC-MANIFEST-ECOSYSTEM-INVARIANT-005",
+    "rule": "PROCESSING_SEMANTICS_ARE_SELECTED_ONLY_BY_AN_ADMITTED_MANIFESTS_DECLARED_CAPABILITY_BOUND_TO_ITS_ROUTE_ID",
+    "selected_by_the_addressed_row": false,
+    "selection_surface": "org-boundary/runtime/manifest_selection.py::select_processing",
+    "gated_at": [
+      "org-kernel/kernel.py::dispatch",
+      "org-boundary/runtime/process_boundary.py"
+    ],
+    "resolved_before_any_receipt_is_minted": true,
+    "route_installation_resolved_here": false,
+    "kernel_gate_can_reach_an_internal_endpoint": false,
+    "_what_the_kernel_gate_does_and_does_not_reach": "org-kernel/kernel.py refuses every boundary_role but BOUNDARY_LOCAL_DIAGNOSTIC and BOUNDARY_LOCAL_CONTROL with endpoint_adapter_not_installed before selection runs, so selection at that surface only ever resolves BOUNDARY_LOCAL_NO_PROCESSOR_SELECTED. The capability/route binding is therefore never enforced by the kernel today, and a passing kernel dispatch must not be read as one. What the kernel gate does achieve is that a manifest declaring a capability at a boundary-local surface now records declared_capability_processed false instead of completing as though the declared capability ran. The binding is enforced at org-boundary/runtime/process_boundary.py, which does resolve INTERNAL_ENDPOINT rows, and will be reached in the kernel when an endpoint adapter is installed.",
+    "route_owner": "StegVerse-org/StegVerse-SDK",
+    "_previous_state": "Both dispatch surfaces selected processing by the addressed registry row's boundary_role and endpoint_adapter, referencing neither processing.capability nor processing.route_id. A manifest could declare any capability and the boundary would process it under whichever processor the addressed row named."
+  },
+
+  "sandbox_path_invariant": {
+    "rule": "THE_PATH_TO_AND_FROM_THE_SANDBOX_IS_STATE_TRANSITION_DEPENDENT_IN_BOTH_DIRECTIONS",
+    "return_is_a_state_transition_not_a_function_return": true,
+    "each_leg_emits_an_organization_receipt": true,
+    "canonical_route_record": "StegGhost/entity-sandbox-runner docs/SDK_CUSTOMER_INGRESS_REPOSITORY_DETERMINATION.md",
+    "canonical_route": [
+      "StegVerse-org/StegVerse-SDK manifest-bound intake",
+      "StegVerse-org ingestion routing plane",
+      "StegGhost/entity-sandbox-runner sandbox intake and CGE admission",
+      "ephemeral sandbox batch",
+      "StegGhost/entity-sandbox-runner return validation",
+      "StegVerse-org ingestion return validation",
+      "initiating entity receives manifested result"
+    ],
+    "this_organizations_assigned_legs": [
+      "sandbox intake and CGE admission",
+      "ephemeral sandbox batch",
+      "return validation before return"
+    ],
+    "legs_addressable_today": 0,
+    "inbound_leg_disposition": "REFUSED_endpoint_adapter_not_installed",
+    "outbound_leg_disposition": "NOT_REACHED_INBOUND_LEG_REFUSES_FIRST",
+    "exemption_registered": "SGHOST-EXEMPTION-001",
+    "_what_is_not_claimed": "No leg of this route is addressable at this organization today. The route is architecture of record in the determination cited above; the transport for this organization's legs does not exist. That is registered as an exemption rather than left silent, and this declaration does not imply the route runs."
+  },
+
+  "exemption_path": {
+    "register": "data/organization-role-exemption-register.json",
+    "required_fields": [
+      "surface",
+      "owning_existing_goal",
+      "failure_code",
+      "failed_predicate",
+      "why_manifest_bound_state_transition_is_not_yet_possible",
+      "required_evidence_or_repair",
+      "retry_entrypoint",
+      "next_attempt",
+      "expires_or_review_on"
+    ],
+    "rule": "A_SURFACE_THAT_CANNOT_YET_BE_MANIFEST_BOUND_MUST_HOLD_A_REGISTERED_EXEMPTION_RATHER_THAN_REMAIN_SILENTLY_NON_CONFORMING",
+    "exemption_grants_authority": false,
+    "register_opens_empty": false,
+    "_why_this_register_does_not_open_empty": "The canonical register opens empty because that organization had no non-conforming surface to register. This one opens with the surfaces this organization actually carries and cannot yet bind. An empty register here would be the silent non-conformance the rule forbids."
+  }
+}

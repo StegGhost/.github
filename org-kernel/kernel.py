@@ -124,6 +124,22 @@ def node_standing(root:Path):
     module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
     return module
 
+def manifest_selection(root:Path):
+    """Load this organization's processing-selection surface from its root.
+
+    Resolved from the dispatch root for the same reason `node_standing` is, and
+    fail-closed for the same reason: a boundary that cannot state how processing
+    was selected must not dispatch. `SDK-GENERIC-MANIFEST-ECOSYSTEM-INVARIANT-005`
+    requires every processing action to be manifest-driven, so a root with no
+    selection surface cannot satisfy the invariant and must not pretend to.
+    """
+    path=root/"org-boundary/runtime/manifest_selection.py"
+    if not path.is_file(): raise ValueError("org_boundary_manifest_selection_missing")
+    spec=importlib.util.spec_from_file_location("manifest_selection",path)
+    module=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 def emission_chain_disclosure(root:Path):
     """Load this organization's emission-chain disclosure surface from its root.
 
@@ -169,6 +185,15 @@ def dispatch(root:Path, packet:dict[str,Any])->dict[str,Any]:
     role=service.get("boundary_role")
     if role not in {"BOUNDARY_LOCAL_DIAGNOSTIC","BOUNDARY_LOCAL_CONTROL"}:
         raise ValueError("endpoint_adapter_not_installed")
+    # Processing is selected by the admitted manifest, not by the addressed row.
+    # Resolved before any receipt is minted: a dispatch that cannot state how
+    # processing was selected must not leave a chain implying it was consumed,
+    # and a declaration the service does not admit must not be completed under
+    # whichever processor the addressed row happened to name.
+    try:
+        selected=manifest_selection(root).select_processing(service,packet["payload"])
+    except SystemExit as refused:
+        raise ValueError("manifest_selection_refused:"+str(refused)) from None
     prev=None; receipts=[]
     for kind in ("INGRESS_ACCEPTED","DISPATCHED","CONSUMED","RESULT_BOUND","EGRESS_EMITTED"):
         r=receipt(kind,packet["packet_id"],service["service_id"],prev,{"payload_hash":sha(packet["payload"])})
@@ -179,7 +204,7 @@ def dispatch(root:Path, packet:dict[str,Any])->dict[str,Any]:
         application_result={"echo":packet["payload"]}
     return {"schema_version":SCHEMA,"organization":registry["organization"],"packet_id":packet["packet_id"],
             "service_id":service["service_id"],"consumed":True,"application_result":application_result,
-            **standing,
+            **selected,**standing,
             "authority_effect":packet["transition"]["authority_effect"],"receipts":receipts,
             "reconstruction":{"same_execution_required":True,"status":"RECONSTRUCTED","terminal_receipt_id":prev}}
 

@@ -51,6 +51,8 @@ def peer_root(base):
     (root / "org-boundary/runtime").mkdir(parents=True, exist_ok=True)
     shutil.copy2(TREE / "org-boundary/runtime/node_standing.py",
                  root / "org-boundary/runtime/node_standing.py")
+    shutil.copy2(TREE / "org-boundary/runtime/manifest_selection.py",
+                 root / "org-boundary/runtime/manifest_selection.py")
     (root / "docs").mkdir(parents=True, exist_ok=True)
     shutil.copy2(TREE / "docs/CANONICAL_NODE_INGRESS_CONTRACT_001.json",
                  root / "docs/CANONICAL_NODE_INGRESS_CONTRACT_001.json")

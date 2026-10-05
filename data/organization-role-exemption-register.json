@@ -1,0 +1,117 @@
+{
+  "schema": "stegverse.organization-role-exemption-register/v1",
+  "register_id": "ORGANIZATION-ROLE-EXEMPTION-REGISTER-001",
+  "organization": "StegGhost",
+  "declaration": "ORGANIZATION-ROLE-RUNTIME-REALITY-DEPLOYMENT-001",
+  "standard": "EVERY_ACTION_IS_A_MANIFEST_BOUND_STATE_TRANSITION_AND_NO_EXTERNAL_MACHINE_IS_AWAITED",
+  "rule": "A_SURFACE_THAT_CANNOT_YET_SATISFY_THE_STANDARD_MUST_HOLD_A_REGISTERED_EXEMPTION_WITH_AN_ACTIONABLE_NON_ALLOW_DISPOSITION",
+  "silent_non_conformance_allowed": false,
+  "exemption_grants_authority": false,
+  "exemption_may_satisfy_a_terminal_predicate": false,
+  "required_fields": [
+    "surface",
+    "owning_existing_goal",
+    "failure_code",
+    "failed_predicate",
+    "why_manifest_bound_state_transition_is_not_yet_possible",
+    "required_evidence_or_repair",
+    "retry_entrypoint",
+    "next_attempt",
+    "expires_or_review_on"
+  ],
+  "prohibited_justifications": [
+    "AN_EXTERNAL_MACHINE_MUST_BE_RUNNING",
+    "A_SECOND_USER_OPERATED_DEVICE_IS_REQUIRED",
+    "A_REMOTE_COMPUTER_IS_UNAVAILABLE",
+    "EVIDENCE_REACHABILITY_IS_PENDING",
+    "A_RECEIVER_IS_NOT_ALWAYS_ON",
+    "AN_AUTHENTIC_OBSERVER_HAS_NOT_YET_LOOKED"
+  ],
+
+  "cosv": "ABSENT_FROM_CURRENT_TASK_REGISTRY_SCHEMA",
+  "_cosv_discipline": "docs/CANONICAL_NODE_INGRESS_CONTRACT_001.json records COSV_UNRESOLVABLE_BY_CONSTRUCTION with the solution 'Record ABSENT_FROM_CURRENT_TASK_REGISTRY_SCHEMA; do not invent COSV.' This organization's only COSV reference is the central ECOSYSTEM-OPEN-SOURCE-STRATEGY-001 / COSV 20010010100000, which holds open-source licensing aggregation and does not own transport conformance. No COSV is minted here.",
+
+  "_owning_existing_goal_discipline": "owning_existing_goal is a required field and this organization carries no orchestration task registry, so no existing goal can own these surfaces. Following the COSV rule above, the absence is recorded rather than a goal invented. SGHOST-EXEMPTION-003 is that absence, and it is the predecessor repair for every other entry's owning_existing_goal.",
+
+  "exemptions": [
+    {
+      "exemption_id": "SGHOST-EXEMPTION-001",
+      "surface": "stegghost.entity-sandbox-runner — this organization's assigned legs of the canonical SDK formal testing route",
+      "owning_existing_goal": "ABSENT_FROM_CURRENT_TASK_REGISTRY_SCHEMA",
+      "failure_code": "ORGANIZATION_ROLE_CONFORMANCE_NOT_DECLARED",
+      "failed_predicate": "THE_PATH_TO_AND_FROM_THE_SANDBOX_IS_STATE_TRANSITION_DEPENDENT_IN_BOTH_DIRECTIONS",
+      "why_manifest_bound_state_transition_is_not_yet_possible": "The route is architecture of record: StegGhost/entity-sandbox-runner docs/SDK_CUSTOMER_INGRESS_REPOSITORY_DETERMINATION.md assigns this organization sandbox intake and CGE admission, the ephemeral sandbox batch, and return validation before return. The registry row stegghost.entity-sandbox-runner declares boundary_role INTERNAL_ENDPOINT and no endpoint_adapter, so dispatch refuses endpoint_adapter_not_installed before any leg is entered. The inbound leg is not addressable, so the outbound leg is never reached and neither leg can emit an organization receipt.",
+      "required_evidence_or_repair": "StegGhost/entity-sandbox-runner declares, in its own repository, a manifest-bound receiving operation and the endpoint_adapter path that resolves it, per its NEEDS_REPOSITORY_HANDOFF_RECONCILIATION status. Its own mirror handoff withholds authority for external-repository mutation, so the declaration is that repository's act and not this one's. This organization then admits the declared capability bound to its route_id in the registry row's admits_processing, and both legs emit organization receipts.",
+      "retry_entrypoint": "python3 org-boundary/runtime/process_boundary.py --envelope <manifest-bound envelope> --out <result>",
+      "next_attempt": "ON_ENDPOINT_ADAPTER_DECLARATION_IN_THE_ENDPOINT_REPOSITORY",
+      "expires_or_review_on": "2026-11-05",
+      "disposition": "DENY_endpoint_adapter_not_installed",
+      "disposition_is_actionable": true,
+      "awaits_an_external_machine": false,
+      "_awaits_nothing": "The refusal is immediate and local. Nothing is queued, nothing polls, and no machine is awaited: an envelope addressed here today earns a refusal with a named predicate, not a wait."
+    },
+    {
+      "exemption_id": "SGHOST-EXEMPTION-002",
+      "surface": "stegghost.telemetry, stegghost.automated-buildout, stegghost.stegverse-sandbox, stegghost.stegcge, stegghost.ghost-pat-lab",
+      "owning_existing_goal": "ABSENT_FROM_CURRENT_TASK_REGISTRY_SCHEMA",
+      "failure_code": "ORGANIZATION_ROLE_CONFORMANCE_NOT_DECLARED",
+      "failed_predicate": "A_DECLARED_ENDPOINT_IS_ADDRESSABLE_BY_A_MANIFEST_BOUND_CROSSING",
+      "why_manifest_bound_state_transition_is_not_yet_possible": "Each row declares boundary_role INTERNAL_ENDPOINT with profile_status NEEDS_REPOSITORY_HANDOFF_RECONCILIATION and no endpoint_adapter. ORG_DESCRIPTION.md declares this organization's role as isolated experimental and system-construction environments for deterministic buildout, entity sandboxes, and proof-oriented component development; these five rows are that role's surfaces and none of them can receive a crossing.",
+      "required_evidence_or_repair": "Each endpoint repository declares its own manifest-bound receiving operation and adapter path and reconciles its handoff. This organization admits the declared capability and route per row. Until then the row remains declared and refusing, which is observable rather than silent.",
+      "retry_entrypoint": "python3 org-boundary/runtime/process_boundary.py --envelope <manifest-bound envelope> --out <result>",
+      "next_attempt": "PER_ENDPOINT_ON_HANDOFF_RECONCILIATION",
+      "expires_or_review_on": "2026-11-05",
+      "disposition": "DENY_endpoint_adapter_not_installed",
+      "disposition_is_actionable": true,
+      "awaits_an_external_machine": false
+    },
+    {
+      "exemption_id": "SGHOST-EXEMPTION-003",
+      "surface": "orchestration task registry — absent at this organization",
+      "owning_existing_goal": "ABSENT_FROM_CURRENT_TASK_REGISTRY_SCHEMA",
+      "failure_code": "ORGANIZATION_ROLE_CONFORMANCE_NOT_DECLARED",
+      "failed_predicate": "EVERY_ACTION_IS_OWNED_BY_AN_EXISTING_GOAL_IN_THIS_ORGANIZATIONS_TASK_REGISTRY",
+      "why_manifest_bound_state_transition_is_not_yet_possible": "This organization carries no orchestration/task-registry.json, so it declares no active_goal, no activation_condition and no required_evidence. The required field owning_existing_goal therefore cannot be satisfied by any entry in this register, including this one. A goal invented here to fill the field would be the defect the COSV rule forbids in the adjacent case.",
+      "required_evidence_or_repair": "This organization declares orchestration/task-registry.json against the ecosystem task-registry schema, with the goals that own its sandbox and buildout surfaces, and each entry above is re-registered under its owning goal. The goals are the organization owner's to declare; they are not derived here from the surfaces that need them.",
+      "retry_entrypoint": "ORGANIZATION_OWNER_DECLARES_orchestration/task-registry.json",
+      "next_attempt": "ON_TASK_REGISTRY_DECLARATION",
+      "expires_or_review_on": "2026-11-05",
+      "disposition": "DENY_OWNING_GOAL_ABSENT",
+      "disposition_is_actionable": true,
+      "awaits_an_external_machine": false,
+      "_is_the_predecessor_repair": true
+    },
+    {
+      "exemption_id": "SGHOST-EXEMPTION-004",
+      "surface": "resident-runtime activation state — UNIVERSAL_KERNEL_NETWORK_FEDERATION_SOURCE_INSTALLED_OBSERVATION_PENDING",
+      "owning_existing_goal": "ABSENT_FROM_CURRENT_TASK_REGISTRY_SCHEMA",
+      "failure_code": "ORGANIZATION_ROLE_CONFORMANCE_NOT_DECLARED",
+      "failed_predicate": "NO_SURFACE_HOLDS_A_STATE_WHOSE_ADVANCE_CONDITION_IS_THAT_AN_OBSERVER_HAS_LOOKED",
+      "why_manifest_bound_state_transition_is_not_yet_possible": "resident-runtime/activation-manifest.json holds state OBSERVATION_PENDING and control/organization-runtime.json holds SOURCE_CONFIGURED_RUNTIME_NOT_CLAIMED. A state that advances when an observation occurs names the condition the standard forbids: post_closure_authentic_observer_gate_allowed is false and AN_AUTHENTIC_OBSERVER_HAS_NOT_YET_LOOKED is a prohibited justification. The state is therefore registered rather than cited as a reason.",
+      "required_evidence_or_repair": "The activation state's advance condition is restated as a manifest-bound state transition with its own receipt — an activation that is claimed by a transition rather than by having been observed — or the state is retired. This register entry is not that repair and does not perform it.",
+      "retry_entrypoint": "python3 org-runtime/runtime_boundary.py activation-request --runtime-id <runtime>",
+      "next_attempt": "ON_ACTIVATION_ADVANCE_CONDITION_RESTATEMENT",
+      "expires_or_review_on": "2026-11-05",
+      "disposition": "DENY_OBSERVER_GATED_STATE_NOT_MANIFEST_BOUND",
+      "disposition_is_actionable": true,
+      "awaits_an_external_machine": false
+    },
+    {
+      "exemption_id": "SGHOST-EXEMPTION-005",
+      "surface": "origin attestation — the credential authority's signing operation",
+      "owning_existing_goal": "ABSENT_FROM_CURRENT_TASK_REGISTRY_SCHEMA",
+      "failure_code": "ORGANIZATION_ROLE_CONFORMANCE_NOT_DECLARED",
+      "failed_predicate": "AN_ACTION_IS_PERFORMABLE_WITHOUT_AWAITING_AN_EXTERNAL_MACHINE",
+      "why_manifest_bound_state_transition_is_not_yet_possible": "org-boundary/runtime/origin_attestation.py reaches PROVEN only by calling TV_EXPORT_HMAC_SIGN and TV_EXPORT_HMAC_VERIFY on a TV/TVC resident host, whose key is loaded from a systemd credential directory. The attestation action is therefore performable only where that host answers, which is the prohibited justification AN_EXTERNAL_MACHINE_MUST_BE_RUNNING. Recording that as a ceiling in the overlay stated it honestly but left it outside the register; it is registered here so it is not cited as a reason.",
+      "required_evidence_or_repair": "The credential authority exposes attestation as a manifest-bound state transition — a signing request that crosses as a governed manifest and returns a receipt — rather than as a resident-host call. The repair is to make attestation manifest-bound, NOT to stand up a machine for this organization to await; standing one up would satisfy the call and still fail the standard. This is StegVerse-Labs/tvc's declaration to make, per AUTHORITY_SOURCE in org-boundary/runtime/origin_attestation.py, which names StegVerse-Labs/tvc:scripts/tv_credential_verify_export_resident.py.",
+      "retry_entrypoint": "resident-runtime/organization_egress_boundary.py::emit with credential_authority supplied",
+      "next_attempt": "ON_MANIFEST_BOUND_ATTESTATION_TRANSITION_AT_THE_CREDENTIAL_AUTHORITY",
+      "expires_or_review_on": "2026-11-05",
+      "disposition": "ALLOW_UNATTESTED_RECORDED_AS_UNATTESTED",
+      "disposition_is_actionable": true,
+      "awaits_an_external_machine": false,
+      "_why_the_disposition_is_ALLOW": "An emission with no authority supplied completes and records origin_attestation_state NOT_PROVEN with signer_supplied false. Nothing is awaited and no absence becomes a transition, so the crossing itself conforms. What does not conform is that the attestation action cannot be reached here at all, and that is what this entry registers. An offered attestation that fails refuses the emission, which is the non-ALLOW path."
+    }
+  ],
+  "authority_effect": "NONE_REGISTER_ONLY"
+}
