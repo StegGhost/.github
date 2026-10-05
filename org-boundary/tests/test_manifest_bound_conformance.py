@@ -480,6 +480,109 @@ def test_the_kernel_gates_reach_is_declared(declaration: dict) -> None:
     ok("KERNEL_GATE_REACH_IS_DECLARED_NOT_IMPLIED")
 
 
+def test_the_recorder_may_not_gate_this_organization(declaration: dict) -> None:
+    """Hold the recorder's role, and hold the declaration to the contract.
+
+    Organization receipts are recorded at the organization level and then
+    batched to `master-records`. The failure worth catching is not a missing
+    batch -- it is a batch that *gates*: a release that only counts once the
+    recorder acknowledges it. So the three fields that make the recorder
+    non-gating are asserted on both surfaces, and the two surfaces are required
+    to agree. A declaration that said one thing while the ledger contract said
+    another would leave the operative answer to whichever one the code read.
+    """
+    restated = declaration["master_records_restated_role"]
+    contract = load(ROOT / ".stegverse/transition-ledger/org-contract.json")
+
+    assert restated["role"] == "RELEASED_ORGANIZATION_BATCH_RECEIPT_RECORDER"
+    assert restated["runtime_reality_authority"] == "NONE"
+    assert restated["transition_authority"] == "NONE"
+    assert restated["may_gate_organization_runtime_reality"] is False
+    assert restated["may_be_awaited_by_a_transition"] is False
+    assert restated["release_predecessor_required"] == (
+        "VERIFIED_ORGANIZATION_RECEIPT_CHAIN_SEGMENT")
+
+    assert contract["propagation_target"] == restated["propagation_target"], (
+        "the declaration and the ledger contract name different propagation "
+        "targets; the code reads the contract, so the declaration would be "
+        "describing a target nothing propagates to")
+    assert contract["propagation_role"] == restated["role"]
+    assert contract["propagation_gates_organization_runtime_reality"] is False
+    assert contract["always_on_receiver_required"] is False
+    assert contract["propagation_receiver_unavailable_disposition"] == (
+        "DURABLE_QUEUE_OR_EVENT_EPHEMERAL_MATERIALIZATION"), (
+        "an unavailable recorder is answered by the protocol's own disposition, "
+        "never by waiting")
+
+    # This organization's own ledger root stays the reality locus. A
+    # propagation target that moved it would be the role change reversed.
+    assert contract["ledger_root_is_organization_runtime_reality_locus"] is True
+    assert contract["runtime_reality_authority"] == "Organization"
+    assert declaration["role_change"]["current_value"] == "Organization"
+    assert declaration["role_change"]["previous_value"] == "Master Records"
+    ok("THE_RECORDER_MAY_NOT_GATE_THIS_ORGANIZATION")
+
+
+def test_batch_release_claims_match_the_surfaces(declaration: dict) -> None:
+    """The release is implemented; the custody addressing is not. Recompute both.
+
+    `custody_service_declared_for_the_propagation_target` is the field most
+    likely to drift, because the day someone adds the row is the day the
+    declaration stops being true. So it is computed from the directory rather
+    than read, the same way the sandbox leg count is.
+    """
+    batch = declaration["organization_batch_release"]
+    contract = load(ROOT / ".stegverse/transition-ledger/org-contract.json")
+
+    for key in ("release_surface", "repository_receipt_propagation_surface"):
+        surface = ROOT / batch[key]
+        assert surface.is_file(), (
+            f"the declaration names {batch[key]} and it is absent")
+
+    assert batch["release_implemented"] is True
+    assert contract["organization_batch_propagation_implemented"] is True
+    assert contract["organization_batch_release_surface"] == batch["release_surface"]
+    assert batch["release_is_final_regardless_of_the_submission"] is True
+    assert batch["release_emits_an_organization_receipt"] is True
+
+    # Recomputed: does the directory actually declare a custody service for the
+    # propagation target?
+    target = contract["propagation_target"]
+    organization = target.split("/", 1)[0]
+    directory = load(ROOT / "org-boundary/registry/federation.json")
+    rows = [r for r in directory["organizations"]
+            if r.get("organization") == organization]
+    assert rows, f"the propagation target {organization} is not a declared peer"
+    row = rows[0]
+    declared = bool(row.get("addressed_service"))
+    assert batch["custody_service_declared_for_the_propagation_target"] is declared, (
+        f"the declaration says {batch['custody_service_declared_for_the_propagation_target']}"
+        f" and the directory row says {declared}")
+    assert contract["custody_service_declared"] is declared
+
+    register = load(REGISTER)
+    ids = {e["exemption_id"] for e in register["exemptions"]}
+    if not declared:
+        assert batch["exemption_registered"] in ids, (
+            "an unaddressable custody submission must cite an exemption that "
+            "exists in the register")
+        # The release must not be swept into that exemption. Only the
+        # submission is exempt; a release that needed an exemption would mean
+        # the recorder was gating after all.
+        entry = next(e for e in register["exemptions"]
+                     if e["exemption_id"] == batch["exemption_registered"])
+        assert entry["failed_predicate"] == (
+            "A_CUSTODY_SERVICE_IS_DECLARED_FOR_THE_PROPAGATION_TARGET")
+        assert entry["disposition"].startswith("DENY")
+        assert entry["awaits_an_external_machine"] is False
+        assert "_the_release_is_not_exempt" in entry
+    else:
+        assert batch["exemption_registered"] not in ids, (
+            "the custody service is now declared; retire the exemption and "
+            "flip custody_service_declared")
+    ok("BATCH_RELEASE_CLAIMS_MATCH_THE_SURFACES")
+
+
 def main() -> int:
     declaration = load(DECLARATION)
     register = load(REGISTER)
@@ -498,6 +601,8 @@ def main() -> int:
     test_observer_gated_state_is_registered(register)
     test_processing_is_selected_from_the_manifest()
     test_the_kernel_gates_reach_is_declared(declaration)
+    test_the_recorder_may_not_gate_this_organization(declaration)
+    test_batch_release_claims_match_the_surfaces(declaration)
 
     for label in checks:
         print(label + "=PASS")

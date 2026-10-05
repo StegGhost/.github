@@ -18,7 +18,24 @@
 
   "_consumes_is_narrower_than_the_reference": "StegVerse-org also consumes stegverse.canonical-state-transition-receipt/v1. This organization runs no canonical state transition emitter, so admitting that schema would declare an intake nothing here produces. It is added when such an emitter exists, not before.",
 
-  "propagation_target": null,
-  "organization_batch_propagation_implemented": false,
-  "_why_propagation_is_null": "The reference declares propagation_target master-records/.github and carries resident-runtime/submit_org_transition_to_master_records.py to perform it. This organization carries no such submitter, so naming a propagation target would be a declared capability with nothing enforcing it -- the exact defect PEER_KERNEL_GENERATION_ADMISSION_APPLIED_002 records at this organization's kernel. The field stays null until a submitter exists."
+  "declaration": "ORGANIZATION-ROLE-RUNTIME-REALITY-DEPLOYMENT-001",
+
+  "propagation_target": "master-records/.github",
+  "propagation_role": "RELEASED_ORGANIZATION_BATCH_RECEIPT_RECORDER",
+  "propagation_gates_organization_runtime_reality": false,
+  "propagation_receiver_unavailable_disposition": "DURABLE_QUEUE_OR_EVENT_EPHEMERAL_MATERIALIZATION",
+  "always_on_receiver_required": false,
+  "organization_batch_propagation_implemented": true,
+  "organization_batch_release_surface": "resident-runtime/release_organization_batch.py",
+  "repository_receipt_propagation_surface": "resident-runtime/propagate_repository_receipts.py",
+
+  "_what_propagation_means_here": "Organization receipts are recorded at the organization level and then batched to master-records. Those are two acts. Recording is real under ORGANIZATION_LEDGER_LOCK the moment it is appended; batching hands a segment this organization has independently verified and released to the recorder for durable custody. The release predecessor is a VERIFIED_ORGANIZATION_RECEIPT_CHAIN_SEGMENT, where verified means each receipt was re-digested against its own body before the batch digest was taken.",
+
+  "_what_the_recorder_is_not": "master-records holds custody, reconstruction and cross-organization history, and holds no transition authority. It is not this organization's runtime-reality authority and may not gate it: an organization transition is real when it is appended under the organization ledger lock, not when a batch carrying it is recorded downstream. A batch that has not been released or recorded is a value in the attempted transition's evidence state, not a blocker and not proof of non-occurrence.",
+
+  "custody_service_declared": false,
+  "custody_submission_disposition": "DENY_CUSTODY_SERVICE_NOT_DECLARED_FOR_THE_PROPAGATION_TARGET",
+  "_why_the_submission_refuses_today": "The federation directory's row for master-records declares org_control_service master-records.org-control and no addressed_service. A control service is the control plane, not a custody ledger, and submitting a batch to it because it is the service that happens to exist is the identity-addressing substitution this boundary refuses everywhere else. So the submission refuses immediately with a named predicate and the release stands. Nothing is queued against the day the service is declared, nothing polls for it, and no machine is awaited. Registered as SGHOST-EXEMPTION-006.",
+
+  "_previous_state": "This field read null, on the ground that naming a propagation target with no submitter behind it would be a declared capability with nothing enforcing it. The release surface now exists, so the target is named and what is still absent -- the peer's declared custody service -- is named separately rather than hidden behind a null target."
 }

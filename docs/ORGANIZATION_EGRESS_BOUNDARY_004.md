@@ -173,3 +173,10 @@ not establish whose boundary that was.
     There is no capability addressing and no propagation to master-records.
     Nothing here grants execution, route, credential, governance or transition
       authority.
+
+The propagation half of the fourth line is superseded by
+`ORGANIZATION_BATCH_RELEASE_008`, which declares `propagation_target:
+master-records/.github` and implements the release. The line stood as written
+until then. What remains true of it: no batch has reached the real recorder,
+because the federation directory declares no custody service for it, and
+capability addressing is still absent.

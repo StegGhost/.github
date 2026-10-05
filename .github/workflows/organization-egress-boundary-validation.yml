@@ -72,12 +72,37 @@ jobs:
           # The defect PEER_KERNEL_GENERATION_ADMISSION_APPLIED_002 recorded was a
           # declaration with nothing enforcing it. These two assertions keep the
           # ledger contracts from repeating it.
-          assert org['propagation_target'] is None, \
-              'a propagation target needs a submitter in this repository to perform it'
-          assert org['organization_batch_propagation_implemented'] is False
-          submitter = Path('resident-runtime/submit_org_transition_to_master_records.py')
-          assert not submitter.exists(), \
-              'a submitter exists, so propagation_target must stop being null'
+          # The original pair here asserted propagation_target was null and that
+          # no submitter existed -- true until ORGANIZATION_BATCH_RELEASE_008
+          # built one, and the right thing to have failed when it did. The
+          # invariant they were protecting is not the null; it is that a
+          # declaration must have something enforcing it. So it is now checked
+          # in both directions, which is what the original second assertion was
+          # reaching for.
+          target = org['propagation_target']
+          implemented = org['organization_batch_propagation_implemented']
+          surface = org.get('organization_batch_release_surface')
+          assert (target is None) == (implemented is False), \
+              'propagation_target and organization_batch_propagation_implemented ' \
+              'must agree; one without the other is a declaration with nothing ' \
+              'enforcing it, or a surface nothing addresses'
+          if target is not None:
+              assert isinstance(surface, str) and surface, \
+                  'a propagation target must name the surface that performs it'
+              assert Path(surface).is_file(), \
+                  'the declared release surface is absent: ' + surface
+              # Declared and present is not enough -- the surface has to be the
+              # one that actually releases, or the contract names a file that
+              # happens to exist.
+              source = Path(surface).read_text(encoding='utf-8')
+              assert 'def release(' in source and 'def submit(' in source, \
+                  surface + ' does not release and submit'
+              # And the recorder must not be able to gate this organization.
+              assert org['propagation_gates_organization_runtime_reality'] is False
+              assert org['always_on_receiver_required'] is False
+          else:
+              assert surface is None, \
+                  'a release surface is declared with no propagation target'
 
           # The organization ledger admits only schemas something here emits.
           assert org['consumes'] == ['stegverse.repo-transition-receipt/v1'], org['consumes']
