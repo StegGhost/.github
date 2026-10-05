@@ -1,0 +1,172 @@
+name: Organization Batch Release Validation
+
+on:
+  pull_request:
+    paths:
+      - resident-runtime/release_organization_batch.py
+      - resident-runtime/propagate_repository_receipts.py
+      - resident-runtime/tests/test_organization_batch_release.py
+      - resident-runtime/organization_egress_boundary.py
+      - resident-runtime/aggregate_repo_transition.py
+      - .stegverse/transition-ledger/org-contract.json
+      - org-boundary/registry/federation.json
+      - data/organization-role-runtime-reality-deployment.json
+      - data/organization-role-exemption-register.json
+      - .github/workflows/organization-batch-release-validation.yml
+  push:
+    branches: [main]
+    paths:
+      - resident-runtime/release_organization_batch.py
+      - resident-runtime/propagate_repository_receipts.py
+      - resident-runtime/tests/test_organization_batch_release.py
+      - resident-runtime/organization_egress_boundary.py
+      - resident-runtime/aggregate_repo_transition.py
+      - .stegverse/transition-ledger/org-contract.json
+      - org-boundary/registry/federation.json
+      - data/organization-role-runtime-reality-deployment.json
+      - data/organization-role-exemption-register.json
+      - .github/workflows/organization-batch-release-validation.yml
+  workflow_dispatch:
+
+# This repository is internal; an unpermissioned GITHUB_TOKEN cannot read it.
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Record at the organization level, then batch
+        run: |
+          set -eu
+          python3 resident-runtime/tests/test_organization_batch_release.py
+          python3 org-boundary/tests/test_manifest_bound_conformance.py
+          python3 -m py_compile \
+            resident-runtime/release_organization_batch.py \
+            resident-runtime/propagate_repository_receipts.py \
+            resident-runtime/organization_egress_boundary.py
+
+      - name: Assert the recorder cannot gate this organization
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import json, subprocess, sys
+          from pathlib import Path
+
+          # The failure worth catching is not a missing batch. It is a batch
+          # that gates: a release that only counts once the recorder
+          # acknowledges it. Mutate the contract three ways and require the
+          # conformance check to catch each.
+          CHECK = 'org-boundary/tests/test_manifest_bound_conformance.py'
+          CONTRACT = Path('.stegverse/transition-ledger/org-contract.json')
+          original = CONTRACT.read_text(encoding='utf-8')
+
+          def run():
+              return subprocess.run([sys.executable, CHECK],
+                                    capture_output=True, text=True).returncode
+
+          assert run() == 0, 'the conformance check does not pass at head'
+          try:
+              for field, value, label in (
+                  ('propagation_gates_organization_runtime_reality', True,
+                   'propagation gating runtime reality'),
+                  ('always_on_receiver_required', True,
+                   'an always-on recorder being required'),
+                  ('runtime_reality_authority', 'Master Records',
+                   'runtime reality moving back to the recorder'),
+              ):
+                  document = json.loads(original)
+                  document[field] = value
+                  CONTRACT.write_text(json.dumps(document, indent=2), encoding='utf-8')
+                  assert run() != 0, label + ' passed the conformance check'
+          finally:
+              CONTRACT.write_text(original, encoding='utf-8')
+          assert run() == 0, 'the contract was not restored'
+          print('THE_RECORDER_CANNOT_GATE_THIS_ORGANIZATION=PASS')
+          PY
+
+      - name: Assert release and submission stay two acts
+        run: |
+          set -eu
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path('resident-runtime/release_organization_batch.py').read_text(
+              encoding='utf-8')
+
+          # Recording is real at the organization ledger; batching hands a
+          # verified segment over. Fusing them is how the recorder becomes a
+          # gate, so `release` must not consult the destination at all.
+          body = source.split('def release(', 1)[1].split('\ndef ', 1)[0]
+          for reach in ('custody_destination', 'egress.emit', 'submit('):
+              assert reach not in body, (
+                  'release() reaches for ' + reach + '; a release that consults '
+                  'the recorder is a release the recorder can gate')
+
+          # Verified means re-digested, not asserted.
+          assert 'if receipt.get("receipt_sha256") != sha(body):' in source
+          assert 'ORGANIZATION_LEDGER_RECEIPT_HASH_MISMATCH' in source
+
+          # Exactly-once is read off the chain, not remembered in a file.
+          assert 'def already_released(' in source
+          assert 'def prior_releases(' in source
+
+          # The refusal path says all four things, so a refused submission is
+          # neither a lost batch nor a pending one.
+          for statement in ('"release_stands": True',
+                            '"awaits_an_external_machine": False',
+                            '"queued_against_a_future_declaration": False',
+                            '"unrecorded_batch_is_proof_of_non_occurrence": False'):
+              assert statement in source, 'the refusal record omits ' + statement
+
+          # The control service is named only to refuse it, never to address it.
+          assert 'CUSTODY_SERVICE_NOT_DECLARED_FOR_' in source
+          emit_call = source.split('result = egress.emit(', 1)[1][:400]
+          assert 'custody_organization' in emit_call
+          assert 'org_control_service' not in emit_call, (
+              'the batch must not be addressed at the control service')
+
+          # The kernel's closability map may be *explained* here -- the module
+          # says why it was deliberately not extended -- but never defined or
+          # mutated. Extending it would make this organization answer inbound
+          # custody requests, claiming to be a recorder it is not. So the check
+          # is on an assignment, not on the name appearing in prose.
+          for mutation in ('RESPONDED_REQUEST_CLASSES =',
+                            'RESPONDED_REQUEST_CLASSES=',
+                            'RESPONDED_REQUEST_CLASSES[',
+                            'RESPONDED_REQUEST_CLASSES.update',
+                            'ACK_CLASSES =', 'ACK_CLASSES='):
+              assert mutation not in source, (
+                  'this module alters the closability map (' + mutation + '); '
+                  'the kernel owns it, and extending it would make this '
+                  'organization answer inbound custody requests')
+          # And the batch rides a class the kernel already answers, rather than
+          # a custody class that would have to be added to that map.
+          assert '"message_class": "ecosystem.communication"' in source
+          print('RELEASE_AND_SUBMISSION_STAY_TWO_ACTS=PASS')
+          PY
+
+      - name: Record what this validation establishes and what it leaves open
+        run: |
+          echo 'ORGANIZATION_BATCH_RELEASE_VALIDATION_PASS'
+          echo 'Organization receipts are recorded at the organization level and then'
+          echo 'batched to master-records. Recording is real under the organization ledger'
+          echo 'lock the moment it is appended. Batching verifies a contiguous segment of'
+          echo 'this organization own chain -- each receipt re-digested against its own'
+          echo 'body -- releases it, and records the release at both ledger levels.'
+          echo
+          echo 'master-records holds custody, reconstruction and cross-organization'
+          echo 'history, and holds no transition authority. It is not this organization'
+          echo 'runtime-reality authority and cannot gate it. A refused submission leaves'
+          echo 'the release standing, and is itself recorded, so a batch never handed over'
+          echo 'is distinguishable from one never attempted.'
+          echo
+          echo 'What a PASS does NOT mean: no batch has reached the real recorder. The'
+          echo 'federation directory row for master-records declares no custody service,'
+          echo 'so the submission refuses with a named predicate today -- registered as'
+          echo 'SGHOST-EXEMPTION-006. The crossing is proven against a scratch directory'
+          echo 'carrying a declared custody row, which proves the path and proves nothing'
+          echo 'about what master-records received.'
+          echo 'AUTHORITY_EFFECT=NONE_VALIDATION_ONLY'

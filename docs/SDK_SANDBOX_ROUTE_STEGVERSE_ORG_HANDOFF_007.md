@@ -274,14 +274,28 @@ ledger modules already ported here are:
     resident-runtime/submit_org_transition_to_master_records.py .... org → master-records
 
 Porting them is StegGhost/.github's own work and needs nothing from
-StegVerse-org. It is deliberately not in this change, which is scoped to the
-conformance declaration and the register.
+StegVerse-org. It was deliberately not in that change, which was scoped to the
+conformance declaration and the register. It landed in
+`ORGANIZATION_BATCH_RELEASE_008`: the repository-receipt propagator is ported
+verbatim and the release is implemented, so `propagation_target` is now
+declared. What is still open is below — the custody service itself.
 
-What **is** StegVerse-org's and master-records' to settle: whether StegGhost
-addresses master-records through its existing `master-records.org-control` row —
-already present in the federation directory — or whether a distinct receipt
-custody service is declared. StegGhost will not pick one, because either answer
-written here would be a declaration about master-records' own surface.
+What **is** master-records' to settle, and now the only thing blocking custody:
+the custody service itself. This has been answered at the semantic level —
+organization receipts are recorded at the organization level and then batched to
+master-records, which is the `RELEASED_ORGANIZATION_BATCH_RECEIPT_RECORDER` role
+— so `propagation_target` is declared and the release is implemented. The
+addressing is not answered. The directory row for master-records declares
+`org_control_service: master-records.org-control` and no `addressed_service`,
+and the control plane is not a custody ledger, so the submission refuses rather
+than reaching for the service that happens to exist (`SGHOST-EXEMPTION-006`).
+
+`master-records` declares its custody service in its own
+`org-boundary/registry/services.json`. This organization then records *where*
+that declaration lives, the way the `SV-011` row does, and bumps the
+denominator. StegGhost will not name the service itself, because that would be a
+declaration about master-records' own surface — the same reason item 1 above is
+StegVerse-org's to make.
 
 ---
 
