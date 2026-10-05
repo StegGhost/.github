@@ -5,13 +5,16 @@ spec=importlib.util.spec_from_file_location("kernel","org-kernel/kernel.py"); k=
 
 TREE=Path("org-kernel/kernel.py").resolve().parents[1]
 CONTRACT="docs/CANONICAL_NODE_INGRESS_CONTRACT_001.json"
-#: A synthetic root is a dispatch root like any other, so it has to carry the
-#: standing surfaces the kernel resolves from it. Copied rather than stubbed:
-#: a test root that admits a crossing this organization's real root would refuse
-#: proves nothing about the real root.
+#: A synthetic root is a dispatch root like any other, so it has to carry every
+#: surface the kernel resolves from it -- standing, and the manifest selection
+#: that decides how processing was chosen. Copied rather than stubbed: a test
+#: root that admits a crossing this organization's real root would refuse proves
+#: nothing about the real root.
 def provision_standing(root:Path)->None:
     (root/"org-boundary/runtime").mkdir(parents=True,exist_ok=True)
     shutil.copy2(TREE/"org-boundary/runtime/node_standing.py",root/"org-boundary/runtime/node_standing.py")
+    shutil.copy2(TREE/"org-boundary/runtime/manifest_selection.py",
+                 root/"org-boundary/runtime/manifest_selection.py")
     (root/"docs").mkdir(parents=True,exist_ok=True)
     shutil.copy2(TREE/CONTRACT,root/CONTRACT)
 
