@@ -495,12 +495,15 @@ def test_the_recorder_may_not_gate_this_organization(declaration: dict) -> None:
     contract = load(ROOT / ".stegverse/transition-ledger/org-contract.json")
 
     assert restated["role"] == "RELEASED_ORGANIZATION_BATCH_RECEIPT_RECORDER"
-    assert restated["runtime_reality_authority"] == "NONE"
-    assert restated["transition_authority"] == "NONE"
-    assert restated["may_gate_organization_runtime_reality"] is False
-    assert restated["may_be_awaited_by_a_transition"] is False
+    assert restated["runtime_reality_authority"] == "Organization"
+    assert restated["transition_gates_and_admission"] == "Interlock/InTr"
+    assert restated["transition_prerequisites"] == "Interlock/InTr"
     assert restated["release_predecessor_required"] == (
         "VERIFIED_ORGANIZATION_RECEIPT_CHAIN_SEGMENT")
+    # The recorder keeps organization records and reconstruction, and nothing
+    # else: custody, retained evidence and history stay with the Organization.
+    assert set(restated["retained_capabilities"]) == {
+        "ORGANIZATION_RECORDS", "RECONSTRUCTION"}, restated["retained_capabilities"]
 
     assert contract["propagation_target"] == restated["propagation_target"], (
         "the declaration and the ledger contract name different propagation "
@@ -519,14 +522,18 @@ def test_the_recorder_may_not_gate_this_organization(declaration: dict) -> None:
     assert contract["ledger_root_is_organization_runtime_reality_locus"] is True
     assert contract["runtime_reality_authority"] == "Organization"
     assert declaration["role_change"]["current_value"] == "Organization"
-    assert declaration["role_change"]["previous_value"] == "Master Records"
+    # The recorder is never named as a holder of runtime reality, not even as
+    # the one it was taken from.
+    assert not any("master" in str(value).lower().replace("_", " ")
+                   for value in declaration["role_change"].values()), (
+        declaration["role_change"])
     ok("THE_RECORDER_MAY_NOT_GATE_THIS_ORGANIZATION")
 
 
 def test_batch_release_claims_match_the_surfaces(declaration: dict) -> None:
-    """The release is implemented; the custody addressing is not. Recompute both.
+    """The release is implemented; the record addressing is not. Recompute both.
 
-    `custody_service_declared_for_the_propagation_target` is the field most
+    `organization_record_service_declared_for_the_propagation_target` is the field most
     likely to drift, because the day someone adds the row is the day the
     declaration stops being true. So it is computed from the directory rather
     than read, the same way the sandbox leg count is.
@@ -545,8 +552,8 @@ def test_batch_release_claims_match_the_surfaces(declaration: dict) -> None:
     assert batch["release_is_final_regardless_of_the_submission"] is True
     assert batch["release_emits_an_organization_receipt"] is True
 
-    # Recomputed: does the directory actually declare a custody service for the
-    # propagation target?
+    # Recomputed: does the directory actually declare an organization record
+    # service for the propagation target?
     target = contract["propagation_target"]
     organization = target.split("/", 1)[0]
     directory = load(ROOT / "org-boundary/registry/federation.json")
@@ -555,16 +562,16 @@ def test_batch_release_claims_match_the_surfaces(declaration: dict) -> None:
     assert rows, f"the propagation target {organization} is not a declared peer"
     row = rows[0]
     declared = bool(row.get("addressed_service"))
-    assert batch["custody_service_declared_for_the_propagation_target"] is declared, (
-        f"the declaration says {batch['custody_service_declared_for_the_propagation_target']}"
-        f" and the directory row says {declared}")
-    assert contract["custody_service_declared"] is declared
+    claimed = batch["organization_record_service_declared_for_the_propagation_target"]
+    assert claimed is declared, (
+        f"the declaration says {claimed} and the directory row says {declared}")
+    assert contract["organization_record_service_declared"] is declared
 
     register = load(REGISTER)
     ids = {e["exemption_id"] for e in register["exemptions"]}
     if not declared:
         assert batch["exemption_registered"] in ids, (
-            "an unaddressable custody submission must cite an exemption that "
+            "an unaddressable record submission must cite an exemption that "
             "exists in the register")
         # The release must not be swept into that exemption. Only the
         # submission is exempt; a release that needed an exemption would mean
@@ -572,14 +579,14 @@ def test_batch_release_claims_match_the_surfaces(declaration: dict) -> None:
         entry = next(e for e in register["exemptions"]
                      if e["exemption_id"] == batch["exemption_registered"])
         assert entry["failed_predicate"] == (
-            "A_CUSTODY_SERVICE_IS_DECLARED_FOR_THE_PROPAGATION_TARGET")
+            "AN_ORGANIZATION_RECORD_SERVICE_IS_DECLARED_FOR_THE_PROPAGATION_TARGET")
         assert entry["disposition"].startswith("DENY")
         assert entry["awaits_an_external_machine"] is False
         assert "_the_release_is_not_exempt" in entry
     else:
         assert batch["exemption_registered"] not in ids, (
-            "the custody service is now declared; retire the exemption and "
-            "flip custody_service_declared")
+            "the organization record service is now declared; retire the "
+            "exemption and flip organization_record_service_declared")
     ok("BATCH_RELEASE_CLAIMS_MATCH_THE_SURFACES")
 
 

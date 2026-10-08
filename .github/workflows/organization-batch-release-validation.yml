@@ -74,8 +74,9 @@ jobs:
                    'propagation gating runtime reality'),
                   ('always_on_receiver_required', True,
                    'an always-on recorder being required'),
-                  ('runtime_reality_authority', 'Master Records',
-                   'runtime reality moving back to the recorder'),
+                  ('runtime_reality_authority',
+                   'RELEASED_ORGANIZATION_BATCH_RECEIPT_RECORDER',
+                   'runtime reality moving off the Organization'),
               ):
                   document = json.loads(original)
                   document[field] = value
@@ -100,7 +101,7 @@ jobs:
           # verified segment over. Fusing them is how the recorder becomes a
           # gate, so `release` must not consult the destination at all.
           body = source.split('def release(', 1)[1].split('\ndef ', 1)[0]
-          for reach in ('custody_destination', 'egress.emit', 'submit('):
+          for reach in ('organization_record_destination', 'egress.emit', 'submit('):
               assert reach not in body, (
                   'release() reaches for ' + reach + '; a release that consults '
                   'the recorder is a release the recorder can gate')
@@ -122,16 +123,16 @@ jobs:
               assert statement in source, 'the refusal record omits ' + statement
 
           # The control service is named only to refuse it, never to address it.
-          assert 'CUSTODY_SERVICE_NOT_DECLARED_FOR_' in source
+          assert 'ORGANIZATION_RECORD_SERVICE_NOT_DECLARED_FOR_' in source
           emit_call = source.split('result = egress.emit(', 1)[1][:400]
-          assert 'custody_organization' in emit_call
+          assert 'record_organization' in emit_call
           assert 'org_control_service' not in emit_call, (
               'the batch must not be addressed at the control service')
 
           # The kernel's closability map may be *explained* here -- the module
           # says why it was deliberately not extended -- but never defined or
           # mutated. Extending it would make this organization answer inbound
-          # custody requests, claiming to be a recorder it is not. So the check
+          # record requests, claiming to be a recorder it is not. So the check
           # is on an assignment, not on the name appearing in prose.
           for mutation in ('RESPONDED_REQUEST_CLASSES =',
                             'RESPONDED_REQUEST_CLASSES=',
@@ -141,9 +142,9 @@ jobs:
               assert mutation not in source, (
                   'this module alters the closability map (' + mutation + '); '
                   'the kernel owns it, and extending it would make this '
-                  'organization answer inbound custody requests')
+                  'organization answer inbound record requests')
           # And the batch rides a class the kernel already answers, rather than
-          # a custody class that would have to be added to that map.
+          # a record-handover class that would have to be added to that map.
           assert '"message_class": "ecosystem.communication"' in source
           print('RELEASE_AND_SUBMISSION_STAY_TWO_ACTS=PASS')
           PY
@@ -157,16 +158,17 @@ jobs:
           echo 'this organization own chain -- each receipt re-digested against its own'
           echo 'body -- releases it, and records the release at both ledger levels.'
           echo
-          echo 'master-records holds custody, reconstruction and cross-organization'
-          echo 'history, and holds no transition authority. It is not this organization'
-          echo 'runtime-reality authority and cannot gate it. A refused submission leaves'
-          echo 'the release standing, and is itself recorded, so a batch never handed over'
+          echo 'master-records holds organization records and serves reconstruction'
+          echo 'from them. Custody, retained evidence, authoritative history and runtime'
+          echo 'reality belong to the Organization; admission and gates belong to'
+          echo 'Interlock/InTr. A refused submission leaves the release standing, and is'
+          echo 'itself recorded, so a batch never handed over'
           echo 'is distinguishable from one never attempted.'
           echo
           echo 'What a PASS does NOT mean: no batch has reached the real recorder. The'
-          echo 'federation directory row for master-records declares no custody service,'
+          echo 'federation directory row for master-records declares no organization record service,'
           echo 'so the submission refuses with a named predicate today -- registered as'
           echo 'SGHOST-EXEMPTION-006. The crossing is proven against a scratch directory'
-          echo 'carrying a declared custody row, which proves the path and proves nothing'
+          echo 'carrying a declared record service row, which proves the path and proves nothing'
           echo 'about what master-records received.'
           echo 'AUTHORITY_EFFECT=NONE_VALIDATION_ONLY'

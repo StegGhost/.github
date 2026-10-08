@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Release a verified organization receipt-chain segment, and submit it for custody.
+"""Release a verified organization receipt-chain segment, and submit it as a record.
 
 Organization receipts are recorded at the organization level and then batched to
 `master-records`. Those are two different acts and the distinction is the whole
@@ -9,14 +9,16 @@ point of this module:
                                             the organization ledger lock
     batched to master-records ............. a segment this organization has
                                             independently verified and released
-                                            is handed over for durable custody
+                                            is handed over as an organization
+                                            record
 
 `master-records` is the `RELEASED_ORGANIZATION_BATCH_RECEIPT_RECORDER`. It holds
-custody, reconstruction and cross-organization history, and it holds no
-transition authority. It is not this organization's runtime-reality authority
-and it is not a gate on it. An organization transition is real when it is
-appended under the organization ledger lock -- not when a batch carrying it is
-recorded downstream.
+organization records and serves reconstruction from them. Custody of this
+organization's receipts, its retained evidence, its authoritative history and
+its runtime reality stay with the Organization, under the organization ledger
+lock; a transition is real when it is appended there -- not when a batch
+carrying it is recorded downstream. Admission and closure of the handover
+belong to Interlock/InTr.
 
 Which is why release and submission are separated here rather than fused into
 one call. `release` completes against this organization's own ledger and is
@@ -35,15 +37,16 @@ Exactly-once, by reading rather than remembering. A segment already carried by a
 prior release is skipped, read off the organization chain itself, so a second run
 is a no-op instead of a duplicate batch.
 
-What this module will not do is address custody to a service that has not been
-declared. The contract names `master-records/.github` as the propagation target;
-the federation directory's row for that organization declares an
-`org_control_service` and nothing else. A control service is the control plane,
-not a custody ledger, and submitting a batch to it because it is the service that
-happens to exist is the same substitution this boundary refuses everywhere else.
-So the submission refuses with a named predicate until the custody service is
-declared. It refuses *immediately* and locally: nothing is queued against the
-day it appears, nothing polls for it, and no machine is awaited.
+What this module will not do is address an organization record to a service
+that has not been declared. The contract names `master-records/.github` as the
+propagation target; the federation directory's row for that organization
+declares an `org_control_service` and nothing else. A control service is the
+control plane, not an organization record service, and submitting a batch to it
+because it is the service that happens to exist is the same substitution this
+boundary refuses everywhere else. So the submission refuses with a named
+predicate until the organization record service is declared. It refuses
+*immediately* and locally: nothing is queued against the day it appears, nothing
+polls for it, and no machine is awaited.
 
 Nothing here grants authority. A release records that this organization verified
 and handed over a segment of its own chain. It does not make the segment true --
@@ -70,8 +73,8 @@ ORGANIZATION_RECEIPT_SCHEMA = "stegverse.organization-transition-receipt/v1"
 BATCH_SCHEMA = "stegghost.organization-batch-release-record/v1"
 RESULT_SCHEMA = "stegghost.organization-batch-release/v1"
 RELEASE_CLASS = "ORGANIZATION_BATCH_RELEASED"
-SUBMIT_CLASS = "ORGANIZATION_BATCH_SUBMITTED_FOR_CUSTODY"
-SUBMIT_REFUSED_CLASS = "ORGANIZATION_BATCH_CUSTODY_SUBMISSION_REFUSED"
+SUBMIT_CLASS = "ORGANIZATION_BATCH_SUBMITTED_AS_ORGANIZATION_RECORD"
+SUBMIT_REFUSED_CLASS = "ORGANIZATION_BATCH_ORGANIZATION_RECORD_SUBMISSION_REFUSED"
 
 #: The role the recorder holds, and the two it does not. Restated on every
 #: release record so a batch cannot be read as a transfer of authority.
@@ -85,7 +88,8 @@ NO_PRIOR_RELEASE = "NO_PRIOR_ORGANIZATION_BATCH_RELEASE"
 ALLOW = "ALLOW"
 DENY = "DENY"
 
-CUSTODY_PREDICATE = "A_CUSTODY_SERVICE_IS_DECLARED_FOR_THE_PROPAGATION_TARGET"
+RECORD_SERVICE_PREDICATE = (
+    "AN_ORGANIZATION_RECORD_SERVICE_IS_DECLARED_FOR_THE_PROPAGATION_TARGET")
 SEGMENT_PREDICATE = "EVERY_RECEIPT_IN_THE_SEGMENT_VERIFIES_AGAINST_ITS_OWN_BODY"
 TARGET_PREDICATE = "THE_PROPAGATION_TARGET_IS_DECLARED_IN_THE_FEDERATION_DIRECTORY"
 
@@ -238,16 +242,17 @@ def verified_segment() -> dict[str, Any]:
     }
 
 
-# ------------------------------------------------------- the custody destination
+# ----------------------------------------- the organization record destination
 
-def custody_destination(root: Path | None = None) -> dict[str, Any]:
-    """Resolve the declared custody service for the propagation target, or refuse.
+def organization_record_destination(root: Path | None = None) -> dict[str, Any]:
+    """Resolve the target's declared organization record service, or refuse.
 
     The contract names the target repository. The federation directory is where
     a peer's addressable services are recorded -- and recorded is the operative
     word: the directory row says *where the peer declares the service in its own
     registry*, so this organization never declares a service on another's
-    behalf. A row with no custody service is not a row to improvise against.
+    behalf. A row with no organization record service is not a row to improvise
+    against.
     """
     declared = contract()
     target = declared.get("propagation_target")
@@ -277,29 +282,31 @@ def custody_destination(root: Path | None = None) -> dict[str, Any]:
     if not isinstance(service, str) or not service:
         # The honest refusal. `org_control_service` exists on this row and would
         # accept a crossing, which is exactly why it must not be used: the
-        # control plane is not a custody ledger, and reaching for the service
-        # that happens to exist is how a boundary ends up addressing by identity
-        # instead of by what the manifest declared.
+        # control plane is not an organization record service, and reaching for
+        # the service that happens to exist is how a boundary ends up addressing
+        # by identity instead of by what the manifest declared.
         raise ReleaseRefused(
-            CUSTODY_PREDICATE,
-            "CUSTODY_SERVICE_NOT_DECLARED_FOR_" + organization
+            RECORD_SERVICE_PREDICATE,
+            "ORGANIZATION_RECORD_SERVICE_NOT_DECLARED_FOR_" + organization
             + "_THE_ROW_DECLARES_ONLY_"
             + str(row.get("org_control_service")))
     if row.get("serves_an_organization_control_service") is not False:
         raise ReleaseRefused(
-            CUSTODY_PREDICATE,
-            "CUSTODY_SERVICE_ROW_DOES_NOT_DISTINGUISH_ITSELF_FROM_THE_CONTROL_SERVICE:"
+            RECORD_SERVICE_PREDICATE,
+            "ORGANIZATION_RECORD_SERVICE_ROW_DOES_NOT_DISTINGUISH_ITSELF_"
+            "FROM_THE_CONTROL_SERVICE:"
             + service)
     where = row.get("peer_declares_this_in_its_own_registry")
     if not isinstance(where, str) or not where:
         raise ReleaseRefused(
-            CUSTODY_PREDICATE,
-            "CUSTODY_SERVICE_DOES_NOT_RECORD_WHERE_THE_PEER_DECLARES_IT:" + service)
+            RECORD_SERVICE_PREDICATE,
+            "ORGANIZATION_RECORD_SERVICE_DOES_NOT_RECORD_WHERE_THE_PEER_DECLARES_IT:"
+            + service)
 
     return {
         "propagation_target": target,
-        "custody_organization": organization,
-        "custody_service": service,
+        "record_organization": organization,
+        "record_service": service,
         "peer_declares_this_in_its_own_registry": where,
         "destination_resolution_source": "FEDERATION_DIRECTORY_ROW",
     }
@@ -437,14 +444,14 @@ def submit(batch_sha256: str, released: list[str], *,
            standing: Mapping[str, Any],
            root: Path | None = None, mesh_root: Path | None = None,
            hb_epoch: int | None = None) -> dict[str, Any]:
-    """Hand a released batch to the declared custody service, or refuse.
+    """Hand a released batch to the declared organization record service, or refuse.
 
     The crossing goes through the recorded egress boundary rather than a private
     path, so a submission is subject to the same standing gate, closability
     refusal and receipt chain as every other crossing this organization makes.
     """
     try:
-        destination = custody_destination(root=root)
+        destination = organization_record_destination(root=root)
     except ReleaseRefused as refused:
         record = submission_refusal_record(refused.failed_predicate,
                                           refused.reason, batch_sha256)
@@ -470,18 +477,22 @@ def submit(batch_sha256: str, released: list[str], *,
         }
 
     payload = {
-        # A custody handover is a communication to the recorder, carrying the
-        # batch and closable by the recorder's acknowledgement of it.
+        # An organization record handover is a communication to the recorder,
+        # carrying the batch and closable by the recorder's acknowledgement of it.
         #
         # The kernel's `RESPONDED_REQUEST_CLASSES` was deliberately NOT extended
-        # with a custody class. That map does double duty: it is the set a
-        # crossing may declare to be closable, and it is the set
-        # `consume_and_respond` answers. Adding a custody class would therefore
-        # make *this* organization acknowledge an inbound custody request --
-        # claiming to be a recorder it is not. The specificity the class would
+        # with a record-handover class. That map does double duty: it is the set
+        # a crossing may declare to be closable, and it is the set
+        # `consume_and_respond` answers. Adding a record-handover class would
+        # therefore make *this* organization acknowledge an inbound record
+        # request -- claiming to be a recorder it is not. The specificity the class would
         # have carried is in `operation` instead, and under
         # SDK-GENERIC-MANIFEST-ECOSYSTEM-INVARIANT-005 it is the declared
         # capability that selects processing anyway, never the message class.
+        #
+        # `subject`, `operation` and the `communication_id` prefix below are wire
+        # names carried across to the recorder. They are a cross-repository
+        # contract, left as they stand until the rename is coordinated there.
         #
         # Closable is not awaited. `emit` returns as soon as the frame is
         # published; closure is a separate transition that may never occur, and
@@ -492,7 +503,7 @@ def submit(batch_sha256: str, released: list[str], *,
         "subject": "CUSTODY_RELEASED_ORGANIZATION_BATCH",
         "requested_action": None,
         "audience": "ORIGIN",
-        "target_organization": destination["custody_organization"],
+        "target_organization": destination["record_organization"],
         "target_count": 1,
         "operation": "CUSTODY_RELEASED_ORGANIZATION_BATCH",
         "batch_sha256": batch_sha256,
@@ -504,23 +515,23 @@ def submit(batch_sha256: str, released: list[str], *,
         "recorder_may_gate_organization_runtime_reality": False,
         "authority_transfer": False,
     }
-    result = egress.emit(destination["custody_organization"], payload,
+    result = egress.emit(destination["record_organization"], payload,
                          standing=standing, root=root, mesh_root=mesh_root,
                          hb_epoch=hb_epoch)
 
-    # The custody service is resolved twice -- here, to decide whether a batch
+    # The organization record service is resolved twice -- here, to decide whether a batch
     # may be addressed at all, and inside the boundary, to address it. Two
     # resolvers reading one directory should agree, and the one failure that
     # would matter is silent: the boundary falling back to the control service
     # while this module believed it had refused that. So the agreement is
     # checked rather than assumed.
     addressed = result.get("destination_service")
-    if result.get("emitted") and addressed != destination["custody_service"]:
+    if result.get("emitted") and addressed != destination["record_service"]:
         raise ReleaseRefused(
-            CUSTODY_PREDICATE,
+            RECORD_SERVICE_PREDICATE,
             "THE_BOUNDARY_ADDRESSED_" + str(addressed)
-            + "_BUT_THE_DECLARED_CUSTODY_SERVICE_IS_"
-            + destination["custody_service"])
+            + "_BUT_THE_DECLARED_ORGANIZATION_RECORD_SERVICE_IS_"
+            + destination["record_service"])
     return {
         "schema": RESULT_SCHEMA,
         "operation": SUBMIT_CLASS,
@@ -554,7 +565,8 @@ def release_and_submit(*, standing: Mapping[str, Any],
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Release a verified organization receipt-chain segment for custody.")
+        description="Release a verified organization receipt-chain segment "
+                    "as an organization record.")
     parser.add_argument("--standing", type=Path, default=None,
                         help="JSON file declaring mode, node_ref and the predecessor key; "
                              "required to submit, unused by --release-only")
