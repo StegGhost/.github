@@ -10,8 +10,9 @@ Two acts, and the suite's job is to keep them from collapsing into one:
 
 The dangerous failure here is not a missing batch. It is a batch that *gates*:
 a release that only counts once a recorder acknowledges it, or a submission
-that waits. `master-records` holds custody and no transition authority, so a
-submission that cannot be addressed must refuse immediately and leave the
+that waits. `master-records` holds organization records; whether a transition
+is real is the Organization's ledger's to say, and admission is Interlock/InTr's,
+so a submission that cannot be addressed must refuse immediately and leave the
 release standing -- an unrecorded batch is a value in evidence state, not a
 blocker and not proof of non-occurrence.
 
@@ -143,8 +144,8 @@ assert released["batch_sha256"] not in second["release_record"][
 
 third = B.release(hb_epoch=4400)
 assert third["released"] is True and third["released_count"] == 1
-# Re-releasing the same receipts would duplicate custody of transitions already
-# handed over, so the only thing each later run carries is the prior release.
+# Re-releasing the same receipts would duplicate the organization records of
+# transitions already handed over, so each later run carries only the prior release.
 assert third["release_predecessor"] == second["batch_sha256"]
 print("EXACTLY_ONCE_IS_READ_OFF_THE_CHAIN_NOT_REMEMBERED=PASS")
 
@@ -168,17 +169,19 @@ assert B.organization_chain(), "the chain must read again once the receipt is re
 print("AN_UNVERIFIABLE_RECEIPT_REFUSES_THE_WHOLE_SEGMENT=PASS")
 
 
-# ------------------------------------------- the custody destination is not improvised
+# ------------------------------- the organization record destination is not improvised
 try:
-    B.custody_destination()
-    raise AssertionError("resolved a custody service this organization never declared")
+    B.organization_record_destination()
+    raise AssertionError(
+        "resolved an organization record service this organization never declared")
 except B.ReleaseRefused as refused:
-    assert refused.failed_predicate == B.CUSTODY_PREDICATE, refused.failed_predicate
-    assert "CUSTODY_SERVICE_NOT_DECLARED_FOR_master-records" in refused.reason
+    assert refused.failed_predicate == B.RECORD_SERVICE_PREDICATE, refused.failed_predicate
+    assert ("ORGANIZATION_RECORD_SERVICE_NOT_DECLARED_FOR_master-records"
+            in refused.reason)
     # The refusal must name what the row *does* declare, so the reader can see
     # that a control service was available and deliberately not used.
     assert "master-records.org-control" in refused.reason
-print("CUSTODY_IS_NOT_ADDRESSED_TO_THE_CONTROL_SERVICE_THAT_HAPPENS_TO_EXIST=PASS")
+print("RECORDS_ARE_NOT_ADDRESSED_TO_THE_CONTROL_SERVICE_THAT_HAPPENS_TO_EXIST=PASS")
 
 
 # ------------------------------------------ a refused submission leaves the release
@@ -191,7 +194,7 @@ submission = B.submit(fourth["batch_sha256"],
                       standing=STANDING, hb_epoch=4600)
 assert submission["disposition"] == B.DENY, submission
 assert submission["submitted"] is False
-assert submission["failed_predicate"] == B.CUSTODY_PREDICATE
+assert submission["failed_predicate"] == B.RECORD_SERVICE_PREDICATE
 assert submission["release_stands"] is True
 assert submission["awaits_an_external_machine"] is False
 
@@ -225,14 +228,14 @@ print("RELEASE_IS_FINAL_REGARDLESS_OF_THE_SUBMISSION=PASS")
 
 # -------------------------- and the submission crosses once the service IS declared
 # A submit() proven only able to refuse is indistinguishable from one that is
-# broken. This case declares the custody service in a scratch directory and
-# requires the batch to actually cross -- addressed at the custody service, not
-# at the control service the same row still carries.
-CUSTODY_SERVICE = "master-records.ecosystem-transition-ledger"
+# broken. This case declares the organization record service in a scratch
+# directory and requires the batch to actually cross -- addressed at the record
+# service, not at the control service the same row still carries.
+RECORD_SERVICE = "master-records.organization-records"
 
 
 def tree_root(base):
-    """A scratch tree whose federation directory declares a custody service."""
+    """A scratch tree whose federation directory declares an organization record service."""
     root = Path(base) / "tree"
     (root / "org-boundary/registry").mkdir(parents=True, exist_ok=True)
     (root / "org-boundary/runtime").mkdir(parents=True, exist_ok=True)
@@ -252,7 +255,7 @@ def tree_root(base):
             # The SV-011 shape: the row records where the peer declares the
             # service in its OWN registry, so this organization is not
             # declaring a service on another's behalf.
-            row["addressed_service"] = CUSTODY_SERVICE
+            row["addressed_service"] = RECORD_SERVICE
             row["addressed_service_role"] = "INTERNAL_ENDPOINT"
             row["serves_an_organization_control_service"] = False
             row["peer_declares_this_in_its_own_registry"] = (
@@ -264,11 +267,11 @@ def tree_root(base):
 
 with tempfile.TemporaryDirectory() as td:
     scratch = tree_root(td)
-    mesh = Path(td) / "custody-mesh"
+    mesh = Path(td) / "record-mesh"
 
-    destination = B.custody_destination(root=scratch)
-    assert destination["custody_service"] == CUSTODY_SERVICE, destination
-    assert destination["custody_organization"] == "master-records"
+    destination = B.organization_record_destination(root=scratch)
+    assert destination["record_service"] == RECORD_SERVICE, destination
+    assert destination["record_organization"] == "master-records"
     assert destination["propagation_target"] == "master-records/.github"
     assert destination["peer_declares_this_in_its_own_registry"].startswith(
         "master-records/.github:"), (
@@ -281,12 +284,12 @@ with tempfile.TemporaryDirectory() as td:
     outbound = crossed["submission"]
     assert outbound["disposition"] == E.ALLOW, outbound
     assert outbound["submitted"] is True
-    assert outbound["custody_service"] == CUSTODY_SERVICE
+    assert outbound["record_service"] == RECORD_SERVICE
 
     emission = outbound["emission"]
-    # Addressed at the custody service. The control service is still on the row
+    # Addressed at the record service. The control service is still on the row
     # and is still not what carried the batch.
-    assert emission["destination_service"] == CUSTODY_SERVICE, emission
+    assert emission["destination_service"] == RECORD_SERVICE, emission
     assert emission["destination_org_control_service"] == "master-records.org-control"
     assert emission["crossed_an_organization_boundary"] is True
     assert emission["emission_organization_receipt_sha256"].startswith("sha256:")
@@ -294,11 +297,11 @@ with tempfile.TemporaryDirectory() as td:
     # The batch travelled, and claimed nothing for the recorder.
     assert outbound["release_stands"] is True
     assert outbound["awaits_an_external_machine"] is False
-print("THE_BATCH_CROSSES_TO_THE_DECLARED_CUSTODY_SERVICE=PASS")
+print("THE_BATCH_CROSSES_TO_THE_DECLARED_RECORD_SERVICE=PASS")
 
 
 # --------------------- the two resolvers must agree, and disagreement is refused
-# `submit` resolves the custody service to decide whether a batch may be
+# `submit` resolves the record service to decide whether a batch may be
 # addressed; the boundary resolves it again to address it. They read the same
 # directory field, so today they cannot disagree -- which is exactly why the
 # guard would rot unnoticed. Forced here, because the failure it prevents is
@@ -307,13 +310,13 @@ print("THE_BATCH_CROSSES_TO_THE_DECLARED_CUSTODY_SERVICE=PASS")
 with tempfile.TemporaryDirectory() as td:
     scratch = tree_root(td)
     mesh = Path(td) / "drift-mesh"
-    genuine = B.custody_destination
+    genuine = B.organization_record_destination
 
     def lying_destination(root=None):
         resolved = genuine(root=root)
-        return {**resolved, "custody_service": "master-records.some-other-service"}
+        return {**resolved, "record_service": "master-records.some-other-service"}
 
-    B.custody_destination = lying_destination
+    B.organization_record_destination = lying_destination
     try:
         released_for_drift = B.release(hb_epoch=4900)
         assert released_for_drift["released"] is True
@@ -324,11 +327,11 @@ with tempfile.TemporaryDirectory() as td:
             "the boundary addressed a service this module did not resolve, and "
             "the submission reported success anyway")
     except B.ReleaseRefused as refused:
-        assert refused.failed_predicate == B.CUSTODY_PREDICATE
+        assert refused.failed_predicate == B.RECORD_SERVICE_PREDICATE
         assert "THE_BOUNDARY_ADDRESSED_" in refused.reason
-        assert "master-records.ecosystem-transition-ledger" in refused.reason
+        assert RECORD_SERVICE in refused.reason
     finally:
-        B.custody_destination = genuine
+        B.organization_record_destination = genuine
 print("A_RESOLVER_DISAGREEMENT_IS_REFUSED_NOT_ADDRESSED_ANYWAY=PASS")
 
 

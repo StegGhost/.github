@@ -33,7 +33,7 @@ existing-role determination:
     intake authority .................. StegVerse-org/StegVerse-SDK
     routing plane ..................... StegVerse-org ingestion surface
     bounded execution and return ...... StegGhost/entity-sandbox-runner
-    receipt custody ................... master-records
+    organization records .............. master-records
     strict external target ............ StegVerse-Labs/entity-sandbox
                                         (separate mutation authority required)
 
@@ -234,14 +234,17 @@ is its own repository's declaration to make.
 
 ---
 
-# Item 4 — master-records receipt custody at every ingestion boundary
+# Item 4 — master-records organization records at every ingestion boundary
 
-    owner:      StegGhost/.github for the submitter; master-records for custody
+    owner:      StegGhost/.github for the submitter; master-records for the
+                organization record service
     surface:    .stegverse/transition-ledger/org-contract.json
     blocking:   no — propagation does not gate runtime reality
 
-The determination assigns `master-records` receipt custody "at every ingestion
-boundary." StegGhost's organization ledger contract currently declares
+The determination assigns `master-records` the organization records of every
+ingestion boundary; custody of the receipts themselves stays with each
+Organization. (The determination's own wording in
+`StegGhost/entity-sandbox-runner` is that repository's to restate.) StegGhost's organization ledger contract currently declares
 `propagation_target: null` with
 `organization_batch_propagation_implemented: false`, and says why: naming a
 target with no submitter behind it would be a declared capability with nothing
@@ -278,19 +281,19 @@ StegVerse-org. It was deliberately not in that change, which was scoped to the
 conformance declaration and the register. It landed in
 `ORGANIZATION_BATCH_RELEASE_008`: the repository-receipt propagator is ported
 verbatim and the release is implemented, so `propagation_target` is now
-declared. What is still open is below — the custody service itself.
+declared. What is still open is below — the organization record service itself.
 
-What **is** master-records' to settle, and now the only thing blocking custody:
-the custody service itself. This has been answered at the semantic level —
+What **is** master-records' to settle, and now the only thing blocking the
+handover: the organization record service itself. This has been answered at the semantic level —
 organization receipts are recorded at the organization level and then batched to
 master-records, which is the `RELEASED_ORGANIZATION_BATCH_RECEIPT_RECORDER` role
 — so `propagation_target` is declared and the release is implemented. The
 addressing is not answered. The directory row for master-records declares
 `org_control_service: master-records.org-control` and no `addressed_service`,
-and the control plane is not a custody ledger, so the submission refuses rather
+and the control plane is not an organization record service, so the submission refuses rather
 than reaching for the service that happens to exist (`SGHOST-EXEMPTION-006`).
 
-`master-records` declares its custody service in its own
+`master-records` declares its organization record service in its own
 `org-boundary/registry/services.json`. This organization then records *where*
 that declaration lives, the way the `SV-011` row does, and bumps the
 denominator. StegGhost will not name the service itself, because that would be a
