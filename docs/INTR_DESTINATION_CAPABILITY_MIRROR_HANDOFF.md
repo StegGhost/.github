@@ -146,6 +146,20 @@ organizations mirror the same binding in their own `.github` repositories.
 This change does not install the capability for them, and it does not claim
 they already serve it.
 
+## Where the closure is recorded
+
+The organization ledger ref is `refs/stegverse/organization-ledger` in
+`StegGhost/.github`, designated by
+`.stegverse/transition-ledger/org-contract.json`. The repository chain is a
+subtree of that same ref (`repository_ledger_location` in `contract.json`).
+`resident-runtime/intr_destination_ingress.py` `self_close` forms a diagnostic
+and receives it here. Both receipts carry `communication_id`.
+`.github/workflows/organization-ledger-transition.yml` is the
+`workflow_dispatch` run that appends those receipts on the designated ref,
+pushes it fast-forward only, and reads them back from a fresh fetch.
+`SGHOST-EXEMPTION-006` still refuses the master-records handoff. That refusal
+is a separate act from recording on this ledger.
+
 ## Follow-up
 
 `org-boundary/runtime/capability_ingress.py` is a byte copy of the

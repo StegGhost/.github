@@ -37,5 +37,9 @@
   "organization_record_submission_disposition": "DENY_ORGANIZATION_RECORD_SERVICE_NOT_DECLARED_FOR_THE_PROPAGATION_TARGET",
   "_why_the_submission_refuses_today": "The federation directory's row for master-records declares org_control_service master-records.org-control and no addressed_service. A control service is the control plane, not an organization record service, and submitting a batch to it because it is the service that happens to exist is the identity-addressing substitution this boundary refuses everywhere else. So the submission refuses immediately with a named predicate and the release stands. Nothing is queued against the day the service is declared, nothing polls for it, and no machine is awaited. Registered as SGHOST-EXEMPTION-006.",
 
-  "_previous_state": "This field read null, on the ground that naming a propagation target with no submitter behind it would be a declared capability with nothing enforcing it. The release surface now exists, so the target is named and what is still absent -- the peer's declared organization record service -- is named separately rather than hidden behind a null target."
+  "_previous_state": "This field read null, on the ground that naming a propagation target with no submitter behind it would be a declared capability with nothing enforcing it. The release surface now exists, so the target is named and what is still absent -- the peer's declared organization record service -- is named separately rather than hidden behind a null target.",
+
+  "organization_ledger_ref": "refs/stegverse/organization-ledger",
+  "organization_ledger_repository": "StegGhost/.github",
+  "organization_ledger_ref_designation_source": "StegGhost/.github organization ledger contract. This repository publishes refs/stegverse/organization-ledger. SGHOST-EXEMPTION-006 refuses the master-records handoff and is a separate act from recording on this ledger."
 }
