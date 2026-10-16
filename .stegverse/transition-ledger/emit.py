@@ -23,11 +23,40 @@ def lr():
 # in-process caller needs the same append the CLI performs, with the same lock
 # and the same HEAD publication -- a second implementation of this would be a
 # second writer to one store, which is the fork this lock exists to prevent.
-def append(transition_id,transition_class,predecessor_state_sha256,successor_state_sha256,evidence=None,authority_effect="NONE",hb_epoch=None):
- """Append one repository transition receipt and publish HEAD atomically."""
+def recorded(target,head,transition_id,transition_class):
+ """The receipt this chain already holds for a transition, walking back from `head`."""
+ found=None
+ cursor=(head or {}).get("receipt_sha256") if isinstance(head,dict) else None
+ while cursor:
+  receipt=target.get(ledger_store.receipt_key(cursor))
+  if receipt is None: return found
+  if found is None and receipt.get("transition_id")==transition_id and receipt.get("transition_class")==transition_class: found=receipt
+  cursor=receipt.get("previous_receipt_sha256")
+ return found
+_ABSENT=object()
+def append(transition_id,transition_class,predecessor_state_sha256,successor_state_sha256,evidence=None,authority_effect="NONE",hb_epoch=None,idempotent_on=None):
+ """Append one repository transition receipt and publish HEAD atomically.
+
+ With `idempotent_on` (a tuple of evidence keys) a transition the chain already
+ records is returned rather than minted again. Identity is the transition id
+ and class. An exact retry must also carry the same predecessor state,
+ successor state, authority effect and named evidence fields, or the call
+ refuses with `ledger_receipt_collision`. The heartbeat reference is not
+ compared: a retry legitimately arrives at another epoch.
+ """
  store=ledger_store.PosixLedgerStore(lr());store.initialize()
  with store.exclusive():
   head=store.get(ledger_store.HEAD_KEY);prev=(head or {}).get("receipt_sha256")
+  if idempotent_on is not None:
+   prior=recorded(store,head,transition_id,transition_class)
+   if prior is not None:
+    mine=evidence if isinstance(evidence,dict) else {}; theirs=prior.get("evidence") if isinstance(prior.get("evidence"),dict) else {}
+    if (prior.get("predecessor_state_sha256")!=predecessor_state_sha256
+        or prior.get("successor_state_sha256")!=successor_state_sha256
+        or prior.get("authority_effect")!=authority_effect
+        or any(theirs.get(k,_ABSENT)!=mine.get(k,_ABSENT) for k in idempotent_on)):
+     raise ValueError("ledger_receipt_collision")
+    return prior
   b={"schema":"stegverse.repo-transition-receipt/v1","repository":C["repository"],"transition_id":transition_id,"transition_class":transition_class,"predecessor_state_sha256":predecessor_state_sha256,"successor_state_sha256":successor_state_sha256,"evidence":evidence if evidence is not None else {},"authority_effect":authority_effect,"hb_reference":kernel.hb_reference(epoch=hb_epoch) if hb_epoch is not None else kernel.hb_reference(),"previous_receipt_sha256":prev};dg=sha(b);r={**b,"receipt_sha256":dg};key=ledger_store.receipt_key(dg)
   existing=store.get(key)
   if existing is not None and existing!=r:raise SystemExit("receipt collision")

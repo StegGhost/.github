@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Append organization receipts with serialized, durable HEAD publication.
 
-The organization ledger is local sovereign state. This emitter neither performs
-InTr transport nor grants transition authority.
+The organization ledger is local sovereign state. This emitter does not perform
+InTr transport. Authority and time stay constraint variables. A disposition is
+transition evidence only.
 
 Admission is governed by the `consumes` list in the organization ledger
 contract, not by a single hard-coded schema. Every state transition occurring
@@ -194,8 +195,21 @@ def _validate_existing_head(store):
     return previous
 
 
+def _recorded_for_source(store, head_digest, source_transition_sha256):
+    """The organization receipt this chain already holds for a source receipt."""
+    cursor = head_digest
+    while cursor:
+        receipt = store.get(receipt_key(cursor))
+        if receipt is None:
+            return None
+        if receipt.get("source_transition_sha256") == source_transition_sha256:
+            return receipt
+        cursor = receipt.get("previous_receipt_sha256")
+    return None
+
+
 def append(source_receipt, org_transition_class, predecessor_state, successor_state,
-           boundary_evidence, authority_effect, hb_epoch=None):
+           boundary_evidence, authority_effect, hb_epoch=None, idempotent=False):
     # Admission is decided before the append lock is taken; an inadmissible
     # source receipt never contends for the organization ledger.
     source = verify_source(source_receipt)
@@ -211,6 +225,14 @@ def append(source_receipt, org_transition_class, predecessor_state, successor_st
     # and HEAD publication. No second resident process is required.
     with store.exclusive():
         previous = _validate_existing_head(store)
+        # A source receipt is consumed once. With `idempotent` a receipt already
+        # consuming this exact source is returned instead of a second one minted.
+        if idempotent:
+            prior = _recorded_for_source(store, previous, source["source_transition_sha256"])
+            if prior is not None:
+                if prior.get("org_transition_class") != org_transition_class:
+                    raise ValueError("ledger_receipt_collision")
+                return prior
         body = {
             "schema": "stegverse.organization-transition-receipt/v1",
             "organization": C["organization"],
