@@ -22,6 +22,23 @@
       "runtime_required_for_consumption": false
     },
     {
+      "service_id": "stegghost.intr-destination",
+      "repository": "StegGhost/.github",
+      "boundary_role": "BOUNDARY_LOCAL_CAPABILITY_INGRESS",
+      "profile_status": "ACTIVE",
+      "capability_profile_id": "intr-destination",
+      "capability_binding_document": "org-runtime/interlock-intr.json",
+      "accepts": [
+        "ecosystem.communication",
+        "stegverse.org-intr-destination-diagnostic/v1"
+      ],
+      "runtime_required_for_consumption": true,
+      "admission_authority_constraint": "CONSTRAINT_VARIABLE",
+      "time_constraint": "CONSTRAINT_VARIABLE",
+      "disposition_role": "TRANSITION_EVIDENCE_ONLY",
+      "selects_processing_at_this_address": false
+    },
+    {
       "service_id": "stegghost.entity-sandbox-runner",
       "repository": "StegGhost/entity-sandbox-runner",
       "boundary_role": "INTERNAL_ENDPOINT",

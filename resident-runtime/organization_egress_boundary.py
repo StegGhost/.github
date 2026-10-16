@@ -71,8 +71,9 @@ Three things this records honestly rather than claiming:
   not readable at resolution time. A local assertion about a remote kernel would
   be the same defect relocated.
 
-Nothing here grants authority. It records a crossing that occurred and the
-disposition it reached.
+Authority and time are constraint variables. A disposition is transition
+evidence only. This records a crossing that occurred and the disposition it
+reached.
 """
 from __future__ import annotations
 
@@ -130,6 +131,9 @@ def _module(name: str, relative: str):
 
 
 kernel = _module("org_kernel", "org-kernel/kernel.py")
+#: The receipt kinds ``dispatch`` mints, in order. Closure recomputes them
+#: from the kernel rather than a second copy of the list.
+FAR_SIDE_RECEIPT_KINDS = kernel.RECEIPT_KINDS
 repository_ledger = _module("repo_transition_emit", ".stegverse/transition-ledger/emit.py")
 organization_ledger = _module("aggregate_repo_transition",
                               "resident-runtime/aggregate_repo_transition.py")
@@ -167,14 +171,39 @@ def this_organization(root: Path | None = None) -> str:
     return kernel.load_registry(root or ROOT)["organization"]
 
 
-def resolve_destination(organization: str, *, root: Path | None = None) -> dict[str, Any]:
+def declared_capabilities(root: Path | None = None) -> dict[str, dict[str, Any]]:
+    """Capabilities this organization's overlay declares, by profile id."""
+    document = json.loads((Path(root or ROOT) / "org-runtime/interlock-intr.json").read_text(
+        encoding="utf-8"))
+    declared = (document.get("ingress") or {}).get("capability_endpoint_bindings") or []
+    return {entry["profile_id"]: entry for entry in declared
+            if isinstance(entry, dict) and entry.get("profile_id")}
+
+
+def peer_capability_service(organization: str, capability: str) -> str:
+    """``organization_slug(org) + "." + profile_id``. Derived, not enumerated."""
+    return kernel.organization_slug(organization) + "." + capability
+
+
+def resolve_destination(organization: str, *, capability: str | None = None,
+                        root: Path | None = None) -> dict[str, Any]:
     """Resolve a peer from this organization's own peer directory.
 
-    The directory is the authority on who this organization's peers are and how
-    each is addressed. A destination taken from a caller's argument alone would
-    let the caller name its own peer, which is the same error as letting a
-    caller name its own organization at ingress.
+    The directory says who this organization's peers are and how each is
+    addressed. A destination taken from a caller's argument alone would let
+    the caller name its own peer, which is the same error as letting a caller
+    name its own organization at ingress.
+
+    With no capability, the destination is the service the directory records.
+    With one, the destination is ``organization_slug + "." + profile_id``.
+    Peer capability services are not read out of the directory.
+    ``peer_serves_this_capability_is_proven_here`` stays false. The capability
+    must be one this organization's overlay declares.
     """
+    if capability is not None and capability not in declared_capabilities(root):
+        raise EgressRefused(
+            "CAPABILITY_IS_DECLARED_IN_THIS_ORGANIZATIONS_OVERLAY",
+            "no capability_endpoint_binding declares " + str(capability))
     directory = kernel.load_federation_directory(root or ROOT)
     for row in directory.get("organizations", []):
         if row.get("organization") != organization:
@@ -191,18 +220,20 @@ def resolve_destination(organization: str, *, root: Path | None = None) -> dict[
         # `org_control_service` remains the default for every peer that serves
         # one.
         addressed = row.get(ADDRESSED_SERVICE_FIELD) or control
-        if not addressed:
+        service = addressed if capability is None else peer_capability_service(
+            organization, capability)
+        if not service:
             raise EgressRefused(
                 "DESTINATION_DECLARES_A_SERVICE_THIS_DIRECTORY_CAN_ADDRESS",
                 "peer declares neither " + ADDRESSED_SERVICE_FIELD
                 + " nor org_control_service: " + str(organization))
-        return {
+        resolved = {
             "disposition": ALLOW,
             "destination_organization": organization,
             "destination_repository": row.get("repository"),
             "destination_org_control_service": control,
             "destination_addressed_service": addressed,
-            "destination_service": addressed,
+            "destination_service": service,
             "destination_serves_an_organization_control_service": bool(control),
             "destination_kernel_required": row.get("kernel_required"),
             "transport_profile": profile,
@@ -220,6 +251,16 @@ def resolve_destination(organization: str, *, root: Path | None = None) -> dict[
             "destination_kernel_required_is_checked_at_resolution": False,
             "declared_kernel_version_does_not_establish_the_enforcement_it_implies": True,
         }
+        if capability is not None:
+            resolved.update({
+                "destination_capability_profile_id": capability,
+                "addressed_capability": capability,
+                "destination_capability_address_form": "ORGANIZATION_SLUG_DOT_CAPABILITY_PROFILE_ID",
+                "destination_capability_declared_by_the_peer_directory": False,
+                "peer_serves_this_capability_is_proven_here": False,
+                "unserved_capability_is_observable_as_an_unclosed_crossing": True,
+            })
+        return resolved
     raise EgressRefused(
         "DESTINATION_IS_A_DECLARED_PEER_OF_THIS_ORGANIZATION",
         "organization not in org-boundary/registry/federation.json: " + str(organization))
@@ -230,7 +271,7 @@ def closability_refusal(payload: Mapping[str, Any]) -> tuple[str, str] | None:
 
     The decision belongs to the kernel, which owns `RESPONDED_REQUEST_CLASSES`
     and is the surface that answers them; a second copy of that rule here would
-    be a second authority on closability. What this adds is the boundary's own
+    decide closability a second time. What this adds is the boundary's own
     disposition vocabulary, so a refusal names the predicate that failed rather
     than only the condition.
     """
@@ -443,6 +484,7 @@ def _record(transition_id: str, transition_class: str, predecessor: str, success
 
 def emit(destination_organization: Any, payload: Mapping[str, Any], *,
          standing: Mapping[str, Any],
+         capability: str | None = None,
          credential_authority: Mapping[str, Any] | None = None,
          transition_reference: str = "ecosystem.transition.interorg.v1",
          root: Path | None = None, mesh_root: Path | None = None,
@@ -461,10 +503,11 @@ def emit(destination_organization: Any, payload: Mapping[str, Any], *,
         standing_refused, standing_disposition = resolve_standing(standing, root=root)
         if standing_refused is not None:
             raise EgressRefused(*standing_refused)
-        resolved = resolve_destination(destination_organization, root=root)
+        resolved = resolve_destination(destination_organization, capability=capability, root=root)
         packet = kernel.build_packet(
             origin_org=origin,
-            origin_service=kernel.organization_slug(origin) + ".org-control",
+            origin_service=(peer_capability_service(origin, capability) if capability
+                            else kernel.organization_slug(origin) + ".org-control"),
             destination_org=resolved["destination_organization"],
             destination_service=resolved["destination_service"],
             payload=dict(payload), standing=dict(standing),
@@ -507,7 +550,7 @@ def emit(destination_organization: Any, payload: Mapping[str, Any], *,
                              standing_disposition, attested)
     appended = _record(EMITTED_CLASS + ":" + packet["packet_id"], EMITTED_CLASS,
                        record["payload_sha256"], sha(record), record, hb_epoch)
-    return {
+    result = {
         "schema": RESULT_SCHEMA,
         "operation": OPERATION_ID,
         "disposition": ALLOW,
@@ -527,6 +570,11 @@ def emit(destination_organization: Any, payload: Mapping[str, Any], *,
         "emission_organization_receipt_sha256": appended["organization_receipt"]["receipt_sha256"],
         "authority_effect": "NONE_EGRESS_RECORD_ONLY",
     }
+    if capability is not None:
+        result["peer_serves_this_capability_is_proven_here"] = resolved[
+            "peer_serves_this_capability_is_proven_here"]
+        result["destination_capability_profile_id"] = capability
+    return result
 
 
 def _refusal_result(record: Mapping[str, Any], appended: Mapping[str, Any]) -> dict[str, Any]:
@@ -680,12 +728,14 @@ def main() -> int:
                         help="observe the far side's closure of --packet-id instead of emitting")
     parser.add_argument("--packet-id")
     parser.add_argument("--communication-id")
+    parser.add_argument("--capability",
+                        help="overlay profile id; the peer address is derived, not enumerated")
     parser.add_argument("--out")
     args = parser.parse_args()
 
     if args.resolve:
         try:
-            result = resolve_destination(args.destination_organization)
+            result = resolve_destination(args.destination_organization, capability=args.capability)
         except EgressRefused as refused:
             result = {"disposition": DENY, "failed_predicate": refused.failed_predicate,
                       "detail": refused.reason}
@@ -702,6 +752,7 @@ def main() -> int:
             raise SystemExit("standing must declare the predecessor key; null is explicit genesis")
         payload = json.loads(Path(args.payload).read_text(encoding="utf-8"))
         result = emit(args.destination_organization, payload, standing=standing,
+                      capability=args.capability,
                       transition_reference=args.transition_reference, hb_epoch=args.hb_epoch)
     rendered = json.dumps(result, indent=2, sort_keys=True)
     if args.out:
