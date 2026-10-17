@@ -17,7 +17,10 @@ def canon(v):return json.dumps(v,sort_keys=True,separators=(",",":"),ensure_asci
 def sha(v):return "sha256:"+hashlib.sha256(v if isinstance(v,(bytes,bytearray)) else canon(v)).hexdigest()
 def lr():
  o=os.getenv("STEGVERSE_REPO_LEDGER_ROOT")
- if o:return Path(o).expanduser().resolve()
+ # A git+<repository>#<ref>[:namespace] locator is the designated durable root.
+ # A plain path stays a filesystem root. With neither supplied, the host state
+ # directory remains the local root callers already resolved.
+ if o:return ledger_store.parse_locator(o)
  return (Path(os.getenv("XDG_STATE_HOME",str(Path.home()/".local/state")))/"stegverse/repo-ledgers"/C["repository"]).resolve()
 # A transition occurring in this repository emits its receipt here. An
 # in-process caller needs the same append the CLI performs, with the same lock
@@ -44,7 +47,7 @@ def append(transition_id,transition_class,predecessor_state_sha256,successor_sta
  refuses with `ledger_receipt_collision`. The heartbeat reference is not
  compared: a retry legitimately arrives at another epoch.
  """
- store=ledger_store.PosixLedgerStore(lr());store.initialize()
+ store=ledger_store.open_store(lr());store.initialize()
  with store.exclusive():
   head=store.get(ledger_store.HEAD_KEY);prev=(head or {}).get("receipt_sha256")
   if idempotent_on is not None:

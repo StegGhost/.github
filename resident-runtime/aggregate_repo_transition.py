@@ -22,7 +22,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from ledger_store import HEAD_KEY, RECEIPT_PREFIX, PosixLedgerStore, receipt_key  # noqa: E402
+from ledger_store import (HEAD_KEY, RECEIPT_PREFIX, SOURCE_PREFIX, open_store,  # noqa: E402
+                          parse_locator, receipt_key, source_key)
 
 ROOT = Path(__file__).resolve().parents[1]
 C = json.loads((ROOT / ".stegverse/transition-ledger/org-contract.json").read_text())
@@ -52,9 +53,16 @@ def sha(value):
 
 
 def ledger_root():
+    """The organization ledger location supplied to this execution.
+
+    A `git+<repository>#<ref>` names the designated ref. A plain path stays a
+    filesystem root. With neither supplied, the host state directory remains
+    the local root existing callers already resolve. Opening that location
+    does not designate the organization's ledger; the contract does.
+    """
     override = os.getenv("STEGVERSE_ORG_LEDGER_ROOT")
     if override:
-        return Path(override).expanduser().resolve()
+        return parse_locator(override)
     return (Path(os.getenv("XDG_STATE_HOME", str(Path.home() / ".local/state")))
             / "stegverse/org-ledgers" / C["organization"]).resolve()
 
@@ -192,6 +200,13 @@ def _validate_existing_head(store):
         cursor = record.get("previous_receipt_sha256")
     if store.list_prefix(RECEIPT_PREFIX) != {receipt_key(digest) for digest in reachable}:
         raise SystemExit("ORG_LEDGER_UNPUBLISHED_OR_ORPHAN_RECEIPTS_RECOVERY_REQUIRED")
+    # A retained source copy is published only through the receipt that names
+    # it. Ledgers written before retention existed simply have none.
+    sources = {source_key(store.get(receipt_key(digest))["source_transition_sha256"])
+               for digest in reachable
+               if isinstance(store.get(receipt_key(digest)).get("source_transition_sha256"), str)}
+    if not store.list_prefix(SOURCE_PREFIX) <= sources:
+        raise SystemExit("ORG_LEDGER_ORPHAN_SOURCE_RECEIPTS_RECOVERY_REQUIRED")
     return previous
 
 
@@ -219,11 +234,14 @@ def append(source_receipt, org_transition_class, predecessor_state, successor_st
     # the receipt reproducible; deriving one from the host clock is permitted
     # but marks itself so the two can be told apart.
     heartbeat = kernel.hb_reference(epoch=hb_epoch) if hb_epoch is not None else kernel.hb_reference()
-    store = PosixLedgerStore(ledger_root())
+    retained = {source_key(source["source_transition_sha256"]): source_receipt}
+    store = open_store(ledger_root())
     store.initialize()
     # All writers using this emitter serialize the HEAD read, receipt creation,
-    # and HEAD publication. No second resident process is required.
+    # and HEAD publication. The substrate transaction publishes the retained
+    # source, the organization receipt, and HEAD together.
     with store.exclusive():
+        expected_head = store.get(HEAD_KEY)
         previous = _validate_existing_head(store)
         # A source receipt is consumed once. With `idempotent` a receipt already
         # consuming this exact source is returned instead of a second one minted.
@@ -253,12 +271,13 @@ def append(source_receipt, org_transition_class, predecessor_state, successor_st
             if existing != receipt:
                 raise SystemExit("org receipt collision")
             raise SystemExit("ORG_LEDGER_DUPLICATE_RECEIPT_RECOVERY_REQUIRED")
-        store.put(key, receipt)
-        store.put(HEAD_KEY, {
+        new_head = {
             "organization": C["organization"],
             "receipt_sha256": digest,
             "receipt_path": store.locator(key),
-        })
+        }
+        if not store.append_transaction(key, receipt, expected_head, new_head, immutable=retained):
+            raise SystemExit("ORG_LEDGER_APPEND_CONTENTION_EXHAUSTED")
         return receipt
 
 

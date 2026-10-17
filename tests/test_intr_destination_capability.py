@@ -457,5 +457,118 @@ class AddressedAndClosedTests(RedirectedLedgers):
                                       "stegverse.organization-transition-receipt/v1"))
 
 
+class DesignatedLedgerRefTests(unittest.TestCase):
+    """The organization ledger ref is designated. The recorder exemption stands.
+
+    These checks read the contract. They do not mint a receipt.
+    """
+
+    def test_the_ref_is_designated_and_the_recorder_exemption_stands(self):
+        org = json.loads((ROOT / ".stegverse/transition-ledger/org-contract.json").read_text())
+        repo = json.loads((ROOT / ".stegverse/transition-ledger/contract.json").read_text())
+        self.assertEqual(org["organization_ledger_ref"], "refs/stegverse/organization-ledger")
+        self.assertEqual(org["organization_ledger_repository"], "StegGhost/.github")
+        self.assertIs(org["organization_record_service_declared"], False)
+        self.assertTrue(org["organization_record_submission_disposition"].startswith("DENY_"))
+        self.assertIn("SGHOST-EXEMPTION-006", org["_why_the_submission_refuses_today"])
+        location = repo["repository_ledger_location"]
+        self.assertEqual(location["repository"], "StegGhost/.github")
+        self.assertEqual(location["ref"], org["organization_ledger_ref"])
+        self.assertIs(location["new_ledger_root"], False)
+        self.assertTrue(location["namespace"])
+
+    def test_the_dispatch_workflow_appends_pushes_and_reads_the_ref_back(self):
+        text = (ROOT / ".github/workflows/organization-ledger-transition.yml").read_text(
+            encoding="utf-8")
+        self.assertIn("workflow_dispatch", text)
+        self.assertIn("refs/stegverse/organization-ledger", text)
+        self.assertIn("--self-close", text)
+        self.assertIn("communication_id", text)
+        self.assertIn('git push origin "$LEDGER_REF:$LEDGER_REF"', text)
+        self.assertIn("organization_ledger_readback.py", text)
+        self.assertIn("SGHOST-EXEMPTION-006", text)
+        self.assertNotIn("federation.json", text)
+
+
+class DiagnosticSelfClosureOnAGitRefTests(unittest.TestCase):
+    """A scratch git ref receives a diagnostic self-closure and reads it back.
+
+    The repository is temporary. The receipts minted here are test fixtures.
+    They are not authentic production receipts, and this test does not publish
+    refs/stegverse/organization-ledger.
+    """
+
+    def setUp(self):
+        self._work = tempfile.TemporaryDirectory()
+        self.addCleanup(self._work.cleanup)
+        self.repo = Path(self._work.name) / "ledger"
+        subprocess_git(["init", "-q", str(self.repo)])
+        ref = "refs/stegverse/organization-ledger"
+        namespace = json.loads(
+            (ROOT / ".stegverse/transition-ledger/contract.json").read_text()
+        )["repository_ledger_location"]["namespace"]
+        self.org_root = "git+" + str(self.repo) + "#" + ref
+        self.repo_root = self.org_root + ":" + namespace
+        self.namespace = namespace
+        previous = {name: os.environ.get(name) for name in
+                    ("STEGVERSE_REPO_LEDGER_ROOT", "STEGVERSE_ORG_LEDGER_ROOT")}
+
+        def restore():
+            for name, value in previous.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+        self.addCleanup(restore)
+        os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = self.org_root
+        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = self.repo_root
+
+    def test_a_self_closure_appends_both_receipts_and_reads_them_back(self):
+        readback = _module("organization_ledger_readback",
+                           "resident-runtime/organization_ledger_readback.py")
+        closed = ingress.self_close(
+            "diagnostic-self-closure-001", registry=REGISTRY,
+            packet_id="self-closure-packet", hb_epoch=32)
+        self.assertEqual(closed["disposition"], "ALLOW", closed.get("detail"))
+        self.assertIs(closed["self_closure"], True)
+        self.assertIs(closed["closure_recorded"], True)
+        self.assertEqual(closed["communication_id"], "diagnostic-self-closure-001")
+        self.assertIs(closed["repository_receipt_observed"], True)
+        self.assertIs(closed["organization_receipt_observed"], True)
+        assert_constraints(self, closed)
+        replayed = ingress.self_close(
+            "diagnostic-self-closure-001", registry=REGISTRY,
+            packet_id="self-closure-packet", hb_epoch=32)
+        self.assertIs(replayed["transition_replayed"], True)
+        self.assertEqual(replayed["organization_receipt_sha256"],
+                         closed["organization_receipt_sha256"])
+        fresh = Path(self._work.name) / "fresh.git"
+        subprocess_git(["init", "-q", "--bare", str(fresh)])
+        subprocess_git(["--git-dir", str(fresh), "fetch", "-q", str(self.repo),
+                        "+refs/stegverse/organization-ledger:refs/stegverse/organization-ledger"])
+        verified = readback.readback("git+" + str(fresh) + "#refs/stegverse/organization-ledger",
+                                     closed)
+        verified["repository_ledger"] = readback.repository_readback(
+            "git+" + str(fresh) + "#refs/stegverse/organization-ledger",
+            self.namespace, verified, closed)
+        self.assertEqual(verified["disposition"], "ALLOW")
+        self.assertEqual(verified["closure_communication_id"], "diagnostic-self-closure-001")
+        self.assertIs(verified["closure_receipt_carries_communication_id"], True)
+        self.assertIs(verified["master_records_awaited"], False)
+        repository_ledger = verified["repository_ledger"]
+        self.assertIs(repository_ledger["closure_repository_receipt_in_chain"], True)
+        self.assertIs(repository_ledger["closure_repository_receipt_carries_communication_id"], True)
+        self.assertIs(repository_ledger["replay_read_organization_receipts"], False)
+        self.assertEqual(repository_ledger["consumed_by_organization_receipt_sha256"],
+                         closed["organization_receipt_sha256"])
+
+
+def subprocess_git(args):
+    import subprocess
+    completed = subprocess.run(["git", *args], capture_output=True, text=True)
+    if completed.returncode != 0:
+        raise AssertionError(completed.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

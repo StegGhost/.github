@@ -189,7 +189,7 @@ def _append(transition_class: str, packet_id: str, evidence: Mapping[str, Any],
                      "communication_id": evidence.get("communication_id"),
                      "payload_sha256": evidence["payload_sha256"]})
     transition_id = transition_class + ":" + packet_id
-    store = repository_ledger.ledger_store.PosixLedgerStore(repository_ledger.lr())
+    store = repository_ledger.ledger_store.open_store(repository_ledger.lr())
     store.initialize()
     head = store.get(repository_ledger.ledger_store.HEAD_KEY)
     prior = repository_ledger.recorded(store, head, transition_id, transition_class)
@@ -229,6 +229,34 @@ def _recorded(disposition: str, payload: Any, packet_id: str, hb_epoch: int | No
     return _result(evidence, appended, replayed=replayed, received=disposition == ALLOW)
 
 
+def diagnostic_payload(communication_id: str) -> dict[str, Any]:
+    """The diagnostic this organization closes on its own destination."""
+    return {
+        "message_class": COMMUNICATION_CLASS,
+        "communication_id": communication_id,
+        "subject": "purpose-neutral mesh diagnostic",
+        "body": {"schema": PAYLOAD_SCHEMA, "probe": "diagnostic-self-closure"},
+    }
+
+
+def self_close(communication_id: str, *, registry: Mapping[str, Any],
+               packet_id: str = "organization-intr-destination-self-closure",
+               hb_epoch: int | None = None) -> dict[str, Any]:
+    """Close one diagnostic on this organization's own intr-destination.
+
+    The diagnostic is formed here and received by this operation. Both ledger
+    levels append, and both receipts carry ``communication_id``. Authority and
+    time stay constraint variables. The disposition is transition evidence only.
+    A replay of the same packet returns the recorded pair.
+    """
+    result = receive(diagnostic_payload(communication_id), registry=registry,
+                     packet_id=packet_id, hb_epoch=hb_epoch)
+    result["self_closure"] = result.get("disposition") == ALLOW and result.get("received") is True
+    result["closure_recorded"] = bool(result.get("repository_receipt_observed")
+                                      and result.get("organization_receipt_observed"))
+    return result
+
+
 def receive(payload: Any, *, registry: Mapping[str, Any], standing: Mapping[str, Any] | None = None,
             packet_id: str = "organization-intr-destination",
             hb_epoch: int | None = None, mesh_root: Path | None = None) -> dict[str, Any]:
@@ -252,16 +280,32 @@ def receive(payload: Any, *, registry: Mapping[str, Any], standing: Mapping[str,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--payload", type=Path, required=True)
-    parser.add_argument("--registry", type=Path, required=True)
-    parser.add_argument("--packet-id", default="organization-intr-destination")
+    parser.add_argument("--payload", type=Path, default=None)
+    parser.add_argument("--registry", type=Path, default=None)
+    parser.add_argument("--packet-id", default=None)
     parser.add_argument("--hb-epoch", type=int, default=None)
     parser.add_argument("--out", type=Path, default=None)
+    parser.add_argument("--self-close", action="store_true",
+                        help="close a diagnostic formed here on this destination")
+    parser.add_argument("--communication-id", default=None)
     args = parser.parse_args()
-    result = receive(
-        json.loads(args.payload.read_text(encoding="utf-8")),
-        registry=json.loads(args.registry.read_text(encoding="utf-8")),
-        packet_id=args.packet_id, hb_epoch=args.hb_epoch)
+    registry_path = args.registry or (ROOT / "org-boundary/registry/services.json")
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    if args.self_close:
+        if not isinstance(args.communication_id, str) or not args.communication_id.strip():
+            raise SystemExit("communication_id is required for a self-closure")
+        result = self_close(
+            args.communication_id, registry=registry,
+            packet_id=args.packet_id or "organization-intr-destination-self-closure",
+            hb_epoch=args.hb_epoch)
+    else:
+        if args.payload is None:
+            raise SystemExit("payload is required")
+        result = receive(
+            json.loads(args.payload.read_text(encoding="utf-8")),
+            registry=registry,
+            packet_id=args.packet_id or "organization-intr-destination",
+            hb_epoch=args.hb_epoch)
     rendered = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
