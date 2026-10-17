@@ -1,0 +1,43 @@
+{
+  "authority_effect": "NONE",
+  "evidence": {
+    "admission_authority_constraint": "CONSTRAINT_VARIABLE",
+    "authority_effect": "NONE_DIAGNOSTIC_ACK_ONLY",
+    "communication_id": "intr-selfclose-StegGhost-20261017",
+    "disposition": "ALLOW",
+    "disposition_role": "TRANSITION_EVIDENCE_ONLY",
+    "execution_authority_constraint": "CONSTRAINT_VARIABLE",
+    "operation": "DIAGNOSTIC_CROSSING",
+    "owner_repository": "StegGhost/.github",
+    "packet_id": "organization-intr-destination-self-closure",
+    "payload_schema": "stegverse.org-intr-destination-diagnostic/v1",
+    "payload_sha256": "sha256:f13d061b8ff4e054d0e920a98683dee50aba8f019c0a3291883d61d505bb2330",
+    "profile_id": "intr-destination",
+    "profile_name": "InTr:Destination",
+    "purpose_specific_route": false,
+    "receiving_operation": "ORGANIZATION_INTR_DESTINATION_INGRESS",
+    "routing_authority_constraint": "CONSTRAINT_VARIABLE",
+    "selects_processing": false,
+    "standing_rechecked_here": false,
+    "time_constraint": "CONSTRAINT_VARIABLE"
+  },
+  "hb_reference": {
+    "authority_effect": "NONE",
+    "derived_from_clock": true,
+    "epoch": 469436465,
+    "frequency_hz": 100,
+    "generation": 469436465,
+    "heartbeat_id": "HB:469436465",
+    "phase_offset_ns": 3128960,
+    "progression_dependency": "OSCILLATOR_ONLY",
+    "sampled_unix_ns": 1792205964333128960
+  },
+  "predecessor_state_sha256": "sha256:f13d061b8ff4e054d0e920a98683dee50aba8f019c0a3291883d61d505bb2330",
+  "previous_receipt_sha256": null,
+  "receipt_sha256": "sha256:5c2116ab33b7789aebc5d7a78aadc354e15616d3a53a840b0209d2b236811655",
+  "repository": "StegGhost/.github",
+  "schema": "stegverse.repo-transition-receipt/v1",
+  "successor_state_sha256": "sha256:242442b534b82ec6a17ee9f97615dc8ff4b846ff11d837a7ae2caf4bc43a72b7",
+  "transition_class": "ORGANIZATION_INTR_DESTINATION_INGRESS",
+  "transition_id": "ORGANIZATION_INTR_DESTINATION_INGRESS:organization-intr-destination-self-closure"
+}
