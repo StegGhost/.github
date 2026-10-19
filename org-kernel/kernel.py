@@ -269,7 +269,9 @@ def read_input_json(source:Any, *, argument:str, retry_entrypoint:str, inline:bo
     try:
         text=source if inline else Path(source).read_text(encoding="utf-8")
         value=json.loads(text)
-    except (OSError,ValueError) as error:  # UnicodeDecodeError and JSONDecodeError are ValueErrors
+    # UnicodeDecodeError and JSONDecodeError are ValueErrors; a deeply nested
+    # document raises RecursionError (or MemoryError) and is refused the same way.
+    except (OSError,ValueError,RecursionError,MemoryError) as error:
         failed,detail=type(error).__name__,str(error)
     else:
         if isinstance(value,expect):
@@ -806,7 +808,7 @@ def published_frames(packet_id:str, *, root:Path|None=None)->list[Any]:
             if path.stat().st_size>FRAME_FILE_MAX_BYTES:
                 continue
             frame=json.loads(path.read_text(encoding="utf-8"))
-        except (OSError,ValueError):
+        except (OSError,ValueError,RecursionError,MemoryError):
             continue
         if isinstance(frame,dict) and frame.get("packet_id")==packet_id:
             claimed.append(frame)
@@ -855,8 +857,9 @@ def scan_addressed_frames(organization:str, *, root:Path|None=None, seen:set[str
             continue
         # Parsed per file: one unreadable file is that file's outcome, not the
         # scan's, so it never stalls the frames behind it (F-SCAN, B-P36p): a
-        # read error, non-UTF-8 bytes, non-JSON, a non-object, or an oversized
-        # file. It names no destination, so it is offered only to a caller that
+        # read error, non-UTF-8 bytes, non-JSON, a non-object, an oversized
+        # file, or one nested past the parser's depth (RecursionError, an
+        # Exception like the rest -- F-SCAN-RECURSION). It names no destination, so it is offered only to a caller that
         # quarantines it.
         try:
             if path.stat().st_size>FRAME_FILE_MAX_BYTES:

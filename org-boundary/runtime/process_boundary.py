@@ -43,14 +43,14 @@ def fault(code,failed,detail):
 def main():
  ap=argparse.ArgumentParser(); ap.add_argument("--envelope",required=True); ap.add_argument("--registry",default="org-boundary/registry/services.json"); ap.add_argument("--out",required=True); a=ap.parse_args()
  try: env=load(a.envelope)
- except (OSError,ValueError) as e: fault(EXIT_INPUT_FAULT,"ENVELOPE_IS_READABLE_JSON",type(e).__name__+": "+str(e))
+ except (OSError,ValueError,RecursionError,MemoryError) as e: fault(EXIT_INPUT_FAULT,"ENVELOPE_IS_READABLE_JSON",type(e).__name__+": "+str(e))
  if not isinstance(env,dict): fault(EXIT_INPUT_FAULT,"ENVELOPE_IS_READABLE_JSON","envelope is not a JSON object")
  try: reg=load(a.registry)
- except (OSError,ValueError) as e: fault(EXIT_WRITE_FAULT,"OWN_REGISTRY_READS",type(e).__name__+": "+str(e))
+ except (OSError,ValueError,RecursionError,MemoryError) as e: fault(EXIT_WRITE_FAULT,"OWN_REGISTRY_READS",type(e).__name__+": "+str(e))
  try: result,prev=process(env,reg)
  except OSError as e: fault(EXIT_WRITE_FAULT,"OWN_STATE_READS",type(e).__name__+": "+str(e))
  except SystemExit as e: fault(EXIT_INPUT_FAULT,"ENVELOPE_IS_ADMISSIBLE",str(e.code))
- except (KeyError,TypeError,ValueError,AttributeError) as e: fault(EXIT_INPUT_FAULT,"ENVELOPE_IS_ADMISSIBLE",type(e).__name__+": "+str(e))
+ except (KeyError,TypeError,ValueError,AttributeError,RecursionError) as e: fault(EXIT_INPUT_FAULT,"ENVELOPE_IS_ADMISSIBLE",type(e).__name__+": "+str(e))
  # Atomic: staged beside the result and replaced, so a fault leaves no partial result.
  out=Path(a.out); temp=out.with_name("."+out.name+".tmp")
  try:

@@ -59,7 +59,7 @@ def run(ingress_path,egress_path,quarantine=QUARANTINE):
     try:
         ingress=json.loads(Path(ingress_path).read_text())
         if not isinstance(ingress,dict): raise ValueError("envelope is not a JSON object")
-    except (OSError,ValueError) as error:
+    except (OSError,ValueError,RecursionError,MemoryError) as error:
         return EXIT_INPUT_FAULT,record("FRAME_INGEST_FAILED","ENVELOPE_IS_READABLE_JSON",
                                        type(error).__name__+": "+str(error),True)
     packet_id=ingress.get("packet_id")
@@ -101,7 +101,7 @@ def run(ingress_path,egress_path,quarantine=QUARANTINE):
             validate_org_crossing(egress,"EGRESS")
             summary={"status":"PASS","packet_id":ingress["packet_id"],"egress_packet_id":egress["packet_id"],
                      "consumed":result["consumed"],"reconstruction":result["reconstruction"]["status"]}
-        except (ValueError,KeyError,TypeError,AttributeError) as error:
+        except (ValueError,KeyError,TypeError,AttributeError,RecursionError,MemoryError) as error:
             refusal=record("FRAME_INGEST_FAILED","EXIT_0_CARRIES_A_VALID_EXECUTION_RESULT_AND_EGRESS",
                            type(error).__name__+": "+str(error),True)
             return terminal(packet_id,refusal,quarantine)

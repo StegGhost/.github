@@ -752,6 +752,37 @@ class InboundEpochIsSupplied(unittest.TestCase):
         self.assertEqual([Path(item["path"]).name for item in scanned], [Path(valid["path"]).name])
         self.assertEqual(CLOCK_CALLS, [])
 
+    def test_a_deeply_nested_frame_file_is_quarantined_and_the_cycle_continues(self):
+        # F-SCAN-RECURSION: a peer-writable frames.d file under the size cap but
+        # nested past the parser's depth raises RecursionError; it is that
+        # file's six-field FRAME_INGEST_FAILED and quarantine, and the valid
+        # frame beside it is consumed exactly once. A frame whose packet bytes
+        # are the deep document is refused the same way at ingest.
+        import base64
+        frames = self.mesh / "frames.d"
+        frames.mkdir(parents=True, exist_ok=True)
+        deep = '{"a":' + "[" * 200000
+        self.assertLess(len(deep), KERNEL.FRAME_FILE_MAX_BYTES)
+        (frames / "0000-deep.json").write_text(deep)
+        packet_deep = KERNEL.carrier_frame(self.distinct("deep-packet"), epoch=4096)
+        raw = ("[" * 200000).encode()
+        body = {k: v for k, v in packet_deep.items() if k != "frame_sha256"}
+        body.update(packet_base64=base64.b64encode(raw).decode("ascii"), packet_sha256=KERNEL.sha(raw))
+        KERNEL.publish_frame({**body, "frame_sha256": KERNEL.sha(body)}, root=self.mesh)
+        KERNEL.publish_frame(self.frame, root=self.mesh)
+        served = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh)
+        refused = [x for x in served if x["result"]["status"] == "REFUSED"]
+        self.assertEqual(len(refused), 2, served)
+        by_name = {Path(x["path"]).name: x["result"]["refusal"] for x in refused}
+        self.assertEqual(by_name["0000-deep.json"]["failed_predicate"], "RecursionError")
+        for refusal in by_name.values():
+            for field in ("disposition", "failure_code", "failed_predicate", "required_evidence_or_repair",
+                          "retry_entrypoint", "owning_existing_goal", "next_attempt"):
+                self.assertIn(field, refusal)
+        valid, = [x for x in served if x["result"]["status"] == "CONSUMED"]
+        self.assertSupplied(valid["response_publication"]["frame"])
+        self.assertEqual(KERNEL.consume_and_respond(self.b, mesh_root=self.mesh), [])
+
     def test_a_carried_claim_on_a_clock_form_reference_is_unverified(self):
         # VALIDATOR @1767a3f: a CARRIED claim is judged before CLOCK
         # classification. With a valid epoch, a claim on a clock-form or
@@ -1385,7 +1416,9 @@ class CliInputsAreRefusedTerminal(WriterEntryPointsReportFaultsSixField):
         (self.tmp / "not.json").write_text("this is not json")
         (self.tmp / "latin1.json").write_bytes(b"{\"k\": \"\xff\"}")
         (self.tmp / "list.json").write_text("[1, 2]")
+        (self.tmp / "deep.json").write_text('{"a":' + "[" * 200000)
         return {"FileNotFoundError": str(self.tmp / "missing.json"), "IsADirectoryError": str(directory),
+                "RecursionError": str(self.tmp / "deep.json"),
                 "JSONDecodeError": str(self.tmp / "not.json"), "UnicodeDecodeError": str(self.tmp / "latin1.json"),
                 "WRONG_TOP_LEVEL_TYPE": str(self.tmp / "list.json")}
 
@@ -1672,9 +1705,39 @@ class ProcessBoundaryExitSplit(unittest.TestCase):
         self.assertEqual((status, printed["failed_predicate"], printed["terminal"]),
                          (75, "QUARANTINE_MARKER_IS_WRITABLE", False))
         self.assertEqual(list(self.quarantine.glob("*")), [])
+        # The marker's write_text faulting: the same, and no temp file left.
+        original_write = Path.write_text
+
+        def failing_write(path, *args, **kwargs):
+            if path.parent == self.quarantine:
+                raise OSError(28, "No space left on device")
+            return original_write(path, *args, **kwargs)
+        Path.write_text = failing_write
+        try:
+            status, printed = self.run_once.run(envelope, self.tmp / "egress.json", self.quarantine)
+        finally:
+            Path.write_text = original_write
+        self.assertEqual((status, printed["failed_predicate"], printed["terminal"]),
+                         (75, "QUARANTINE_MARKER_IS_WRITABLE", False))
+        self.assertEqual(list(self.quarantine.glob("*")), [])
         status, printed = self.run_once.run(envelope, self.tmp / "egress.json", self.quarantine)
         self.assertEqual((status, printed["failure_code"], printed["terminal"]), (65, "FRAME_INGEST_FAILED", True))
         self.assertEqual(len(list(self.quarantine.glob("*.json"))), 1)
+
+    def test_a_deeply_nested_envelope_exits_65_and_run_once_quarantines_nothing_it_cannot_name(self):
+        # F-SCAN-RECURSION: process_boundary exits 65 on a deep envelope;
+        # run_once refuses it terminal without a traceback.
+        deep = self.tmp / "deep.json"
+        deep.write_text('{"a":' + "[" * 200000)
+        done = self.boundary(deep, self.tmp / "out.json")
+        record = json.loads(done.stdout.strip().splitlines()[-1])
+        self.assertEqual((done.returncode, record["failure_code"], record["terminal"]),
+                         (65, "PROCESS_BOUNDARY_INPUT_FAULT", True))
+        self.assertIn("RecursionError", record["detail"])
+        self.assertNotIn("Traceback", done.stderr)
+        status, printed = self.run_once.run(deep, self.tmp / "egress.json", self.quarantine)
+        self.assertEqual((status, printed["failure_code"], printed["terminal"]), (65, "FRAME_INGEST_FAILED", True))
+        self.assertFalse((self.tmp / "egress.json").exists())
 
     def test_every_content_fault_exits_65_with_a_terminal_record(self):
         # The refusals that were bare SystemExit strings route through 65.
