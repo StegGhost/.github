@@ -1569,7 +1569,16 @@ class FailedHeadPublishDoesNotWedgeTests(AddressedAndClosedTests):
                     "packet_base64": base64.b64encode(b'{"packet_id": "x"}').decode("ascii")}
         rehashed = {k: v for k, v in tampered.items() if k != "frame_sha256"}
         rehashed["frame_sha256"] = kernel.sha(rehashed)
+        # A digest-correct forgery: our packet re-encoded with another origin and
+        # payload, packet_sha256, packet_base64 and frame_sha256 all recomputed.
+        forged_packet = {**json.loads(base64.b64decode(own["packet_base64"])),
+                         "payload": {"forged": True}}
+        forged_packet["origin"] = {**forged_packet["origin"], "org": "Mallory-org"}
+        consistent = kernel.carrier_frame(forged_packet, epoch=self.SUPPLIED)
+        self.assertEqual(consistent["packet_id"], packet_id)
+        kernel.recover_packet(consistent)
         forgeries = {
+            "digest_correct_content_swapped": consistent,
             "malformed": {"packet_id": packet_id, "origin_org": "Mallory-org", "frame_sha256": "sha256:" + "f" * 64,
                           "packet_base64": "AAAA", "heartbeat_reference": {"epoch": 99}},
             "tampered_claimed_digest_kept": tampered,

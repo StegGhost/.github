@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, hashlib, importlib.util, json, sys
+import argparse, hashlib, importlib.util, json, os, sys
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -51,8 +51,14 @@ def main():
  except OSError as e: fault(EXIT_WRITE_FAULT,"OWN_STATE_READS",type(e).__name__+": "+str(e))
  except SystemExit as e: fault(EXIT_INPUT_FAULT,"ENVELOPE_IS_ADMISSIBLE",str(e.code))
  except (KeyError,TypeError,ValueError,AttributeError) as e: fault(EXIT_INPUT_FAULT,"ENVELOPE_IS_ADMISSIBLE",type(e).__name__+": "+str(e))
- try: Path(a.out).parent.mkdir(parents=True,exist_ok=True); Path(a.out).write_text(json.dumps(result,indent=2,sort_keys=True)+"\n")
- except OSError as e: fault(EXIT_WRITE_FAULT,"RESULT_PATH_IS_WRITABLE",type(e).__name__+": "+str(e))
+ # Atomic: staged beside the result and replaced, so a fault leaves no partial result.
+ out=Path(a.out); temp=out.with_name("."+out.name+".tmp")
+ try:
+  out.parent.mkdir(parents=True,exist_ok=True); temp.write_text(json.dumps(result,indent=2,sort_keys=True)+"\n"); os.replace(temp,out)
+ except OSError as e:
+  try: temp.unlink()
+  except OSError: pass
+  fault(EXIT_WRITE_FAULT,"RESULT_PATH_IS_WRITABLE",type(e).__name__+": "+str(e))
  print(json.dumps({"status":"PASS","terminal_receipt_id":prev}))
 def process(env,reg):
  req=["schema_version","packet_id","direction","origin","destination","carrier","intr_profile","transition","payload","evidence"]
