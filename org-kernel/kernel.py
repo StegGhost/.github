@@ -167,6 +167,8 @@ def frame_supplied_epoch(frame:Any)->int|None:
     ref=frame.get("heartbeat_reference") if isinstance(frame,dict) else None
     if not isinstance(ref,dict) or ref.get("derived_from_clock") is not False:
         return None
+    if any(field in ref for field in CARRIED_CLAIM_FIELDS):
+        return None
     if supplied_epoch_failure(ref.get("epoch"),ref) is not None:
         return None
     try:
@@ -358,16 +360,102 @@ def persist_outbox(root:Path, frame:dict[str,Any])->Path:
     path.write_text(json.dumps(frame,indent=2,sort_keys=True)+"\n")
     return path
 
+#: Fields by which a carrier reference claims CARRIED provenance. A carrier
+#: cannot self-assert CARRIED: a claim is verified against this organization's
+#: current verified ledger head or the frame is refused, never stripped (B-P36k).
+CARRIED_CLAIM_FIELDS=("source","head_receipt_sha","provenance")
+CARRIED_SOURCE="ORGANIZATION_LEDGER_HEAD"
+CARRIED_PROVENANCE_UNVERIFIED="CARRIED_PROVENANCE_UNVERIFIED"
+FRAME_REFUSED_QUARANTINED="FRAME_REFUSED_QUARANTINED"
+FRAME_PREDICATE="FRAME_CARRIES_A_SUPPLIED_OR_VERIFIED_HEARTBEAT_REFERENCE"
+INGEST_RETRY_ENTRYPOINT="org-kernel/kernel.py::ingest_frame"
+
+def carried_claim_failure(root:Path, ref:dict[str,Any])->str|None:
+    """Why a CARRIED claim does not verify against the current organization ledger head, or None.
+
+    Read-only: the ledger is opened without initializing it and nothing is written.
+    """
+    if ref.get("derived_from_clock") is not False:
+        return "a CARRIED reference states derived_from_clock exactly false"
+    if "sampled_unix_ns" in ref:
+        return "a CARRIED reference carries no clock sample"
+    if ref.get("source")!=CARRIED_SOURCE:
+        return "source "+repr(ref.get("source"))+" is not "+CARRIED_SOURCE
+    path=root/"resident-runtime/aggregate_repo_transition.py"
+    if not path.is_file():
+        return "this root carries no organization ledger to verify the claim against"
+    try:
+        spec=importlib.util.spec_from_file_location("carried_claim_org_ledger",path)
+        ledger=importlib.util.module_from_spec(spec); spec.loader.exec_module(ledger)
+        store=ledger.open_store(ledger.ledger_root())
+        head_sha=ledger._validate_existing_head(store)
+        head=store.get(ledger.receipt_key(head_sha)) if head_sha else None
+    except (SystemExit,Exception) as error:
+        return "the organization ledger head is not verifiable: "+type(error).__name__+": "+str(error)
+    if head is None or ref.get("head_receipt_sha")!=head_sha:
+        return "head_receipt_sha "+repr(ref.get("head_receipt_sha"))+" is not the current organization ledger head"
+    head_ref=head.get("hb_reference")
+    if not isinstance(head_ref,dict) or supplied_epoch_failure(head_ref.get("epoch"),head_ref) is not None:
+        return "the organization ledger head's epoch is not a supplied one"
+    if ref.get("epoch")!=head_ref["epoch"]:
+        return "the reference's epoch is not the organization ledger head's"
+    return None
+
+def frame_refusal(root:Path, frame:dict[str,Any])->dict[str,Any]|None:
+    """The six-field FAIL_CLOSED refusal of an inbound frame's heartbeat reference, or None.
+
+    Applied at ingest, before dispatch, for every role. Marker vocabulary:
+    a CARRIED claim must verify (CARRIED_PROVENANCE_UNVERIFIED); a sample
+    beside a false flag, or a sample with no flag, is HB_EPOCH_INVALID; no
+    flag at all is HB_EPOCH_PROVENANCE_UNMARKED. A reference flagged
+    derived_from_clock true is CLOCK: it is consumed as a frame-only crossing
+    (WU-B13) and lends no epoch. No clock is read.
+    """
+    ref=frame.get("heartbeat_reference")
+    code=detail=None
+    if not isinstance(ref,dict):
+        code,detail=HB_EPOCH_INVALID,"the frame's heartbeat reference is not an object"
+    elif any(field in ref for field in CARRIED_CLAIM_FIELDS):
+        failure=carried_claim_failure(root,ref)
+        if failure is not None:
+            code,detail=CARRIED_PROVENANCE_UNVERIFIED,failure
+    elif ref.get("derived_from_clock") is True:
+        return None
+    elif "derived_from_clock" in ref and ref["derived_from_clock"] is not False:
+        code,detail=HB_EPOCH_INVALID,"the frame's derived_from_clock is neither true nor exactly false"
+    elif "sampled_unix_ns" in ref:
+        code,detail=HB_EPOCH_INVALID,"the frame's heartbeat reference carries a clock sample without derived_from_clock true"
+    elif "derived_from_clock" not in ref:
+        code,detail=HB_EPOCH_PROVENANCE_UNMARKED,"the frame's heartbeat reference does not state derived_from_clock"
+    if code is None:
+        return None
+    return {"disposition":"FAIL_CLOSED","failure_code":code,"failed_predicate":FRAME_PREDICATE,"detail":detail,
+            "required_evidence_or_repair":("the sender re-emits the frame with a supplied heartbeat reference "
+                                           "(derived_from_clock false, no sample) or a CARRIED reference naming "
+                                           "this organization's current verified ledger head"),
+            "retry_entrypoint":INGEST_RETRY_ENTRYPOINT,"owning_existing_goal":HB_EPOCH_OWNING_EXISTING_GOAL,
+            "next_attempt":"re-emit under a supplied epoch; nothing was dispatched or written",
+            "derived_from_clock":False,"consequence_committed":False}
+
 def ingest_frame(root:Path, frame:dict[str,Any], *, mesh_root:Path|None=None,
                  hb_epoch:int|None=None)->dict[str,Any]:
     packet=recover_packet(frame)
     registry=load_registry(root)
     if frame["destination_org"]!=registry["organization"]:
         return {"status":"IGNORED_NOT_ADDRESSED","packet_id":frame["packet_id"]}
+    # Refused before dispatch, so no role writes anything for it: no receipt,
+    # no inbox intake. The fields are never stripped to admit it as supplied.
+    refusal=frame_refusal(root,frame)
+    if refusal is not None:
+        return {"status":"REFUSED","packet_id":frame["packet_id"],"refusal":refusal}
     # The frame's validated epoch is the supplied one for this crossing, so
     # the receiving operation records at it rather than refusing for want of one.
     # A frame without one takes the epoch supplied to this ingestion, if any.
+    # A CARRIED claim that verified above names a supplied head epoch.
     epoch=frame_supplied_epoch(frame)
+    ref=frame.get("heartbeat_reference")
+    if epoch is None and isinstance(ref,dict) and any(field in ref for field in CARRIED_CLAIM_FIELDS):
+        epoch=int(str(ref["epoch"]))
     result=dispatch(root,packet,mesh_root=mesh_root,hb_epoch=hb_epoch if epoch is None else epoch)
     return {"status":"CONSUMED","packet":packet,"execution_result":result}
 
@@ -947,6 +1035,18 @@ def mark_federation_frame_seen(repo_root:Path, frame_path:str, frame:dict[str,An
       "status":result.get("status"),
       "authority_effect":"NONE_CARRIER_ONLY"
     }
+    refusal=result.get("refusal")
+    if result.get("status")=="REFUSED" and isinstance(refusal,dict):
+        # Terminal: the refused frame is quarantined under its own name, so it
+        # is never re-processed and never stalls a later cycle (B-P36j). The
+        # marker reads no clock and carries no clock stamp.
+        marker.update({
+          "disposition":"FAIL_CLOSED","failure_code":FRAME_REFUSED_QUARANTINED,"failed_predicate":FRAME_PREDICATE,
+          "detail":refusal["failure_code"]+": "+refusal["detail"],"refused_failure_code":refusal["failure_code"],
+          "required_evidence_or_repair":refusal["required_evidence_or_repair"],
+          "retry_entrypoint":refusal["retry_entrypoint"],"owning_existing_goal":refusal["owning_existing_goal"],
+          "next_attempt":"terminal here: the frame is quarantined and not re-processed; the sender re-emits a new frame",
+          "derived_from_clock":False,"consequence_committed":False})
     marker_path=seen_dir/(hashlib.sha256(frame_name.encode()).hexdigest()+".json")
     if marker_path.exists():
         if json.loads(marker_path.read_text())!=marker:

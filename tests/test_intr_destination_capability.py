@@ -1076,6 +1076,74 @@ class ReadBackEpochIsNeverForwardedTests(AddressedAndClosedTests):
         self.assert_nothing_laundered(supplied=(self.SUPPLIED,))
 
 
+class CarriedClaimIsVerifiedTests(AddressedAndClosedTests):
+    """B-P36k: a carrier cannot self-assert CARRIED. A claim naming a head
+    that is not this organization's current verified ledger head is refused
+    six-field before dispatch, on every role, and nothing is written."""
+
+    SUPPLIED = 4096
+    CONTROL = "stegghost.org-control"
+    DIAGNOSTIC = "stegghost.boundary-diagnostic"
+
+    def carried(self, service, packet_id, head_sha, payload=None):
+        packet = kernel.build_packet(
+            origin_org=PEER, origin_service=kernel.organization_slug(PEER) + "." + PROFILE_ID,
+            destination_org=THIS, destination_service=service,
+            payload=payload or diagnostic(packet_id), standing=STANDING,
+            transition_reference="intr:transition:" + packet_id, authority_effect="NONE", packet_id=packet_id)
+        frame = kernel.carrier_frame(packet, epoch=self.SUPPLIED)
+        body = {key: value for key, value in frame.items() if key != "frame_sha256"}
+        body["heartbeat_reference"] = {**frame["heartbeat_reference"], "source": kernel.CARRIED_SOURCE,
+                                       "head_receipt_sha": head_sha}
+        frame = {**body, "frame_sha256": kernel.sha(body)}
+        kernel.publish_frame(frame, root=self.mesh)
+        return frame
+
+    def written(self):
+        found = set()
+        for variable in self.LEDGER_ROOTS:
+            root = Path(os.environ[variable])
+            if root.exists():
+                found |= {path for path in root.rglob("*") if path.is_file()}
+        inbox = ROOT / "resident-runtime/control/inbox"
+        if inbox.exists():
+            found |= {path for path in inbox.rglob("*") if path.is_file()}
+        return found
+
+    def test_a_forged_head_is_refused_on_every_route_and_writes_nothing(self):
+        forged = "sha256:" + "f" * 64
+        before = self.written()
+        for service in (ADDRESS, self.CONTROL, self.DIAGNOSTIC):
+            self.carried(service, "forged-" + service.split(".")[1], forged,
+                         payload={"message_class": "ecosystem.work.request", "communication_id": "forged-work"}
+                         if service == self.CONTROL else None)
+        results = self.consume()
+        self.assertEqual(len(results), 3)
+        for item in results:
+            result = item["result"]
+            self.assertEqual(result["status"], "REFUSED", result)
+            refusal = result["refusal"]
+            self.assertEqual(refusal["failure_code"], "CARRIED_PROVENANCE_UNVERIFIED")
+            for field in ("disposition", "failed_predicate", "required_evidence_or_repair",
+                          "retry_entrypoint", "owning_existing_goal", "next_attempt"):
+                self.assertIn(field, refusal)
+        self.assertEqual(self.written(), before)
+        self.assertEqual(self.frames_to(PEER), [])
+
+    def test_a_claim_naming_the_current_verified_head_is_admitted(self):
+        ingress.receive(diagnostic("seed-head"), registry=REGISTRY, packet_id="seed-head",
+                        hb_epoch=self.SUPPLIED)
+        head = json.loads((Path(os.environ["STEGVERSE_ORG_LEDGER_ROOT"]) / "HEAD.json").read_text())
+        self.carried(ADDRESS, "carried-verified", head["receipt_sha256"])
+        result, = self.consume()
+        self.assertEqual(result["result"]["status"], "CONSUMED", result["result"])
+        operation = result["result"]["execution_result"]["application_result"]["receiving_operation_result"]
+        self.assertEqual(operation["disposition"], "ALLOW", operation)
+        for record in self.receipts("STEGVERSE_ORG_LEDGER_ROOT", "stegverse.organization-transition-receipt/v1"):
+            self.assertEqual(record["hb_reference"]["epoch"], self.SUPPLIED)
+            self.assertIs(record["hb_reference"]["derived_from_clock"], False)
+
+
 def subprocess_git(args):
     import subprocess
     completed = subprocess.run(["git", *args], capture_output=True, text=True)

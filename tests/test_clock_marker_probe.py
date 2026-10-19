@@ -376,6 +376,39 @@ class InboundEpochIsSupplied(unittest.TestCase):
         self.assertSupplied(submitted[0])
         self.assertEqual(CLOCK_CALLS, [])
 
+    def test_a_refused_frame_is_quarantined_and_never_retried(self):
+        # B-P36j: a mixed batch. The refused frame gets a terminal six-field
+        # quarantine marker, the valid one is answered, and a second cycle
+        # proceeds without retrying the refused frame. No clock is read.
+        KERNEL.publish_frame(self.frame, root=self.mesh)
+        unmarked_packet = dict(self.request, packet_id=self.request["packet_id"] + ":unmarked")
+        frame = KERNEL.carrier_frame(unmarked_packet, epoch=4096)
+        body = {k: v for k, v in frame.items() if k != "frame_sha256"}
+        body["heartbeat_reference"] = {k: v for k, v in frame["heartbeat_reference"].items()
+                                       if k != "derived_from_clock"}
+        KERNEL.publish_frame({**body, "frame_sha256": KERNEL.sha(body)}, root=self.mesh)
+        first = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh)
+        statuses = sorted(item["result"]["status"] for item in first)
+        self.assertEqual(statuses, ["CONSUMED", "REFUSED"])
+        refused = next(item for item in first if item["result"]["status"] == "REFUSED")
+        self.assertIsNone(refused["response_publication"])
+        marker = json.loads(Path(refused["seen_marker"]).read_text())
+        self.assertEqual((marker["status"], marker["disposition"], marker["failure_code"]),
+                         ("REFUSED", "FAIL_CLOSED", "FRAME_REFUSED_QUARANTINED"))
+        self.assertEqual(marker["refused_failure_code"], "HB_EPOCH_PROVENANCE_UNMARKED")
+        for field in ("failed_predicate", "required_evidence_or_repair", "retry_entrypoint",
+                      "owning_existing_goal", "next_attempt"):
+            self.assertIn(field, marker)
+        self.assertMarked(marker)
+        self.assertEqual(list((self.b / "resident-runtime/control").glob("inbox/*")), [])
+        second = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh)
+        self.assertNotIn(refused["path"], [item["path"] for item in second])
+        self.assertEqual(CLOCK_CALLS, [])
+
+    def assertMarked(self, *values):
+        for value in values:
+            self.assertEqual(unmarked_clock_values(value), [], value)
+
     def test_monitor_request_status_takes_the_inbound_epoch(self):
         # R2: resident_status is stamped from the request frame's epoch.
         built = KERNEL.build_ecosystem_packets(
