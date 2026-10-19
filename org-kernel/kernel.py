@@ -788,17 +788,19 @@ def publish_frame(frame:dict[str,Any], *, root:Path|None=None)->Path:
     write_atomic(path,json.dumps(frame,indent=2,sort_keys=True)+"\n")
     return path
 
-def published_frame(packet_id:str, *, root:Path|None=None)->dict[str,Any]|None:
-    """The frame frames.d already holds for this packet id, or None.
+def published_frames(packet_id:str, *, root:Path|None=None)->list[Any]:
+    """Every frame frames.d holds that claims this packet id, verified or not.
 
     A published frame binds its packet id whether or not its emission was
     recorded: a fault between publishing and recording leaves the frame, and a
-    re-emit must find it rather than publish a second one. Unreadable files are
-    not this packet's frame and are skipped.
+    re-emit must find it rather than publish a second one. A claim is not
+    proof: the caller verifies each one (`own_frame_failure`). Unreadable files
+    claim nothing and are skipped.
     """
     frames=(root or federation_root()).resolve()/"frames.d"
     if not frames.is_dir():
-        return None
+        return []
+    claimed=[]
     for path in sorted(frames.glob("*.json")):
         try:
             if path.stat().st_size>FRAME_FILE_MAX_BYTES:
@@ -807,7 +809,33 @@ def published_frame(packet_id:str, *, root:Path|None=None)->dict[str,Any]|None:
         except (OSError,ValueError):
             continue
         if isinstance(frame,dict) and frame.get("packet_id")==packet_id:
-            return frame
+            claimed.append(frame)
+    return claimed
+
+def own_frame_failure(frame:Any, packet:dict[str,Any], *, epoch:int)->str|None:
+    """Why a frame claiming this packet id is not this packet's frame, or None.
+
+    It must parse as a carrier frame, its frame_sha256 must recompute over its
+    body, its heartbeat reference must be valid, and every other field --
+    packet bytes, packet digest, origin, destination, profile -- must equal the
+    frame this packet builds. Only the heartbeat may differ: that is this
+    packet's frame at another epoch, which the caller refuses as a collision.
+    """
+    if not isinstance(frame,dict):
+        return "frame_not_an_object"
+    body={k:v for k,v in frame.items() if k!="frame_sha256"}
+    try:
+        if frame.get("frame_sha256")!=sha(body):
+            return "frame_sha256_does_not_recompute"
+        validate_hb_reference(dict(frame.get("heartbeat_reference") or {}))
+        expected=carrier_frame(packet,epoch=epoch)
+    except (ValueError,TypeError,KeyError) as error:
+        return "frame_unparseable:"+type(error).__name__
+    for key in sorted(set(expected)|set(frame)):
+        if key in ("heartbeat_reference","frame_sha256"):
+            continue
+        if frame.get(key)!=expected.get(key):
+            return "frame_field_differs_from_this_packet:"+key
     return None
 
 #: The largest frames.d file the scan reads. A carrier frame is a few KiB; a

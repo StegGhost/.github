@@ -1552,6 +1552,46 @@ class FailedHeadPublishDoesNotWedgeTests(AddressedAndClosedTests):
                                 self.assertEqual(again.get("failure_code"), "EMISSION_REPLAY_COLLISION", again)
                                 self.assertIs(again["emitted"], False)
 
+    def test_an_unverified_frame_claiming_our_packet_id_is_refused_and_binds_nothing(self):
+        # V-P11 @be39f2f EGRESS_ON_MESH_FRAME_UNVERIFIED: a frames.d frame that
+        # claims our packet id binds only if it is this packet's own frame.
+        # Malformed, tampered (claimed digest kept) and re-hashed forgeries are
+        # each refused six-field, with nothing published or recorded and no
+        # traceback.
+        import base64, hashlib
+        probe_work = self.fresh_ledgers()
+        genuine = egress.emit(PEER, diagnostic("on-mesh-forgery"), standing=STANDING, capability=PROFILE_ID,
+                              mesh_root=probe_work / "mesh", hb_epoch=self.SUPPLIED)
+        self.assertEqual(genuine["disposition"], "ALLOW", genuine)
+        own = json.loads(next((probe_work / "mesh" / "frames.d").glob("*.json")).read_text())
+        packet_id = genuine["packet_id"]
+        tampered = {**own, "origin_org": "Mallory-org",
+                    "packet_base64": base64.b64encode(b'{"packet_id": "x"}').decode("ascii")}
+        rehashed = {k: v for k, v in tampered.items() if k != "frame_sha256"}
+        rehashed["frame_sha256"] = kernel.sha(rehashed)
+        forgeries = {
+            "malformed": {"packet_id": packet_id, "origin_org": "Mallory-org", "frame_sha256": "sha256:" + "f" * 64,
+                          "packet_base64": "AAAA", "heartbeat_reference": {"epoch": 99}},
+            "tampered_claimed_digest_kept": tampered,
+            "rehashed": rehashed,
+        }
+        for name, forged in forgeries.items():
+            with self.subTest(forgery=name):
+                work = self.fresh_ledgers()
+                frames = work / "mesh" / "frames.d"
+                frames.mkdir(parents=True)
+                (frames / (hashlib.sha256(name.encode()).hexdigest() + ".json")).write_text(json.dumps(forged))
+                refused = egress.emit(PEER, diagnostic("on-mesh-forgery"), standing=STANDING, capability=PROFILE_ID,
+                                      mesh_root=work / "mesh", hb_epoch=self.SUPPLIED)
+                self.assertEqual((refused["disposition"], refused["failure_code"]),
+                                 ("FAIL_CLOSED", "EMISSION_FRAME_UNVERIFIED"), refused)
+                self.assertIs(refused["emitted"], False)
+                for field in ("failed_predicate", "required_evidence_or_repair", "retry_entrypoint",
+                              "owning_existing_goal", "next_attempt"):
+                    self.assertIn(field, refused)
+                self.assertEqual(len(list(frames.glob("*.json"))), 1)
+                self.assertEqual(self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1"), [])
+
     # ------------------------------------------- lead ruling 09:44Z on the batch chain
 
     def release_modules(self, tag):

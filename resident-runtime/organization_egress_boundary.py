@@ -557,7 +557,16 @@ def emit(destination_organization: Any, payload: Mapping[str, Any], *,
         # A frame already on the mesh binds the packet id too: a fault between
         # publishing it and recording it leaves the frame, and the re-emit
         # completes that record rather than publishing a second frame.
-        on_mesh = None if prior is not None else kernel.published_frame(packet["packet_id"], root=mesh_root)
+        # A claim is verified before it binds: a frame that is not this
+        # packet's own (malformed, tampered, another origin's) is refused
+        # six-field with nothing published and nothing recorded.
+        on_mesh = None
+        if prior is None:
+            for claimed in kernel.published_frames(packet["packet_id"], root=mesh_root):
+                failure = kernel.own_frame_failure(claimed, packet, epoch=heartbeat["epoch"])
+                if failure is not None:
+                    return _on_mesh_frame_unverified(packet["packet_id"], failure, payload)
+                on_mesh = on_mesh or claimed
         if prior is None and on_mesh is None:
             published = kernel.publish_packet(packet, root=mesh_root, epoch=heartbeat["epoch"])
     except EgressRefused as exc:
@@ -641,6 +650,31 @@ def _emission_replay_collision(packet_id: str, prior: Mapping[str, Any], would_p
         "recorded_frame_sha256": prior.get("frame_sha256"),
         "emission_repository_receipt_sha256": appended["repository_receipt"]["receipt_sha256"],
         "emission_organization_receipt_sha256": appended["organization_receipt"]["receipt_sha256"],
+        "authority_effect": "NONE_EGRESS_RECORD_ONLY",
+    }
+
+
+EMISSION_FRAME_UNVERIFIED = "EMISSION_FRAME_UNVERIFIED"
+
+
+def _on_mesh_frame_unverified(packet_id: str, failure: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    """A frame on the mesh claims this packet id and is not its frame. Nothing is published or recorded."""
+    return {
+        "schema": RESULT_SCHEMA,
+        "operation": OPERATION_ID,
+        "disposition": "FAIL_CLOSED",
+        "failure_code": EMISSION_FRAME_UNVERIFIED,
+        "failed_predicate": "A_FRAME_CLAIMING_THIS_PACKET_ID_VERIFIES_AS_THIS_PACKETS_FRAME",
+        "detail": "a frames.d frame claims packet " + packet_id + ": " + failure,
+        "required_evidence_or_repair": ("remove the unverified frame from frames.d; no emission binds to, "
+                                        "or publishes beside, a frame that is not this packet's own"),
+        "retry_entrypoint": EPOCH_RETRY_ENTRYPOINT,
+        "owning_existing_goal": kernel.HB_EPOCH_OWNING_EXISTING_GOAL,
+        "next_attempt": "nothing was published or recorded; re-emit once the frame is removed",
+        "terminal": False,
+        "emitted": False,
+        "packet_id": packet_id,
+        "communication_id": (payload or {}).get("communication_id"),
         "authority_effect": "NONE_EGRESS_RECORD_ONLY",
     }
 

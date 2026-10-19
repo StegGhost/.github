@@ -1462,5 +1462,90 @@ class CliInputsAreRefusedTerminal(WriterEntryPointsReportFaultsSixField):
                                                 "sha256:" + "2" * 64, "--boundary-evidence-json", text,
                                                 "--hb-epoch", "4096"], "--boundary-evidence-json", error)
 
+
+class ProcessBoundaryExitSplit(unittest.TestCase):
+    """PB-EXIT-SPLIT (lead 09:54Z): process_boundary exits 65 for the envelope's
+    own defect (terminal) and 75 for this organization's own state faulting
+    (non-terminal); run_once, its one runtime caller, quarantines only on 65,
+    and a 75 leaves no marker and is consumed once on the next run."""
+
+    def setUp(self):
+        import os, sys
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.cwd = os.getcwd()
+        os.chdir(TREE)
+        self.addCleanup(os.chdir, self.cwd)
+        sys.path.insert(0, str(TREE / "resident-runtime"))
+        self.addCleanup(sys.path.remove, str(TREE / "resident-runtime"))
+        self.run_once = load("probe_run_once", "resident-runtime/run_once.py")
+        transport = load("probe_intr_transport", "org-boundary/runtime/intr_transport.py")
+        registry = json.loads((TREE / "org-boundary/registry/services.json").read_text())
+        service = next(s["service_id"] for s in registry["services"]
+                       if s.get("boundary_role") == "BOUNDARY_LOCAL_DIAGNOSTIC")
+        standing = {"mode": "ESTABLISH_GENESIS", "node_ref": "pb-split", "predecessor": None}
+        self.envelope = transport.build_ingress({"org": "peer", "service": "peer.boundary-diagnostic"},
+                                                {"org": registry["organization"], "service": service},
+                                                {"probe": "ping"}, "HB-test", "test", standing=standing)
+        self.quarantine = self.tmp / "quarantine.d"
+
+    def boundary(self, envelope_path, out):
+        import subprocess, sys
+        return subprocess.run([sys.executable, "org-boundary/runtime/process_boundary.py", "--envelope",
+                               str(envelope_path), "--out", str(out)], capture_output=True, text=True)
+
+    def test_process_boundary_exits_65_for_bad_input_and_75_for_its_own_write_fault(self):
+        bad = self.tmp / "bad.json"
+        bad.write_text("not json")
+        refused = self.boundary(bad, self.tmp / "out.json")
+        record = json.loads(refused.stdout.strip().splitlines()[-1])
+        self.assertEqual((refused.returncode, record["failure_code"], record["terminal"]),
+                         (65, "PROCESS_BOUNDARY_INPUT_FAULT", True))
+        good = self.tmp / "good.json"
+        good.write_text(json.dumps(self.envelope))
+        blocker = self.tmp / "a-file"
+        blocker.write_text("")
+        faulted = self.boundary(good, blocker / "out.json")
+        record = json.loads(faulted.stdout.strip().splitlines()[-1])
+        self.assertEqual((faulted.returncode, record["failure_code"], record["terminal"]),
+                         (75, "PROCESS_BOUNDARY_WRITE_FAULT", False))
+        self.assertNotIn("Traceback", refused.stderr + faulted.stderr)
+        self.assertEqual(self.boundary(good, self.tmp / "out.json").returncode, 0)
+
+    def test_a_write_fault_leaves_no_marker_and_is_consumed_once_next_run(self):
+        import sys
+        envelope = self.tmp / "in.json"
+        envelope.write_text(json.dumps(self.envelope))
+        egress = self.tmp / "egress.json"
+        genuine = self.run_once.PROCESS_BOUNDARY
+        self.run_once.PROCESS_BOUNDARY = [sys.executable, "-c", "import sys; sys.exit(75)"]
+        try:
+            code, printed = self.run_once.run(envelope, egress, self.quarantine)
+        finally:
+            self.run_once.PROCESS_BOUNDARY = genuine
+        self.assertEqual((code, printed["failure_code"], printed["terminal"]),
+                         (75, "PROCESS_BOUNDARY_WRITE_FAULT", False))
+        for field in ("failed_predicate", "required_evidence_or_repair", "retry_entrypoint",
+                      "owning_existing_goal", "next_attempt"):
+            self.assertIn(field, printed)
+        self.assertFalse(self.quarantine.exists() and any(self.quarantine.iterdir()))
+        self.assertFalse(egress.exists())
+        code, printed = self.run_once.run(envelope, egress, self.quarantine)
+        self.assertEqual((code, printed["status"]), (0, "PASS"), printed)
+        self.assertTrue(egress.exists())
+        self.assertFalse(self.quarantine.exists() and any(self.quarantine.iterdir()))
+
+    def test_bad_input_is_quarantined_with_a_terminal_record(self):
+        envelope = self.tmp / "in.json"
+        envelope.write_text(json.dumps({**self.envelope,
+                                        "destination": {**self.envelope["destination"], "service": "no-such"}}))
+        egress = self.tmp / "egress.json"
+        code, printed = self.run_once.run(envelope, egress, self.quarantine)
+        self.assertEqual((code, printed["failure_code"], printed["terminal"]), (65, "FRAME_INGEST_FAILED", True))
+        self.assertEqual(len(list(self.quarantine.glob("*.json"))), 1)
+        self.assertFalse(egress.exists())
+        again, printed = self.run_once.run(envelope, egress, self.quarantine)
+        self.assertEqual((again, printed["failure_code"]), (65, "FRAME_REFUSED_QUARANTINED"))
+
 if __name__ == "__main__":
     unittest.main()

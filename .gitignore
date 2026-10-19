@@ -10,3 +10,5 @@ resident-runtime/federation/seen.d/
 # and each verified CARRIED admission (B-P36m).
 resident-runtime/federation/responses.d/
 resident-runtime/federation/admissions.d/
+# Envelopes run_once quarantined for a terminal input fault (PB-EXIT-SPLIT).
+resident-runtime/federation/quarantine.d/
