@@ -416,6 +416,145 @@ class RepositoryReceiptNeverReadsAClockTests(RedirectedLedgers):
         self.assertEqual(self.all_receipts(), [])
 
 
+REFUSED_EPOCHS = ((None, "HB_EPOCH_NOT_SUPPLIED"), ("33.0", "HB_EPOCH_INVALID"),
+                  (True, "HB_EPOCH_INVALID"), (31, "HB_EPOCH_INVALID"),
+                  ("+33", "HB_EPOCH_INVALID"))
+SIX_FIELDS = ("failure_code", "failed_predicate", "required_evidence_or_repair",
+              "retry_entrypoint", "owning_existing_goal", "next_attempt")
+
+
+class RefusalPrecedesAnyWriteTests(RedirectedLedgers):
+    """B-P36b: the organization ledger and the egress refuse an epoch first.
+
+    `aggregate_repo_transition.append` fell back to the clock when no epoch was
+    supplied, and `egress.emit` published its mesh frame before the epoch was
+    refused, with a clock-derived frame epoch. Both now refuse an absent or
+    invalid epoch before a store is opened or a frame is published.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.aggregate = ingress.organization_ledger
+        self.repository = _module("repo_transition_emit_b_p36b",
+                                  ".stegverse/transition-ledger/emit.py")
+
+        class NoClock:
+            @staticmethod
+            def now(*_args, **_kwargs):
+                raise AssertionError("a clock was read")
+
+        for module in (kernel, egress.kernel, egress.organization_ledger.kernel,
+                       self.aggregate.kernel, self.repository.kernel):
+            previous = module.datetime
+            module.datetime = NoClock
+            self.addCleanup(setattr, module, "datetime", previous)
+
+    def source_receipt(self):
+        return self.repository.append("t:b-p36b", "T", "sha256:" + "0" * 64,
+                                      "sha256:" + "1" * 64, hb_epoch=32)
+
+    def org_ledger_files(self):
+        root = Path(os.environ["STEGVERSE_ORG_LEDGER_ROOT"])
+        return sorted(str(path) for path in root.rglob("*")) if root.exists() else None
+
+    def test_the_organization_ledger_refuses_before_opening_its_store(self):
+        source = self.source_receipt()
+
+        def opened(*_args, **_kwargs):
+            raise AssertionError("the store was opened")
+
+        for epoch, code in REFUSED_EPOCHS:
+            with self.subTest(epoch=epoch):
+                previous = self.aggregate.open_store
+                self.aggregate.open_store = opened
+                try:
+                    with self.assertRaises(self.aggregate.OrgLedgerEpochRefused) as refused:
+                        self.aggregate.append(source, "REPO_STATE_PROPAGATION",
+                                              "sha256:" + "0" * 64, "sha256:" + "1" * 64,
+                                              {}, "NONE", hb_epoch=epoch)
+                finally:
+                    self.aggregate.open_store = previous
+                refusal = refused.exception.refusal
+                self.assertEqual(refusal["disposition"], "FAIL_CLOSED")
+                self.assertEqual(refusal["failure_code"], code)
+                self.assertEqual(refusal["failed_predicate"],
+                                 "SUBMISSION_CARRIES_THE_SUPPLIED_HB_EPOCH")
+                self.assertEqual(refusal["retry_entrypoint"], self.aggregate.EPOCH_RETRY_ENTRYPOINT)
+                for field in SIX_FIELDS:
+                    self.assertTrue(refusal[field], field)
+                self.assertIsNone(self.org_ledger_files())
+
+    def test_a_refusal_leaves_an_existing_organization_ledger_untouched(self):
+        source = self.source_receipt()
+        self.aggregate.append(source, "REPO_STATE_PROPAGATION", "sha256:" + "0" * 64,
+                              "sha256:" + "1" * 64, {}, "NONE", hb_epoch=32)
+        before = {path: Path(path).read_bytes() for path in self.org_ledger_files()
+                  if Path(path).is_file()}
+        for epoch, _code in REFUSED_EPOCHS:
+            with self.subTest(epoch=epoch):
+                with self.assertRaises(self.aggregate.OrgLedgerEpochRefused):
+                    self.aggregate.append(source, "REPO_STATE_PROPAGATION",
+                                          "sha256:" + "0" * 64, "sha256:" + "1" * 64,
+                                          {}, "NONE", hb_epoch=epoch)
+                after = {path: Path(path).read_bytes() for path in self.org_ledger_files()
+                         if Path(path).is_file()}
+                self.assertEqual(after, before)
+
+    def test_the_organization_ledger_cli_refuses_an_absent_epoch(self):
+        import subprocess
+        import sys
+        source = Path(self._work.name) / "source.json"
+        source.write_text(json.dumps(self.source_receipt()), encoding="utf-8")
+        for extra, code in (([], "HB_EPOCH_NOT_SUPPLIED"), (["--hb-epoch", "+33"], "HB_EPOCH_INVALID")):
+            with self.subTest(extra=extra):
+                run = subprocess.run(
+                    [sys.executable, str(ROOT / "resident-runtime/aggregate_repo_transition.py"),
+                     "--repo-receipt", str(source),
+                     "--predecessor-org-state-sha256", "sha256:" + "0" * 64,
+                     "--successor-org-state-sha256", "sha256:" + "1" * 64, *extra],
+                    capture_output=True, text=True, env=dict(os.environ))
+                self.assertEqual(run.returncode, 1, run.stderr)
+                self.assertEqual(json.loads(run.stdout)["failure_code"], code)
+                self.assertIsNone(self.org_ledger_files())
+
+    def test_the_egress_refuses_before_publishing_a_frame(self):
+        published = []
+        previous = egress.kernel.publish_packet
+
+        def publish(*args, **kwargs):
+            published.append((args, kwargs))
+            return previous(*args, **kwargs)
+
+        egress.kernel.publish_packet = publish
+        self.addCleanup(setattr, egress.kernel, "publish_packet", previous)
+        for epoch, code in REFUSED_EPOCHS:
+            with self.subTest(epoch=epoch):
+                result = egress.emit(PEER, diagnostic("refused-epoch-egress"), standing=STANDING,
+                                     capability=PROFILE_ID, mesh_root=self.mesh, hb_epoch=epoch)
+                self.assertEqual(result["disposition"], "FAIL_CLOSED")
+                self.assertEqual(result["failure_code"], code)
+                self.assertEqual(result["failed_predicate"],
+                                 "SUBMISSION_CARRIES_THE_SUPPLIED_HB_EPOCH")
+                for field in SIX_FIELDS:
+                    self.assertTrue(result[field], field)
+                self.assertIs(result["emitted"], False)
+                self.assertIs(result["refusal_recorded"], False)
+                self.assertEqual(published, [])
+                self.assertEqual(list(self.mesh.glob("frames.d/*.json")), [])
+                for variable in self.LEDGER_ROOTS:
+                    self.assertFalse(Path(os.environ[variable]).exists(), variable)
+
+    def test_the_egress_frame_carries_the_supplied_epoch(self):
+        result = egress.emit(PEER, diagnostic("supplied-epoch-egress"), standing=STANDING,
+                             capability=PROFILE_ID, mesh_root=self.mesh, hb_epoch="469436465")
+        self.assertEqual(result["disposition"], "ALLOW", result.get("detail"))
+        frame, = self.mesh.glob("frames.d/*.json")
+        reference = json.loads(frame.read_text(encoding="utf-8"))["heartbeat_reference"]
+        self.assertEqual(reference["epoch"], 469436465)
+        self.assertIs(reference["derived_from_clock"], False)
+        self.assertNotIn("sampled_unix_ns", reference)
+
+
 class AddressedAndClosedTests(RedirectedLedgers):
     def publish(self, payload, service, packet_id, origin=PEER):
         packet = kernel.build_packet(

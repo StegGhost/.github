@@ -223,6 +223,24 @@ def _recorded_for_source(store, head_digest, source_transition_sha256):
     return None
 
 
+#: An append's epoch is supplied by its caller and checked by the kernel's
+#: shared rule (SUBMISSION_CARRIES_THE_SUPPLIED_HB_EPOCH); an absent or invalid
+#: one is refused six-field FAIL_CLOSED before the store is opened, and no clock
+#: is read to stand in for it (StegVerse-Labs/.github@bc608a3, WU-B13a).
+EPOCH_RETRY_ENTRYPOINT = "resident-runtime/aggregate_repo_transition.py::append (hb_epoch=, or --hb-epoch)"
+OrgLedgerEpochRefused = kernel.SuppliedEpochRefused
+
+
+def epoch_refusal(hb_epoch):
+    """The six-field FAIL_CLOSED refusal of an append's epoch, or None."""
+    return kernel.writer_epoch_refusal(hb_epoch, retry_entrypoint=EPOCH_RETRY_ENTRYPOINT)
+
+
+def require_supplied_epoch(hb_epoch):
+    """The heartbeat reference of the supplied epoch, or OrgLedgerEpochRefused."""
+    return kernel.supplied_hb_reference(hb_epoch, retry_entrypoint=EPOCH_RETRY_ENTRYPOINT)
+
+
 def append(source_receipt, org_transition_class, predecessor_state, successor_state,
            boundary_evidence, authority_effect, hb_epoch=None, idempotent=False):
     # Admission is decided before the append lock is taken; an inadmissible
@@ -230,10 +248,10 @@ def append(source_receipt, org_transition_class, predecessor_state, successor_st
     source = verify_source(source_receipt)
     require_state_digest("predecessor_org_state_sha256", predecessor_state)
     require_state_digest("successor_org_state_sha256", successor_state)
-    # Ordering is a heartbeat count, not a clock reading. A supplied tick keeps
-    # the receipt reproducible; deriving one from the host clock is permitted
-    # but marks itself so the two can be told apart.
-    heartbeat = kernel.hb_reference(epoch=hb_epoch) if hb_epoch is not None else kernel.hb_reference()
+    # Ordering is a heartbeat count, not a clock reading. The caller supplies
+    # the tick; an absent or invalid one raises OrgLedgerEpochRefused here,
+    # before the store is opened, so a refusal writes nothing.
+    heartbeat = require_supplied_epoch(hb_epoch)
     retained = {source_key(source["source_transition_sha256"]): source_receipt}
     store = open_store(ledger_root())
     store.initialize()
@@ -290,8 +308,9 @@ def main():
     parser.add_argument("--successor-org-state-sha256", required=True)
     parser.add_argument("--boundary-evidence-json", default="{}")
     parser.add_argument("--authority-effect", default="NONE")
-    parser.add_argument("--hb-epoch", type=int, default=None,
-                        help="heartbeat epoch; derived from the host clock, and marked as derived, when absent")
+    parser.add_argument("--hb-epoch", default=None,
+                        help="supplied heartbeat epoch (ASCII digits, >= 32); refused FAIL_CLOSED when absent, "
+                             "never read from a clock")
     args = parser.parse_args()
     source_path = args.transition_receipt or args.repo_receipt
     if not source_path:
@@ -300,10 +319,14 @@ def main():
     default_class = ("REPO_STATE_PROPAGATION"
                      if receipt.get("schema") == "stegverse.repo-transition-receipt/v1"
                      else "ORGANIZATION_STATE_TRANSITION")
-    result = append(receipt, args.org_transition_class or default_class,
-                    args.predecessor_org_state_sha256, args.successor_org_state_sha256,
-                    json.loads(args.boundary_evidence_json), args.authority_effect,
-                    hb_epoch=args.hb_epoch)
+    try:
+        result = append(receipt, args.org_transition_class or default_class,
+                        args.predecessor_org_state_sha256, args.successor_org_state_sha256,
+                        json.loads(args.boundary_evidence_json), args.authority_effect,
+                        hb_epoch=args.hb_epoch)
+    except OrgLedgerEpochRefused as exc:
+        print(json.dumps(exc.refusal, sort_keys=True))
+        raise SystemExit(1)
     print(json.dumps(result, sort_keys=True))
 
 

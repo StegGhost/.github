@@ -494,7 +494,16 @@ def emit(destination_organization: Any, payload: Mapping[str, Any], *,
     The record is appended *after* the frame is published, because the record is
     of an emission and carries the frame's digest. Minting it first would be a
     receipt claiming a crossing that had not happened yet.
+
+    The epoch is checked first. An absent or invalid one is refused six-field
+    FAIL_CLOSED before a packet is built, so nothing is published and nothing
+    is written. The frame's heartbeat reference is the supplied epoch's; no
+    clock is read.
     """
+    epoch_refused = organization_ledger.epoch_refusal(hb_epoch)
+    if epoch_refused is not None:
+        return _epoch_refusal_result(epoch_refused, payload)
+    heartbeat = organization_ledger.require_supplied_epoch(hb_epoch)
     origin = this_organization(root)
     try:
         unclosable = closability_refusal(payload or {})
@@ -532,7 +541,7 @@ def emit(destination_organization: Any, payload: Mapping[str, Any], *,
                 raise EgressRefused(refused.failed_predicate, refused.reason) from None
             attested = attestation_module.record(declared, signature, receipt)
             packet = {**packet, "attestation": signature}
-        published = kernel.publish_packet(packet, root=mesh_root)
+        published = kernel.publish_packet(packet, root=mesh_root, epoch=heartbeat["epoch"])
     except EgressRefused as exc:
         record = emit_refusal_record(exc.failed_predicate, exc.reason,
                                      destination_organization, origin, payload)
@@ -590,6 +599,20 @@ def _refusal_result(record: Mapping[str, Any], appended: Mapping[str, Any]) -> d
         "emission_record": dict(record),
         "emission_repository_receipt_sha256": appended["repository_receipt"]["receipt_sha256"],
         "emission_organization_receipt_sha256": appended["organization_receipt"]["receipt_sha256"],
+        "authority_effect": "NONE_EGRESS_RECORD_ONLY",
+    }
+
+
+def _epoch_refusal_result(refusal: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+    """An emission refused for its epoch. Nothing was published and nothing was written."""
+    return {
+        "schema": RESULT_SCHEMA,
+        "operation": OPERATION_ID,
+        **dict(refusal),
+        "emitted": False,
+        "communication_id": (payload or {}).get("communication_id"),
+        "refusal_recorded": False,
+        "nothing_crossed_the_boundary": True,
         "authority_effect": "NONE_EGRESS_RECORD_ONLY",
     }
 
