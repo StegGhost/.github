@@ -408,6 +408,23 @@ def release_record(segment: Mapping[str, Any], predecessor: str) -> dict[str, An
 RELEASE_PREDECESSOR_PREDICATE = "THE_RELEASE_PREDECESSOR_RESOLVES_AND_RECOMPUTES_IN_THE_LEDGER"
 
 
+def release_refusal_record(failure_code: str, refused: "ReleaseRefused") -> dict[str, Any]:
+    """The six-field, non-terminal record of a refused release: retried after repair."""
+    return {"disposition": "FAIL_CLOSED", "failure_code": failure_code,
+            "failed_predicate": refused.failed_predicate, "detail": refused.reason,
+            "reason": refused.reason,
+            "required_evidence_or_repair": ("the organization ledger's receipt chain verifies "
+                                            "(every receipt present and recomputing)"
+                                            if refused.failed_predicate == SEGMENT_PREDICATE
+                                            else "the declaration the refusal names"),
+            "retry_entrypoint": EPOCH_RETRY_ENTRYPOINT + (" (after ledger repair)"
+                                                          if refused.failed_predicate == SEGMENT_PREDICATE
+                                                          else " (after repair)"),
+            "owning_existing_goal": organization_ledger.kernel.HB_EPOCH_OWNING_EXISTING_GOAL,
+            "next_attempt": "repair what the refusal names and re-run the release; nothing was written",
+            "terminal": False, "derived_from_clock": False, "consequence_committed": False}
+
+
 def release_predecessor_refusal(record: Mapping[str, Any]) -> dict[str, Any] | None:
     """Six fields when a batch's predecessor does not resolve or recompute, else None.
 
@@ -485,8 +502,18 @@ def release(*, hb_epoch: int | None = None) -> dict[str, Any]:
 
     Returns with the release final. Nothing in this function consults the
     recorder, and no later submission can undo what it appended.
+
+    A chain that does not verify (a receipt deleted or tampered with, the prior
+    release's among them) is the six-field, non-terminal
+    RELEASE_PREDECESSOR_RECEIPT_UNVERIFIED, with nothing written.
     """
-    segment = verified_segment()
+    try:
+        segment = verified_segment()
+    except ReleaseRefused as refused:
+        if refused.failed_predicate != SEGMENT_PREDICATE:
+            raise
+        return {"schema": RESULT_SCHEMA, "operation": RELEASE_CLASS, "released": False,
+                **release_refusal_record("RELEASE_PREDECESSOR_RECEIPT_UNVERIFIED", refused)}
     if not segment["segment"]:
         # Nothing to release is not a failure and not an empty batch: an empty
         # batch receipt would assert a handover that did not happen.
@@ -743,9 +770,7 @@ def main() -> int:
                     "standing must declare the predecessor key; null is explicit genesis")
             result = release_and_submit(standing=standing, hb_epoch=args.hb_epoch)
     except ReleaseRefused as refused:
-        print(json.dumps({"disposition": DENY,
-                          "failed_predicate": refused.failed_predicate,
-                          "reason": refused.reason}, sort_keys=True))
+        print(json.dumps(release_refusal_record("RELEASE_REFUSED", refused), sort_keys=True))
         return 1
 
     rendered = json.dumps(result, indent=2, sort_keys=True) + "\n"

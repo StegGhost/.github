@@ -1535,6 +1535,53 @@ class ProcessBoundaryExitSplit(unittest.TestCase):
         self.assertTrue(egress.exists())
         self.assertFalse(self.quarantine.exists() and any(self.quarantine.iterdir()))
 
+    def test_an_unknown_exit_is_refused_terminal_and_quarantined(self):
+        # Only 75 is non-terminal: exit 1, or an unknown code such as 3, is a
+        # terminal six-field refusal with a marker, never left pending.
+        import sys
+        envelope = self.tmp / "in.json"
+        envelope.write_text(json.dumps(self.envelope))
+        genuine = self.run_once.PROCESS_BOUNDARY
+        for code in (1, 3):
+            with self.subTest(exit=code):
+                quarantine = self.tmp / ("quarantine-" + str(code))
+                self.run_once.PROCESS_BOUNDARY = [sys.executable, "-c", "import sys; sys.exit(%d)" % code]
+                try:
+                    status, printed = self.run_once.run(envelope, self.tmp / "egress.json", quarantine)
+                finally:
+                    self.run_once.PROCESS_BOUNDARY = genuine
+                self.assertEqual((status, printed["failure_code"], printed["terminal"]),
+                                 (65, "PROCESS_BOUNDARY_REFUSED_EXIT_" + str(code), True))
+                for field in ("failed_predicate", "required_evidence_or_repair", "retry_entrypoint",
+                              "owning_existing_goal", "next_attempt"):
+                    self.assertIn(field, printed)
+                self.assertEqual(len(list(quarantine.glob("*.json"))), 1)
+
+    def test_every_content_fault_exits_65_with_a_terminal_record(self):
+        # The refusals that were bare SystemExit strings route through 65.
+        registry = json.loads((TREE / "org-boundary/registry/services.json").read_text())
+        other = next(s["service_id"] for s in registry["services"]
+                     if s.get("boundary_role") != "BOUNDARY_LOCAL_DIAGNOSTIC")
+        cases = {
+            "missing:": {k: v for k, v in self.envelope.items() if k != "evidence"},
+            "wrong-destination-org": {**self.envelope, "destination": {**self.envelope["destination"], "org": "Else"}},
+            "unknown-service": {**self.envelope, "destination": {**self.envelope["destination"], "service": "no-such"}},
+            "endpoint-adapter-not-installed": {**self.envelope,
+                                               "destination": {**self.envelope["destination"], "service": other}},
+            "no-standing-declared": {k: v for k, v in self.envelope.items() if k != "standing"},
+        }
+        for reason, envelope in cases.items():
+            with self.subTest(reason=reason):
+                path = self.tmp / "case.json"
+                path.write_text(json.dumps(envelope))
+                done = self.boundary(path, self.tmp / "case-out.json")
+                record = json.loads(done.stdout.strip().splitlines()[-1])
+                self.assertEqual((done.returncode, record["failure_code"], record["terminal"]),
+                                 (65, "PROCESS_BOUNDARY_INPUT_FAULT", True))
+                self.assertIn(reason, done.stderr)
+                self.assertNotIn("Traceback", done.stderr)
+                self.assertFalse((self.tmp / "case-out.json").exists())
+
     def test_bad_input_is_quarantined_with_a_terminal_record(self):
         envelope = self.tmp / "in.json"
         envelope.write_text(json.dumps({**self.envelope,

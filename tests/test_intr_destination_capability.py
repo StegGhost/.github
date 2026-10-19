@@ -1683,6 +1683,26 @@ class FailedHeadPublishDoesNotWedgeTests(AddressedAndClosedTests):
         self.assert_predecessor_refusal(refused, "RELEASE_PREDECESSOR_DIGEST_MISMATCH")
         self.assertEqual(self.release_classes(release), 1)
 
+    def test_a_deleted_or_tampered_prior_release_receipt_is_refused_six_field(self):
+        # C3: a chain that does not verify -- the prior release receipt really
+        # deleted, or tampered with -- is RELEASE_PREDECESSOR_RECEIPT_UNVERIFIED,
+        # six-field and non-terminal, with nothing written; never a bare DENY.
+        for damage in ("deleted", "tampered"):
+            with self.subTest(damage=damage):
+                release, emitter = self.release_modules("c3_chain_" + damage)
+                work = self.fresh_ledgers()
+                self.seed_transition(release, emitter, "c3c:1")
+                first = release.release(hb_epoch=self.SUPPLIED)
+                self.seed_transition(release, emitter, "c3c:2")
+                path = work / "org" / "receipts" / (first["release_organization_receipt_sha256"].split(":", 1)[1] + ".json")
+                if damage == "deleted":
+                    path.unlink()
+                else:
+                    path.write_text(json.dumps({**json.loads(path.read_text()), "authority_effect": "TAMPERED"}))
+                refused = release.release(hb_epoch=self.SUPPLIED)
+                self.assert_predecessor_refusal(refused, "RELEASE_PREDECESSOR_RECEIPT_UNVERIFIED")
+                self.assertEqual(self.release_classes(release), 1)
+
     def test_a_callers_custody_prefixed_communication_is_still_released(self):
         # V-P11 @35c7cec deferral CUSTODY_PREFIX_USER_COMMUNICATION_NEVER_RELEASED:
         # only the exact custody id of a recorded release is bookkeeping.

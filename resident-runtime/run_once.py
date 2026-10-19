@@ -5,10 +5,11 @@ from org_boundary_runtime import build_egress, validate_org_crossing
 
 ROOT=Path(__file__).resolve().parents[1]
 PROCESS_BOUNDARY=["python3","org-boundary/runtime/process_boundary.py"]
-#: process_boundary's exit split (DC#10). Only 65 -- the envelope's own defect --
-#: is terminal and quarantined. 75, and any other failure, is non-terminal: an
-#: own-state fault never quarantines, and the same envelope is processed once on
-#: the next run (B-P36j/B-P36o).
+#: process_boundary's exit split (DC#10). Only 75 -- its own state faulting -- is
+#: non-terminal: no marker, and the same envelope is processed once on the next
+#: run (B-P36j/B-P36o). 65 is the envelope's own defect: terminal and
+#: quarantined. Any other exit (1, a crash, an unknown code) is refused terminal
+#: and quarantined too, so an unknown failure never stays pending forever.
 EXIT_INPUT_FAULT=65
 EXIT_WRITE_FAULT=75
 QUARANTINE=ROOT/"resident-runtime/federation/quarantine.d"
@@ -58,10 +59,14 @@ def run(ingress_path,egress_path,quarantine=QUARANTINE):
             refusal=record("FRAME_INGEST_FAILED","PROCESS_BOUNDARY_INPUT_FAULT",done.stderr.strip(),True)
             quarantine_envelope(packet_id,refusal,quarantine)
             return EXIT_INPUT_FAULT,refusal
-        if done.returncode!=0:
-            # 75, or anything else (a crash is not proof the envelope is bad).
+        if done.returncode==EXIT_WRITE_FAULT:
             return EXIT_WRITE_FAULT,record("PROCESS_BOUNDARY_WRITE_FAULT","PROCESS_BOUNDARY_COMPLETES",
-                                           "exit "+str(done.returncode)+": "+done.stderr.strip(),False)
+                                           done.stderr.strip(),False)
+        if done.returncode!=0:
+            refusal=record("PROCESS_BOUNDARY_REFUSED_EXIT_"+str(done.returncode),"PROCESS_BOUNDARY_EXITS_0_65_OR_75",
+                           "exit "+str(done.returncode)+": "+done.stderr.strip(),True)
+            quarantine_envelope(packet_id,refusal,quarantine)
+            return EXIT_INPUT_FAULT,refusal
         result=json.loads(result_path.read_text())
     egress=build_egress(ingress,result)
     validate_org_crossing(egress,"EGRESS")
