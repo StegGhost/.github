@@ -704,6 +704,35 @@ class InboundEpochIsSupplied(unittest.TestCase):
         self.assertEqual(KERNEL.consume_and_respond(self.b, mesh_root=self.mesh), [])
         self.assertEqual(CLOCK_CALLS, [])
 
+    def test_an_unreadable_frame_file_is_quarantined_by_name(self):
+        # F-SCAN: a frames.d file that is not JSON, or not an object, is
+        # quarantined six-field FRAME_INGEST_FAILED by its filename; the valid
+        # frame behind it is answered and the next cycle offers neither.
+        frames = self.mesh / "frames.d"
+        frames.mkdir(parents=True, exist_ok=True)
+        (frames / "0000-not-json.json").write_text("{not json")
+        (frames / "0001-a-list.json").write_text("[1,2,3]")
+        KERNEL.publish_frame(self.frame, root=self.mesh)
+        served = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh)
+        refused = [x for x in served if x["result"]["status"] == "REFUSED"]
+        self.assertEqual(sorted(Path(x["path"]).name for x in refused), ["0000-not-json.json", "0001-a-list.json"])
+        for item in refused:
+            refusal = item["result"]["refusal"]
+            self.assertEqual(refusal["failure_code"], "FRAME_INGEST_FAILED")
+            for field in ("disposition", "failed_predicate", "required_evidence_or_repair",
+                          "retry_entrypoint", "owning_existing_goal", "next_attempt"):
+                self.assertIn(field, refusal)
+            marker = json.loads(Path(item["seen_marker"]).read_text())
+            self.assertEqual((marker["frame_name"], marker["failure_code"]),
+                             (Path(item["path"]).name, "FRAME_REFUSED_QUARANTINED"))
+        valid, = [x for x in served if x["result"]["status"] == "CONSUMED"]
+        self.assertSupplied(valid["response_publication"]["frame"])
+        self.assertEqual(KERNEL.consume_and_respond(self.b, mesh_root=self.mesh), [])
+        # A caller with no quarantine (consume_addressed_frames) skips them.
+        scanned = KERNEL.scan_addressed_frames("Org-B", root=self.mesh)
+        self.assertEqual([Path(item["path"]).name for item in scanned], [Path(valid["path"]).name])
+        self.assertEqual(CLOCK_CALLS, [])
+
     def test_monitor_request_status_takes_the_inbound_epoch(self):
         # R2: resident_status is stamped from the request frame's epoch.
         built = KERNEL.build_ecosystem_packets(

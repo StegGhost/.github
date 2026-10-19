@@ -557,7 +557,8 @@ def publish_frame(frame:dict[str,Any], *, root:Path|None=None)->Path:
     path.write_text(json.dumps(frame,indent=2,sort_keys=True)+"\n")
     return path
 
-def scan_addressed_frames(organization:str, *, root:Path|None=None, seen:set[str]|None=None)->list[dict[str,Any]]:
+def scan_addressed_frames(organization:str, *, root:Path|None=None, seen:set[str]|None=None,
+                          include_malformed:bool=False)->list[dict[str,Any]]:
     mesh=(root or federation_root()).resolve()
     frames=mesh/"frames.d"
     if not frames.exists():
@@ -567,7 +568,17 @@ def scan_addressed_frames(organization:str, *, root:Path|None=None, seen:set[str
     for path in sorted(frames.glob("*.json")):
         if path.name in consumed:
             continue
-        frame=json.loads(path.read_text())
+        # Parsed per file: one unreadable file is that file's outcome, not the
+        # scan's, so it never stalls the frames behind it (F-SCAN). It names no
+        # destination, so it is offered only to a caller that quarantines it.
+        try:
+            frame=json.loads(path.read_text())
+            if not isinstance(frame,dict):
+                raise ValueError("frame_is_not_an_object:"+type(frame).__name__)
+        except Exception as error:
+            if include_malformed:
+                out.append({"path":str(path),"frame":None,"error":error})
+            continue
         if frame.get("destination_org")==organization:
             out.append({"path":str(path),"frame":frame})
     return out
@@ -920,7 +931,15 @@ def consume_and_respond(repo_root:Path, *, mesh_root:Path|None=None, seen:set[st
     durable_seen=federation_seen_frame_names(repo_root)
     effective_seen=set(seen or set())|durable_seen
     out=[]
-    for item in scan_addressed_frames(organization,root=mesh_root,seen=effective_seen):
+    for item in scan_addressed_frames(organization,root=mesh_root,seen=effective_seen,include_malformed=True):
+        if item["frame"] is None:
+            # An unreadable file is quarantined by its filename (F-SCAN).
+            result={"status":"REFUSED","packet_id":None,"refusal":{
+                **ingest_refusal(FRAME_INGEST_FAILED,str(item["error"])),"failed_predicate":type(item["error"]).__name__}}
+            marker=str(mark_federation_frame_seen(repo_root,item["path"],{},result))
+            out.append({"path":item["path"],"result":result,"response_publication":None,
+                        "response_refusal":None,"seen_marker":marker})
+            continue
         try:
             result,response_publication,response_refusal=_consume_one(
                 repo_root,item,mesh_root=mesh_root,hb_epoch=hb_epoch)
