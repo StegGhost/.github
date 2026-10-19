@@ -441,7 +441,14 @@ def frame_refusal(root:Path, frame:dict[str,Any])->dict[str,Any]|None:
     if not isinstance(ref,dict):
         code,detail=marker
     elif any(field in ref for field in CARRIED_CLAIM_FIELDS):
-        failure=supplied_epoch_failure(ref.get("epoch"),ref)
+        # The CARRIED claim is judged before any CLOCK classification: with a
+        # well-formed epoch, a claim on a clock-form or sampled reference is an
+        # unverified claim, not a malformed epoch (GCAT b2328cd).
+        failure=supplied_epoch_failure(ref.get("epoch"))
+        if failure is None:
+            failure=supplied_epoch_failure(ref.get("epoch"),ref)
+            if failure is not None and failure[0]!=HB_EPOCH_PROVENANCE_UNMARKED:
+                failure=(CARRIED_PROVENANCE_UNVERIFIED,failure[1])
         if failure is not None:
             code,detail=failure
         else:

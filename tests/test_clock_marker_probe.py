@@ -745,6 +745,25 @@ class InboundEpochIsSupplied(unittest.TestCase):
         self.assertEqual([Path(item["path"]).name for item in scanned], [Path(valid["path"]).name])
         self.assertEqual(CLOCK_CALLS, [])
 
+    def test_a_carried_claim_on_a_clock_form_reference_is_unverified(self):
+        # VALIDATOR @1767a3f: a CARRIED claim is judged before CLOCK
+        # classification. With a valid epoch, a claim on a clock-form or
+        # bare-sampled reference is CARRIED_PROVENANCE_UNVERIFIED; a malformed
+        # epoch stays HB_EPOCH_INVALID.
+        RAISING.clear()
+        clock = KERNEL.carrier_frame(dict(self.request, packet_id="carried-clock"))
+        claim = {"source": "ORGANIZATION_LEDGER_HEAD", "head_receipt_sha": "sha256:" + "f" * 64}
+        bare = {k: v for k, v in clock["heartbeat_reference"].items() if k != "derived_from_clock"}
+        cases = (({**clock["heartbeat_reference"], **claim}, "CARRIED_PROVENANCE_UNVERIFIED"),
+                 ({**bare, **claim}, "CARRIED_PROVENANCE_UNVERIFIED"),
+                 ({**clock["heartbeat_reference"], **claim, "epoch": "abc"}, "HB_EPOCH_INVALID"))
+        for reference, code in cases:
+            with self.subTest(code=code, flag=reference.get("derived_from_clock")):
+                body = {k: v for k, v in clock.items() if k != "frame_sha256"}
+                body["heartbeat_reference"] = reference
+                frame = {**body, "frame_sha256": KERNEL.sha(body)}
+                self.assertEqual(KERNEL.frame_refusal(self.b, frame)["failure_code"], code)
+
     def test_monitor_request_status_takes_the_inbound_epoch(self):
         # R2: resident_status is stamped from the request frame's epoch.
         built = KERNEL.build_ecosystem_packets(
