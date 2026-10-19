@@ -37,6 +37,11 @@ def recorded(target,head,transition_id,transition_class):
   cursor=receipt.get("previous_receipt_sha256")
  return found
 _ABSENT=object()
+# The receipt references the epoch its caller supplies. An absent or invalid one
+# is refused six-field FAIL_CLOSED before the store is opened; no clock is read
+# to stand in for it (StegVerse-Labs/.github@bc608a3, WU-B13a).
+EPOCH_RETRY_ENTRYPOINT=".stegverse/transition-ledger/emit.py::append (hb_epoch=, or --hb-epoch)"
+RepoLedgerEpochRefused=kernel.SuppliedEpochRefused
 def append(transition_id,transition_class,predecessor_state_sha256,successor_state_sha256,evidence=None,authority_effect="NONE",hb_epoch=None,idempotent_on=None):
  """Append one repository transition receipt and publish HEAD atomically.
 
@@ -46,7 +51,11 @@ def append(transition_id,transition_class,predecessor_state_sha256,successor_sta
  successor state, authority effect and named evidence fields, or the call
  refuses with `ledger_receipt_collision`. The heartbeat reference is not
  compared: a retry legitimately arrives at another epoch.
+
+ `hb_epoch` is required. An absent or invalid epoch raises
+ `RepoLedgerEpochRefused` carrying the six-field refusal, and nothing is written.
  """
+ hb=kernel.supplied_hb_reference(hb_epoch,retry_entrypoint=EPOCH_RETRY_ENTRYPOINT)
  store=ledger_store.open_store(lr());store.initialize()
  with store.exclusive():
   head=store.get(ledger_store.HEAD_KEY);prev=(head or {}).get("receipt_sha256")
@@ -60,13 +69,16 @@ def append(transition_id,transition_class,predecessor_state_sha256,successor_sta
         or any(theirs.get(k,_ABSENT)!=mine.get(k,_ABSENT) for k in idempotent_on)):
      raise ValueError("ledger_receipt_collision")
     return prior
-  b={"schema":"stegverse.repo-transition-receipt/v1","repository":C["repository"],"transition_id":transition_id,"transition_class":transition_class,"predecessor_state_sha256":predecessor_state_sha256,"successor_state_sha256":successor_state_sha256,"evidence":evidence if evidence is not None else {},"authority_effect":authority_effect,"hb_reference":kernel.hb_reference(epoch=hb_epoch) if hb_epoch is not None else kernel.hb_reference(),"previous_receipt_sha256":prev};dg=sha(b);r={**b,"receipt_sha256":dg};key=ledger_store.receipt_key(dg)
+  b={"schema":"stegverse.repo-transition-receipt/v1","repository":C["repository"],"transition_id":transition_id,"transition_class":transition_class,"predecessor_state_sha256":predecessor_state_sha256,"successor_state_sha256":successor_state_sha256,"evidence":evidence if evidence is not None else {},"authority_effect":authority_effect,"hb_reference":hb,"previous_receipt_sha256":prev};dg=sha(b);r={**b,"receipt_sha256":dg};key=ledger_store.receipt_key(dg)
   existing=store.get(key)
   if existing is not None and existing!=r:raise SystemExit("receipt collision")
   if existing is None:store.put(key,r)
   store.put(ledger_store.HEAD_KEY,{"repository":C["repository"],"receipt_sha256":dg,"receipt_path":store.locator(key)})
  return r
 def main():
- p=argparse.ArgumentParser();p.add_argument("--transition-id",required=True);p.add_argument("--transition-class",required=True);p.add_argument("--predecessor-state-sha256",required=True);p.add_argument("--successor-state-sha256",required=True);p.add_argument("--evidence-json",default="{}");p.add_argument("--authority-effect",default="NONE");p.add_argument("--hb-epoch",type=int,default=None,help="heartbeat epoch; derived from the host clock, and marked as derived, when absent");a=p.parse_args()
- print(json.dumps(append(a.transition_id,a.transition_class,a.predecessor_state_sha256,a.successor_state_sha256,json.loads(a.evidence_json),a.authority_effect,a.hb_epoch),sort_keys=True))
+ p=argparse.ArgumentParser();p.add_argument("--transition-id",required=True);p.add_argument("--transition-class",required=True);p.add_argument("--predecessor-state-sha256",required=True);p.add_argument("--successor-state-sha256",required=True);p.add_argument("--evidence-json",default="{}");p.add_argument("--authority-effect",default="NONE");p.add_argument("--hb-epoch",default=None,help="supplied heartbeat epoch (ASCII digits, >= 32); refused FAIL_CLOSED when absent, never read from a clock");a=p.parse_args()
+ try:r=append(a.transition_id,a.transition_class,a.predecessor_state_sha256,a.successor_state_sha256,json.loads(a.evidence_json),a.authority_effect,a.hb_epoch)
+ except RepoLedgerEpochRefused as exc:
+  print(json.dumps(exc.refusal,sort_keys=True));raise SystemExit(1)
+ print(json.dumps(r,sort_keys=True))
 if __name__=="__main__":main()

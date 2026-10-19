@@ -217,6 +217,16 @@ def _recorded(disposition: str, payload: Any, packet_id: str, hb_epoch: int | No
     transition_class = OPERATION_ID if disposition == ALLOW else REFUSED_CLASS
     try:
         appended, replayed = _append(transition_class, packet_id, evidence, hb_epoch)
+    except repository_ledger.RepoLedgerEpochRefused as exc:
+        # No epoch was supplied, so neither receipt is written; a clock is not
+        # read to stand in for it.
+        refused = _evidence(payload, packet_id, FAIL_CLOSED,
+                            failed_predicate=exc.failed_predicate, detail=str(exc))
+        result = _result(refused, None, replayed=False, received=False)
+        result.update({field: exc.refusal[field] for field in (
+            "failure_code", "required_evidence_or_repair", "retry_entrypoint",
+            "owning_existing_goal", "next_attempt")})
+        return result
     except ValueError as exc:
         if str(exc) != "ledger_receipt_collision":
             raise
