@@ -176,12 +176,34 @@ def frame_supplied_epoch(frame:Any)->int|None:
         return None
     return int(str(ref["epoch"]))
 
-def supplied_hb_reference(hb_epoch:Any, *, retry_entrypoint:str)->dict[str,Any]:
-    """The heartbeat reference of a supplied epoch, or SuppliedEpochRefused. No clock is read."""
+def supplied_hb_reference(hb_epoch:Any, *, retry_entrypoint:str, carried:Any=None,
+                          root:Path|None=None)->dict[str,Any]:
+    """The heartbeat reference of a supplied epoch, or SuppliedEpochRefused. No clock is read.
+
+    With `carried` ({"source", "head_receipt_sha"}) the reference reads CARRIED:
+    the claim is verified against this organization's current verified ledger
+    head under `root` first, and refused six-field CARRIED_PROVENANCE_UNVERIFIED
+    when it does not verify. It is never stripped to a bare supplied stamp.
+    """
     refusal=writer_epoch_refusal(hb_epoch,retry_entrypoint=retry_entrypoint)
     if refusal is not None:
         raise SuppliedEpochRefused(refusal)
-    return hb_reference(epoch=int(str(hb_epoch)))
+    reference=hb_reference(epoch=int(str(hb_epoch)))
+    if carried is None:
+        return reference
+    if not isinstance(carried,dict) or set(carried)!={"source","head_receipt_sha"}:
+        failure="a CARRIED claim names exactly source and head_receipt_sha"
+    else:
+        reference={**reference,"source":carried["source"],"head_receipt_sha":carried["head_receipt_sha"]}
+        failure=("no root to verify the CARRIED claim against" if root is None
+                 else carried_claim_failure(Path(root),reference))
+    if failure is not None:
+        raise SuppliedEpochRefused({**writer_epoch_refusal(None,retry_entrypoint=retry_entrypoint),
+                                    "failure_code":CARRIED_PROVENANCE_UNVERIFIED,"detail":failure,
+                                    "required_evidence_or_repair":("a CARRIED claim naming this organization's "
+                                                                   "current verified ledger head at its epoch"),
+                                    "next_attempt":"supply a claim that verifies, or a plain supplied epoch; nothing was written"})
+    return reference
 
 def derive_channel(payload_hash:str)->dict[str,Any]:
     if not isinstance(payload_hash,str) or not payload_hash.startswith("sha256:") or len(payload_hash)!=71:
@@ -298,7 +320,7 @@ def carried_standing(request_packet:dict[str,Any])->dict[str,Any]:
     return {**declared,"standing_carried_forward_from_request":True}
 
 def dispatch(root:Path, packet:dict[str,Any], *, mesh_root:Path|None=None,
-             hb_epoch:int|None=None)->dict[str,Any]:
+             hb_epoch:int|None=None, hb_carried:dict[str,Any]|None=None)->dict[str,Any]:
     registry=load_registry(root)
     if packet["destination"]["org"]!=registry["organization"]: raise ValueError("wrong_destination_org")
     service=next((s for s in registry["services"] if s["service_id"]==packet["destination"]["service"]),None)
@@ -329,7 +351,7 @@ def dispatch(root:Path, packet:dict[str,Any], *, mesh_root:Path|None=None,
         r=receipt(kind,packet["packet_id"],service["service_id"],prev,{"payload_hash":sha(packet["payload"])})
         receipts.append(r); prev=r["receipt_id"]
     if role=="BOUNDARY_LOCAL_CONTROL":
-        application_result=handle_control_message(root,packet,registry,hb_epoch=hb_epoch)
+        application_result=handle_control_message(root,packet,registry,hb_epoch=hb_epoch,hb_carried=hb_carried)
     elif role==CAPABILITY_INGRESS_ROLE:
         # The address resolves to the receiving operation the overlay binds.
         # That operation records both ledger levels itself. This kernel's
@@ -339,7 +361,8 @@ def dispatch(root:Path, packet:dict[str,Any], *, mesh_root:Path|None=None,
         # application result. Loaded only for this role.
         try:
             application_result=capability_ingress(root).receive(
-                root,service,packet,registry=registry,mesh_root=mesh_root,hb_epoch=hb_epoch)
+                root,service,packet,registry=registry,mesh_root=mesh_root,hb_epoch=hb_epoch,
+                hb_carried=hb_carried)
         except SystemExit as refused:
             raise ValueError("capability_ingress_refused:"+str(refused)) from None
     else:
@@ -457,11 +480,14 @@ def ingest_frame(root:Path, frame:dict[str,Any], *, mesh_root:Path|None=None,
     # The frame's validated epoch is the supplied one for this crossing, so
     # the receiving operation records at it rather than refusing for want of one.
     # A frame without one takes the epoch supplied to this ingestion, if any.
-    # A CARRIED claim that verified above names a supplied head epoch.
+    # A CARRIED claim that verified above names a supplied head epoch, and
+    # everything recorded for the crossing carries the claim (B-P36m).
     epoch=frame_supplied_epoch(frame)
     ref=frame.get("heartbeat_reference")
+    carried=None
     if epoch is None and isinstance(ref,dict) and any(field in ref for field in CARRIED_CLAIM_FIELDS):
         epoch=int(str(ref["epoch"]))
+        carried={"source":ref["source"],"head_receipt_sha":ref["head_receipt_sha"]}
     # Both supplied and disagreeing: neither is chosen over the other.
     if hb_epoch is not None and epoch is not None and int(str(hb_epoch))!=epoch:
         return {"status":"REFUSED","packet_id":frame["packet_id"],"quarantine":False,
@@ -469,7 +495,7 @@ def ingest_frame(root:Path, frame:dict[str,Any], *, mesh_root:Path|None=None,
                                          " disagrees with the frame's epoch "+str(epoch))}
     if epoch is None and hb_epoch is not None:
         epoch=int(str(hb_epoch))
-    result=dispatch(root,packet,mesh_root=mesh_root,hb_epoch=epoch)
+    result=dispatch(root,packet,mesh_root=mesh_root,hb_epoch=epoch,hb_carried=carried)
     return {"status":"CONSUMED","packet":packet,"execution_result":result}
 
 __all__=["hb_reference","derive_channel","carrier_frame","recover_packet","dispatch","persist_outbox","ingest_frame",
@@ -667,7 +693,8 @@ def load_federation_directory(root:Path)->dict[str,Any]:
         raise ValueError("federation_directory_denominator_mismatch")
     return value
 
-def resident_status(root:Path, registry:dict[str,Any]|None=None, *, hb_epoch:int|None=None)->dict[str,Any]:
+def resident_status(root:Path, registry:dict[str,Any]|None=None, *, hb_epoch:int|None=None,
+                    hb_carried:dict[str,Any]|None=None)->dict[str,Any]:
     reg=registry or load_registry(root)
     activation_path=root/"resident-runtime/activation-manifest.json"
     activation=json.loads(activation_path.read_text()) if activation_path.exists() else {}
@@ -681,7 +708,7 @@ def resident_status(root:Path, registry:dict[str,Any]|None=None, *, hb_epoch:int
       "org_control_service":organization_slug(reg["organization"])+".org-control",
       # The supplied epoch when the request carried one; the clock default,
       # marked derived_from_clock true, only for a request that did not.
-      "heartbeat_reference":hb_reference() if hb_epoch is None else hb_reference(epoch=hb_epoch),
+      "heartbeat_reference":hb_reference() if hb_epoch is None else {**hb_reference(epoch=hb_epoch),**(hb_carried or {})},
       "runtime_observation_claimed":False
     }
 
@@ -715,7 +742,7 @@ def persist_work_request(root:Path, packet:dict[str,Any])->dict[str,Any]:
     return {"state":record["state"],"intake_ref":str(path),"execution_authority_inferred":False}
 
 def handle_control_message(root:Path, packet:dict[str,Any], registry:dict[str,Any], *,
-                           hb_epoch:int|None=None)->dict[str,Any]:
+                           hb_epoch:int|None=None, hb_carried:dict[str,Any]|None=None)->dict[str,Any]:
     payload=packet.get("payload") or {}
     message_class=payload.get("message_class")
     result={
@@ -732,7 +759,7 @@ def handle_control_message(root:Path, packet:dict[str,Any], registry:dict[str,An
         if hb_epoch is None:
             result["monitor_status_refusal"]=writer_epoch_refusal(None,retry_entrypoint=INGEST_RETRY_ENTRYPOINT+" (hb_epoch=)")
         else:
-            result["monitor_status"]=resident_status(root,registry,hb_epoch=hb_epoch)
+            result["monitor_status"]=resident_status(root,registry,hb_epoch=hb_epoch,hb_carried=hb_carried)
     elif message_class=="ecosystem.work.request":
         result["work_intake"]=persist_work_request(root,packet)
     elif message_class=="ecosystem.communication":

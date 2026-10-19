@@ -1139,9 +1139,21 @@ class CarriedClaimIsVerifiedTests(AddressedAndClosedTests):
         self.assertEqual(result["result"]["status"], "CONSUMED", result["result"])
         operation = result["result"]["execution_result"]["application_result"]["receiving_operation_result"]
         self.assertEqual(operation["disposition"], "ALLOW", operation)
-        for record in self.receipts("STEGVERSE_ORG_LEDGER_ROOT", "stegverse.organization-transition-receipt/v1"):
-            self.assertEqual(record["hb_reference"]["epoch"], self.SUPPLIED)
-            self.assertIs(record["hb_reference"]["derived_from_clock"], False)
+        # B-P36m: both receipts for the crossing read CARRIED, never a bare
+        # supplied stamp: source and head_receipt_sha travel with the epoch.
+        repository = [r for r in self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")
+                      if r["transition_id"].endswith(":carried-verified")]
+        organization = [r for r in self.receipts("STEGVERSE_ORG_LEDGER_ROOT",
+                                                 "stegverse.organization-transition-receipt/v1")
+                        if r["source_transition_id"].endswith(":carried-verified")]
+        self.assertEqual((len(repository), len(organization)), (1, 1))
+        for record in repository + organization:
+            reference = record["hb_reference"]
+            self.assertEqual(reference["epoch"], self.SUPPLIED)
+            self.assertIs(reference["derived_from_clock"], False)
+            self.assertEqual(reference["source"], "ORGANIZATION_LEDGER_HEAD")
+            self.assertEqual(reference["head_receipt_sha"], head["receipt_sha256"])
+            self.assertNotIn("sampled_unix_ns", reference)
 
 
 def subprocess_git(args):

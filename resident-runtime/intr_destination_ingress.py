@@ -182,7 +182,7 @@ def _result(evidence: Mapping[str, Any], appended: Mapping[str, Any] | None, *,
 
 
 def _append(transition_class: str, packet_id: str, evidence: Mapping[str, Any],
-            hb_epoch: int | None) -> tuple[dict[str, Any], bool]:
+            hb_epoch: int | None, hb_carried: Mapping[str, Any] | None = None) -> tuple[dict[str, Any], bool]:
     """Append at both levels. A replay of the same packet returns the recorded pair."""
     predecessor = evidence["payload_sha256"]
     successor = sha({"disposition": evidence["disposition"], "packet_id": packet_id,
@@ -194,6 +194,12 @@ def _append(transition_class: str, packet_id: str, evidence: Mapping[str, Any],
         hb_epoch, retry_entrypoint=repository_ledger.EPOCH_RETRY_ENTRYPOINT)
     if refusal is not None:
         raise repository_ledger.RepoLedgerEpochRefused(refusal)
+    # A CARRIED claim is verified before either store is opened, so a claim that
+    # does not verify leaves neither level written (B-P36m).
+    if hb_carried is not None:
+        repository_ledger.kernel.supplied_hb_reference(
+            hb_epoch, retry_entrypoint=repository_ledger.EPOCH_RETRY_ENTRYPOINT,
+            carried=dict(hb_carried), root=ROOT)
     store = repository_ledger.ledger_store.open_store(repository_ledger.lr())
     store.initialize()
     head = store.get(repository_ledger.ledger_store.HEAD_KEY)
@@ -201,7 +207,8 @@ def _append(transition_class: str, packet_id: str, evidence: Mapping[str, Any],
     repository_receipt = repository_ledger.append(
         transition_id, transition_class, predecessor, successor, dict(evidence),
         "NONE", hb_epoch=hb_epoch,
-        idempotent_on=("communication_id", "payload_sha256", "disposition"))
+        idempotent_on=("communication_id", "payload_sha256", "disposition"),
+        hb_carried=None if hb_carried is None else dict(hb_carried))
     # The organization receipt takes the epoch supplied here, never one read
     # back from the repository receipt. A replayed repository receipt may carry
     # an earlier, clock-derived epoch, and handing that on would mint an
@@ -212,18 +219,20 @@ def _append(transition_class: str, packet_id: str, evidence: Mapping[str, Any],
         {"operation": OPERATION_ID, "profile_id": PROFILE_ID,
          "disposition": evidence["disposition"],
          "communication_id": evidence.get("communication_id")},
-        "NONE", hb_epoch=hb_epoch, idempotent=True)
+        "NONE", hb_epoch=hb_epoch, idempotent=True,
+        hb_carried=None if hb_carried is None else dict(hb_carried))
     return ({"repository_receipt": repository_receipt,
              "organization_receipt": organization_receipt}, prior is not None)
 
 
 def _recorded(disposition: str, payload: Any, packet_id: str, hb_epoch: int | None, *,
-              failed_predicate: str | None = None, detail: str | None = None) -> dict[str, Any]:
+              failed_predicate: str | None = None, detail: str | None = None,
+              hb_carried: Mapping[str, Any] | None = None) -> dict[str, Any]:
     evidence = _evidence(payload, packet_id, disposition,
                          failed_predicate=failed_predicate, detail=detail)
     transition_class = OPERATION_ID if disposition == ALLOW else REFUSED_CLASS
     try:
-        appended, replayed = _append(transition_class, packet_id, evidence, hb_epoch)
+        appended, replayed = _append(transition_class, packet_id, evidence, hb_epoch, hb_carried)
     except (repository_ledger.RepoLedgerEpochRefused, organization_ledger.OrgLedgerEpochRefused) as exc:
         # No epoch was supplied, so neither receipt is written; a clock is not
         # read to stand in for it. A clock-provenance repository receipt is not
@@ -277,7 +286,8 @@ def self_close(communication_id: str, *, registry: Mapping[str, Any],
 
 def receive(payload: Any, *, registry: Mapping[str, Any], standing: Mapping[str, Any] | None = None,
             packet_id: str = "organization-intr-destination",
-            hb_epoch: int | None = None, mesh_root: Path | None = None) -> dict[str, Any]:
+            hb_epoch: int | None = None, mesh_root: Path | None = None,
+            hb_carried: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Acknowledge one diagnostic, or record the refusal.
 
     ``standing`` and ``mesh_root`` are accepted because the capability resolver
@@ -288,12 +298,12 @@ def receive(payload: Any, *, registry: Mapping[str, Any], standing: Mapping[str,
     if not isinstance(registry, Mapping):
         return _recorded(DENY, payload, packet_id, hb_epoch,
                          failed_predicate="CAPABILITY_MAP_IS_A_MAPPING",
-                         detail="registry is not an object")
+                         detail="registry is not an object", hb_carried=hb_carried)
     refusal = shape_refusal(payload)
     if refusal is not None:
         return _recorded(DENY, payload, packet_id, hb_epoch,
-                         failed_predicate=refusal[0], detail=refusal[1])
-    return _recorded(ALLOW, payload, packet_id, hb_epoch)
+                         failed_predicate=refusal[0], detail=refusal[1], hb_carried=hb_carried)
+    return _recorded(ALLOW, payload, packet_id, hb_epoch, hb_carried=hb_carried)
 
 
 #: The CLI's epoch is refused six-field FAIL_CLOSED before anything is written.

@@ -603,23 +603,70 @@ class InboundEpochIsSupplied(unittest.TestCase):
         self.assertIsNone(KERNEL.frame_supplied_epoch(carried))
 
 
-class NoWriterAcceptsAProvenanceArgument(unittest.TestCase):
-    """B-P36i: no receipt writer takes a caller-supplied provenance; each
-    takes only hb_epoch, so an invented CARRIED source cannot be passed in."""
+class WritersVerifyACarriedClaim(unittest.TestCase):
+    """B-P36i / B-P36m: a writer given a CARRIED claim verifies it against the
+    current organization ledger head (head derived_from_clock false, shared
+    rule, epoch equal) or refuses CARRIED_PROVENANCE_UNVERIFIED and writes
+    nothing. A claim that verifies is carried on the receipt, never stripped."""
 
-    def test_writers_refuse_a_provenance_argument(self):
-        import inspect
-        writers = [
-            load("probe_emit", ".stegverse/transition-ledger/emit.py").append,
-            load("probe_aggregate_writer", "resident-runtime/aggregate_repo_transition.py").append,
-        ]
-        for writer in writers:
-            parameters = inspect.signature(writer).parameters
-            self.assertIn("hb_epoch", parameters)
-            for name in parameters:
-                self.assertNotIn("provenance", name)
-                self.assertNotIn("head_receipt", name)
+    def setUp(self):
+        import os
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        saved = {key: os.environ.get(key) for key in ("STEGVERSE_ORG_LEDGER_ROOT", "STEGVERSE_REPO_LEDGER_ROOT")}
+        os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(self.tmp / "org")
+        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(self.tmp / "repo")
 
+        def restore():
+            for key, value in saved.items():
+                os.environ.pop(key, None)
+                if value is not None:
+                    os.environ[key] = value
+        self.addCleanup(restore)
+        self.emit = load("probe_emit_carried", ".stegverse/transition-ledger/emit.py")
+        self.org = load("probe_aggregate_carried", "resident-runtime/aggregate_repo_transition.py")
+
+    def files(self):
+        return sorted(p for p in self.tmp.rglob("*") if p.is_file())
+
+    def org_append(self, receipt, **kw):
+        return self.org.append(receipt, "REPO_STATE_PROPAGATION", "sha256:" + "1" * 64, "sha256:" + "2" * 64,
+                               {}, "NONE", **kw)
+
+    def test_an_invented_head_is_refused_by_every_writer_and_writes_nothing(self):
+        forged = {"source": "ORGANIZATION_LEDGER_HEAD", "head_receipt_sha": "sha256:" + "f" * 64}
+        with self.assertRaises(self.emit.RepoLedgerEpochRefused) as refused:
+            self.emit.append("t:carried", "T", "sha256:" + "0" * 64, "sha256:" + "1" * 64,
+                             hb_epoch=4096, hb_carried=forged)
+        self.assertEqual(refused.exception.refusal["failure_code"], "CARRIED_PROVENANCE_UNVERIFIED")
+        for field in ("disposition", "failed_predicate", "required_evidence_or_repair",
+                      "retry_entrypoint", "owning_existing_goal", "next_attempt"):
+            self.assertIn(field, refused.exception.refusal)
+        self.assertEqual(self.files(), [])
+        supplied = self.emit.append("t:supplied", "T", "sha256:" + "0" * 64, "sha256:" + "1" * 64, hb_epoch=4096)
+        before = self.files()
+        for claim in (forged, {**forged, "extra": 1}, {"source": "X", "head_receipt_sha": forged["head_receipt_sha"]}):
+            with self.assertRaises(self.org.OrgLedgerEpochRefused) as refused:
+                self.org_append(supplied, hb_epoch=4096, hb_carried=claim)
+            self.assertEqual(refused.exception.refusal["failure_code"], "CARRIED_PROVENANCE_UNVERIFIED")
+        self.assertEqual(self.files(), before)
+
+    def test_a_claim_naming_the_current_head_is_carried_on_the_receipt(self):
+        supplied = self.emit.append("t:seed", "T", "sha256:" + "0" * 64, "sha256:" + "1" * 64, hb_epoch=4096)
+        head = self.org_append(supplied, hb_epoch=4096)
+        claim = {"source": "ORGANIZATION_LEDGER_HEAD", "head_receipt_sha": head["receipt_sha256"]}
+        repo = self.emit.append("t:carried", "T", "sha256:" + "1" * 64, "sha256:" + "2" * 64,
+                                hb_epoch=4096, hb_carried=claim)
+        org = self.org_append(repo, hb_epoch=4096, hb_carried=claim)
+        for record in (repo, org):
+            self.assertEqual({k: record["hb_reference"][k] for k in ("epoch", "derived_from_clock", "source",
+                                                                     "head_receipt_sha")},
+                             {"epoch": 4096, "derived_from_clock": False, **claim})
+        # A claim at another epoch than the head's does not verify.
+        with self.assertRaises(self.org.OrgLedgerEpochRefused):
+            self.org_append(self.emit.append("t:other", "T", "sha256:" + "2" * 64, "sha256:" + "3" * 64,
+                                             hb_epoch=4096),
+                            hb_epoch=5000, hb_carried={**claim, "head_receipt_sha": org["receipt_sha256"]})
 
 if __name__ == "__main__":
     unittest.main()

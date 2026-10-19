@@ -42,7 +42,7 @@ _ABSENT=object()
 # to stand in for it (StegVerse-Labs/.github@bc608a3, WU-B13a).
 EPOCH_RETRY_ENTRYPOINT=".stegverse/transition-ledger/emit.py::append (hb_epoch=, or --hb-epoch)"
 RepoLedgerEpochRefused=kernel.SuppliedEpochRefused
-def append(transition_id,transition_class,predecessor_state_sha256,successor_state_sha256,evidence=None,authority_effect="NONE",hb_epoch=None,idempotent_on=None):
+def append(transition_id,transition_class,predecessor_state_sha256,successor_state_sha256,evidence=None,authority_effect="NONE",hb_epoch=None,idempotent_on=None,hb_carried=None):
  """Append one repository transition receipt and publish HEAD atomically.
 
  With `idempotent_on` (a tuple of evidence keys) a transition the chain already
@@ -54,8 +54,10 @@ def append(transition_id,transition_class,predecessor_state_sha256,successor_sta
 
  `hb_epoch` is required. An absent or invalid epoch raises
  `RepoLedgerEpochRefused` carrying the six-field refusal, and nothing is written.
+ With `hb_carried` the reference carries that CARRIED claim, verified against
+ the organization's current ledger head or refused CARRIED_PROVENANCE_UNVERIFIED.
  """
- hb=kernel.supplied_hb_reference(hb_epoch,retry_entrypoint=EPOCH_RETRY_ENTRYPOINT)
+ hb=kernel.supplied_hb_reference(hb_epoch,retry_entrypoint=EPOCH_RETRY_ENTRYPOINT,carried=hb_carried,root=ROOT)
  store=ledger_store.open_store(lr());store.initialize()
  with store.exclusive():
   head=store.get(ledger_store.HEAD_KEY);prev=(head or {}).get("receipt_sha256")

@@ -236,9 +236,14 @@ def epoch_refusal(hb_epoch):
     return kernel.writer_epoch_refusal(hb_epoch, retry_entrypoint=EPOCH_RETRY_ENTRYPOINT)
 
 
-def require_supplied_epoch(hb_epoch):
-    """The heartbeat reference of the supplied epoch, or OrgLedgerEpochRefused."""
-    return kernel.supplied_hb_reference(hb_epoch, retry_entrypoint=EPOCH_RETRY_ENTRYPOINT)
+def require_supplied_epoch(hb_epoch, hb_carried=None):
+    """The heartbeat reference of the supplied epoch, or OrgLedgerEpochRefused.
+
+    With `hb_carried` the reference carries that CARRIED claim, verified against
+    this organization's current ledger head or refused CARRIED_PROVENANCE_UNVERIFIED.
+    """
+    return kernel.supplied_hb_reference(hb_epoch, retry_entrypoint=EPOCH_RETRY_ENTRYPOINT,
+                                        carried=hb_carried, root=ROOT)
 
 
 #: A repository receipt whose heartbeat reference was read off a clock is not
@@ -268,7 +273,7 @@ def source_clock_refusal(source_receipt):
 
 
 def append(source_receipt, org_transition_class, predecessor_state, successor_state,
-           boundary_evidence, authority_effect, hb_epoch=None, idempotent=False):
+           boundary_evidence, authority_effect, hb_epoch=None, idempotent=False, hb_carried=None):
     # Admission is decided before the append lock is taken; an inadmissible
     # source receipt never contends for the organization ledger.
     source = verify_source(source_receipt)
@@ -291,7 +296,7 @@ def append(source_receipt, org_transition_class, predecessor_state, successor_st
     # Ordering is a heartbeat count, not a clock reading. The caller supplies
     # the tick; an absent or invalid one raises OrgLedgerEpochRefused here,
     # before the store is opened, so a refusal writes nothing.
-    heartbeat = require_supplied_epoch(hb_epoch)
+    heartbeat = require_supplied_epoch(hb_epoch, hb_carried)
     retained = {source_key(source["source_transition_sha256"]): source_receipt}
     store = open_store(ledger_root())
     store.initialize()
