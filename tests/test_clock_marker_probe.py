@@ -988,7 +988,14 @@ class WritersVerifyACarriedClaim(unittest.TestCase):
         repo = self.emit.append("t:carried", "T", "sha256:" + "1" * 64, "sha256:" + "2" * 64,
                                 hb_epoch=4096, hb_carried=claim)
         org = self.org_append(repo, hb_epoch=4096, hb_carried=claim)
-        for record in (repo, org):
+        # B-P36m (09:00Z): a multi-receipt crossing. The org head has moved past
+        # the admitted one, and later writers still carry the admitted claim:
+        # it is in the chain, recomputes, and is supplied at the carried epoch.
+        repo2 = self.emit.append("t:carried-2", "T", "sha256:" + "2" * 64, "sha256:" + "3" * 64,
+                                 hb_epoch=4096, hb_carried=claim)
+        org2 = self.org_append(repo2, hb_epoch=4096, hb_carried=claim)
+        self.assertNotEqual(org["receipt_sha256"], claim["head_receipt_sha"])
+        for record in (repo, org, repo2, org2):
             self.assertEqual({k: record["hb_reference"][k] for k in ("epoch", "derived_from_clock", "source",
                                                                      "head_receipt_sha")},
                              {"epoch": 4096, "derived_from_clock": False, **claim})

@@ -240,7 +240,7 @@ def supplied_hb_reference(hb_epoch:Any, *, retry_entrypoint:str, carried:Any=Non
     else:
         reference={**reference,"source":carried["source"],"head_receipt_sha":carried["head_receipt_sha"]}
         failure=("no root to verify the CARRIED claim against" if root is None
-                 else carried_claim_failure(Path(root),reference))
+                 else carried_chain_failure(Path(root),reference))
     if failure is not None:
         raise SuppliedEpochRefused({**writer_epoch_refusal(None,retry_entrypoint=retry_entrypoint),
                                     "failure_code":CARRIED_PROVENANCE_UNVERIFIED,"detail":failure,
@@ -463,6 +463,51 @@ def carried_claim_failure(root:Path, ref:dict[str,Any])->str|None:
         return "the organization ledger head's epoch is not a supplied one"
     if ref.get("epoch")!=head_ref["epoch"]:
         return "the reference's epoch is not the organization ledger head's"
+    return None
+
+def carried_chain_failure(root:Path, ref:dict[str,Any])->str|None:
+    """Why a writer cannot carry an admitted CARRIED claim, or None (B-P36m, 09:00Z).
+
+    Admission against the *current* head happens once, at ingest
+    (carried_claim_failure). Within the crossing the head moves as receipts are
+    written, so each writer instead verifies that head_receipt_sha (a) is in
+    the organization ledger chain, (b) recomputes to its digest, and (c) carries
+    a supplied epoch, derived_from_clock false, equal to the carried epoch. The
+    claim reaches a writer only from ingest, so (d) it is the head the crossing
+    was admitted against. Read-only.
+    """
+    if ref.get("source")!=CARRIED_SOURCE:
+        return "source "+repr(ref.get("source"))+" is not "+CARRIED_SOURCE
+    path=root/"resident-runtime/aggregate_repo_transition.py"
+    if not path.is_file():
+        return "this root carries no organization ledger to verify the claim against"
+    claimed=ref.get("head_receipt_sha")
+    try:
+        spec=importlib.util.spec_from_file_location("carried_chain_org_ledger",path)
+        ledger=importlib.util.module_from_spec(spec); spec.loader.exec_module(ledger)
+        store=ledger.open_store(ledger.ledger_root())
+        cursor=ledger._validate_existing_head(store)
+        found=None
+        while cursor:
+            record=store.get(ledger.receipt_key(cursor))
+            if record is None:
+                break
+            if cursor==claimed:
+                found=record
+                break
+            cursor=record.get("previous_receipt_sha256")
+    except (SystemExit,Exception) as error:
+        return "the organization ledger chain is not verifiable: "+type(error).__name__+": "+str(error)
+    if found is None:
+        return "head_receipt_sha "+repr(claimed)+" is not in the organization ledger chain"
+    body={key:value for key,value in found.items() if key!="receipt_sha256"}
+    if found.get("receipt_sha256")!=claimed or ledger.sha(body)!=claimed:
+        return "the claimed head receipt does not recompute to "+str(claimed)
+    head_ref=found.get("hb_reference")
+    if not isinstance(head_ref,dict) or supplied_epoch_failure(head_ref.get("epoch"),head_ref) is not None:
+        return "the claimed head's epoch is not a supplied one"
+    if ref.get("epoch")!=head_ref["epoch"]:
+        return "the reference's epoch is not the claimed head's"
     return None
 
 def frame_refusal(root:Path, frame:dict[str,Any])->dict[str,Any]|None:
