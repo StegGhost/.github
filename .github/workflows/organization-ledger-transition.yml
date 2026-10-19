@@ -110,7 +110,8 @@ jobs:
       # Time is supplied with the dispatch. It is not sampled from a clock.
       # The epoch is refused by the kernel's shared rule (writer_epoch_refusal),
       # six-field FAIL_CLOSED, before the writer CLI runs; nothing is written.
-      # An hb_epoch key missing from the dispatch inputs is HB_EPOCH_NOT_SUPPLIED.
+      # A workflow_dispatch string input cannot tell empty from absent, so here
+      # both a missing hb_epoch key and "" are HB_EPOCH_NOT_SUPPLIED.
       - name: Refuse an absent or invalid dispatch epoch before any append
         env:
           DISPATCH_INPUTS: ${{ toJSON(github.event.inputs) }}
@@ -121,6 +122,8 @@ jobs:
           try:
               inputs = json.loads(os.environ.get("DISPATCH_INPUTS") or "null")
               hb_epoch = inputs.get("hb_epoch") if isinstance(inputs, dict) else None
+              if hb_epoch == "":
+                  hb_epoch = None
               spec = importlib.util.spec_from_file_location("kernel", "org-kernel/kernel.py")
               kernel = importlib.util.module_from_spec(spec)
               spec.loader.exec_module(kernel)

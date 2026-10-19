@@ -790,12 +790,14 @@ class DispatchEpochGateTests(unittest.TestCase):
                          ".github/workflows/organization-ledger-transition.yml")
         self.assertIs(refusal["consequence_committed"], False)
 
-    def test_an_absent_epoch_is_not_supplied(self):
+    def test_an_absent_or_empty_epoch_is_not_supplied(self):
+        # A dispatch string input cannot tell "" from absent; both are NOT_SUPPLIED here.
         self.assert_refused({"communication_id": "c-1"}, "HB_EPOCH_NOT_SUPPLIED")
+        self.assert_refused({"hb_epoch": ""}, "HB_EPOCH_NOT_SUPPLIED")
         self.assert_refused(None, "HB_EPOCH_NOT_SUPPLIED")
 
     def test_an_invalid_epoch_is_refused(self):
-        for value in ("", "\u0663\u0663", "\uff13\uff13", "+33", " 33", "33.0", "31", "abc"):
+        for value in ("\u0663\u0663", "\uff13\uff13", "+33", " 33", "33.0", "31", "abc"):
             with self.subTest(value=value):
                 self.assert_refused({"hb_epoch": value}, "HB_EPOCH_INVALID")
 
