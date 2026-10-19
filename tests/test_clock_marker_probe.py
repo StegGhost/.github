@@ -1542,10 +1542,17 @@ class ProcessBoundaryExitSplit(unittest.TestCase):
         envelope = self.tmp / "in.json"
         envelope.write_text(json.dumps(self.envelope))
         genuine = self.run_once.PROCESS_BOUNDARY
-        for code in (1, 3):
-            with self.subTest(exit=code):
-                quarantine = self.tmp / ("quarantine-" + str(code))
-                self.run_once.PROCESS_BOUNDARY = [sys.executable, "-c", "import sys; sys.exit(%d)" % code]
+        # A crashing processor too: an uncaught exception (exit 1 with a
+        # traceback) and a process killed by a signal (SIGKILL, -9).
+        processors = {1: "import sys; sys.exit(1)", 3: "import sys; sys.exit(3)",
+                      "crash": "raise RuntimeError('processor crashed')",
+                      "killed": "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"}
+        expected = {1: 1, 3: 3, "crash": 1, "killed": -9}
+        for case, source in processors.items():
+            code = expected[case]
+            with self.subTest(exit=case):
+                quarantine = self.tmp / ("quarantine-" + str(case))
+                self.run_once.PROCESS_BOUNDARY = [sys.executable, "-c", source]
                 try:
                     status, printed = self.run_once.run(envelope, self.tmp / "egress.json", quarantine)
                 finally:
