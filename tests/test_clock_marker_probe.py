@@ -1483,7 +1483,8 @@ class CliInputsAreRefusedTerminal(WriterEntryPointsReportFaultsSixField):
                 "successor_state_sha256": "sha256:" + "2" * 64, "evidence": {}, "authority_effect": "NONE",
                 "hb_reference": KERNEL.hb_reference(epoch=4096), "previous_receipt_sha256": None}
         source = self.valid("source.json", {**body, "receipt_sha256": aggregate.sha(body)})
-        for text, error in (("not json", "JSONDecodeError"), ("[1]", "WRONG_TOP_LEVEL_TYPE")):
+        for text, error in (("not json", "JSONDecodeError"), ("[1]", "WRONG_TOP_LEVEL_TYPE"),
+                            ("[" * 60000, "RecursionError")):
             with self.subTest(cli="emit", input=error):
                 self.assert_refused(emit, ["--transition-id", "t:in", "--transition-class", "T",
                                            "--predecessor-state-sha256", "sha256:" + "0" * 64,
@@ -1608,6 +1609,7 @@ class ProcessBoundaryExitSplit(unittest.TestCase):
             "not_json": "open(sys.argv[sys.argv.index('--out')+1], 'w').write('not json')",
             "not_an_object": "open(sys.argv[sys.argv.index('--out')+1], 'w').write('[1]')",
             "missing_fields": "open(sys.argv[sys.argv.index('--out')+1], 'w').write('{}')",
+            "deeply_nested": "open(sys.argv[sys.argv.index('--out')+1], 'w').write('{\"a\":' + '[' * 200000)",
         }
         genuine = self.run_once.PROCESS_BOUNDARY
         for case, writer in writers.items():

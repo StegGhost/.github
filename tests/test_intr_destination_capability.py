@@ -1601,6 +1601,21 @@ class FailedHeadPublishDoesNotWedgeTests(AddressedAndClosedTests):
                 self.assertEqual(len(list(frames.glob("*.json"))), 1)
                 self.assertEqual(self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1"), [])
 
+    def test_a_deeply_nested_frames_d_entry_is_skipped_and_emit_proceeds(self):
+        # F-SCAN-RECURSION: one deep frames.d file (RecursionError on decode)
+        # claims nothing; emit and request_bilateral_match proceed normally.
+        work = self.fresh_ledgers()
+        frames = work / "mesh" / "frames.d"
+        frames.mkdir(parents=True)
+        (frames / "0000-deep.json").write_text('{"a":' + "[" * 200000)
+        emitted = egress.emit(PEER, diagnostic("deep-neighbour"), standing=STANDING, capability=PROFILE_ID,
+                              mesh_root=work / "mesh", hb_epoch=self.SUPPLIED)
+        self.assertEqual(emitted["disposition"], "ALLOW", emitted)
+        match = egress.request_bilateral_match(PEER, "deep-neighbour-packet", standing=STANDING,
+                                               mesh_root=work / "mesh", hb_epoch=self.SUPPLIED)
+        self.assertEqual(match["disposition"], "ALLOW", match)
+        self.assertEqual(len(list(frames.glob("*.json"))), 3)
+
     # ------------------------------------------- lead ruling 09:44Z on the batch chain
 
     def release_modules(self, tag):
