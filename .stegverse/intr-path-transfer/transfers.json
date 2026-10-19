@@ -1,0 +1,35 @@
+{
+  "schema": "stegverse.intr-path-transfer-declaration/v1",
+  "source_repository": "StegGhost/.github",
+  "rule": "Each row declares one InTr transfer over a declared mesh path whose source is this organization. Landing a row on main is the transition: after that push's main-merge transfer is ledgered, .github/workflows/intr-path-transfer.yml appends the path's source receipt, linked to that main-merge transfer receipt. A row already ledgered is answered from the ledger. No dispatch.",
+  "transfers": [
+    {
+      "path_id": "StegGhost->Admissible-Existence:intr-destination",
+      "communication_id": "intr-path-v1:StegGhost->Admissible-Existence"
+    },
+    {
+      "path_id": "StegGhost->GCAT-BCAT-Engine:intr-destination",
+      "communication_id": "intr-path-v1:StegGhost->GCAT-BCAT-Engine"
+    },
+    {
+      "path_id": "StegGhost->SV-011:intr-destination",
+      "communication_id": "intr-path-v1:StegGhost->SV-011"
+    },
+    {
+      "path_id": "StegGhost->SV-LLM:intr-destination",
+      "communication_id": "intr-path-v1:StegGhost->SV-LLM"
+    },
+    {
+      "path_id": "StegGhost->StegVerse-002:intr-destination",
+      "communication_id": "intr-path-v1:StegGhost->StegVerse-002"
+    },
+    {
+      "path_id": "StegGhost->StegVerse-Labs:intr-destination",
+      "communication_id": "intr-path-v1:StegGhost->StegVerse-Labs"
+    },
+    {
+      "path_id": "StegGhost->StegVerse-org:intr-destination",
+      "communication_id": "intr-path-v1:StegGhost->StegVerse-org"
+    }
+  ]
+}
