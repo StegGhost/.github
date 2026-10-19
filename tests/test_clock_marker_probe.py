@@ -1475,6 +1475,24 @@ class CliInputsAreRefusedTerminal(WriterEntryPointsReportFaultsSixField):
                 with self.subTest(cli=module.__name__, argument=argument, input=error):
                     self.assert_refused(module, argv(bad), argument, error)
 
+    def test_a_runtime_boundary_refusal_is_terminal_six_field(self):
+        # V-P11 @7020648 deferral RUNTIME_INGRESS_SCHEMA_REFUSAL_TRACEBACK: a
+        # readable ingress file the boundary refuses (schema mismatch) is a
+        # terminal six-field record, rc 2, nothing written, no traceback.
+        runtime = load("input_runtime_schema_cli", "runtime/organization_runtime.py")
+        runtime.INGRESS = self.tmp / "ingress"
+        refused = self.valid("schema.json", {"a": 1})
+        before = self.written()
+        code, out, err = self.run_cli(runtime, ["ingress", "--file", refused, "--hb-epoch", "4096"], fault=False)
+        self.assertNotIn("Traceback", out + err)
+        self.assertEqual(code, 2, out + err)
+        record = json.loads(out.strip().splitlines()[-1])
+        self.assertEqual((record["failure_code"], record["terminal"], record["detail"]),
+                         ("RUNTIME_BOUNDARY_REFUSED", True, "schema mismatch"))
+        for field in self.SIX:
+            self.assertIn(field, record)
+        self.assertEqual(self.written(), before)
+
     def test_inline_json_inputs_are_refused_terminal(self):
         emit = load("input_emit_cli", ".stegverse/transition-ledger/emit.py")
         aggregate = load("input_aggregate_inline_cli", "resident-runtime/aggregate_repo_transition.py")

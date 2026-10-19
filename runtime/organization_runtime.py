@@ -68,5 +68,12 @@ def main()->int:
         else:r=ingress(kernel.read_input_json(x.file,argument="--file",retry_entrypoint=EPOCH_RETRY_ENTRYPOINT),x.hb_epoch)
     except kernel.SuppliedEpochRefused as exc:
         print(json.dumps(exc.refusal,sort_keys=True)); return 1
+    except RuntimeBoundaryError as exc:
+        # A boundary refusal (schema, owner, authority, id, write-once) is terminal and six-field, never a traceback.
+        print(json.dumps({"disposition":"FAIL_CLOSED","failure_code":"RUNTIME_BOUNDARY_REFUSED","failed_predicate":"RUNTIME_BOUNDARY_ADMITS_THE_REQUEST",
+                          "detail":str(exc),"required_evidence_or_repair":"a request the organization runtime boundary admits",
+                          "retry_entrypoint":"runtime/organization_runtime.py "+x.cmd,"owning_existing_goal":kernel.HB_EPOCH_OWNING_EXISTING_GOAL,
+                          "next_attempt":"none: the request is refused; nothing further is written","terminal":True,
+                          "derived_from_clock":False,"consequence_committed":False},sort_keys=True)); return 2
     print(json.dumps(r,sort_keys=True)); return 0
 if __name__=="__main__": raise SystemExit(kernel.run_writer_cli(main,retry_entrypoint=EPOCH_RETRY_ENTRYPOINT))
