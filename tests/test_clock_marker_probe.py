@@ -754,8 +754,12 @@ class InboundEpochIsSupplied(unittest.TestCase):
         clock = KERNEL.carrier_frame(dict(self.request, packet_id="carried-clock"))
         claim = {"source": "ORGANIZATION_LEDGER_HEAD", "head_receipt_sha": "sha256:" + "f" * 64}
         bare = {k: v for k, v in clock["heartbeat_reference"].items() if k != "derived_from_clock"}
+        unflagged = {k: v for k, v in bare.items() if k != "sampled_unix_ns"}
         cases = (({**clock["heartbeat_reference"], **claim}, "CARRIED_PROVENANCE_UNVERIFIED"),
                  ({**bare, **claim}, "CARRIED_PROVENANCE_UNVERIFIED"),
+                 ({**unflagged, **claim}, "CARRIED_PROVENANCE_UNVERIFIED"),
+                 ({k: v for k, v in {**clock["heartbeat_reference"], **claim}.items() if k != "epoch"},
+                  "HB_EPOCH_NOT_SUPPLIED"),
                  ({**clock["heartbeat_reference"], **claim, "epoch": "abc"}, "HB_EPOCH_INVALID"))
         for reference, code in cases:
             with self.subTest(code=code, flag=reference.get("derived_from_clock")):
