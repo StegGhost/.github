@@ -17,6 +17,7 @@ import importlib.util
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -742,6 +743,73 @@ class DesignatedLedgerRefTests(unittest.TestCase):
         self.assertIn("organization_ledger_readback.py", text)
         self.assertIn("SGHOST-EXEMPTION-006", text)
         self.assertNotIn("federation.json", text)
+
+
+class DispatchEpochGateTests(unittest.TestCase):
+    """The workflow's own inline epoch gate emits the kernel's six-field refusal.
+
+    The step's run block is read from the workflow and executed as-is; only
+    DISPATCH_INPUTS (the toJSON of the dispatch inputs) varies per case.
+    """
+
+    STEP = "      - name: Refuse an absent or invalid dispatch epoch before any append\n"
+    SIX_FIELDS = ("failure_code", "failed_predicate", "required_evidence_or_repair",
+                  "retry_entrypoint", "owning_existing_goal", "next_attempt")
+
+    @classmethod
+    def setUpClass(cls):
+        lines = (ROOT / ".github/workflows/organization-ledger-transition.yml").read_text(
+            encoding="utf-8").splitlines(keepends=True)
+        start = lines.index(cls.STEP)
+        run = next(i for i in range(start, len(lines)) if lines[i] == "        run: |\n")
+        body = []
+        for line in lines[run + 1:]:
+            if line.strip() and not line.startswith("          "):
+                break
+            body.append(line[10:] if line.strip() else "\n")
+        cls.script = "".join(body)
+
+    def run_gate(self, inputs):
+        env = {k: v for k, v in os.environ.items() if k != "DISPATCH_INPUTS"}
+        if inputs is not None:
+            env["DISPATCH_INPUTS"] = json.dumps(inputs)
+        return subprocess.run(["bash", "-e", "-c", self.script], cwd=ROOT, env=env,
+                              capture_output=True, text=True, check=False)
+
+    def assert_refused(self, inputs, code):
+        result = self.run_gate(inputs)
+        self.assertEqual(result.returncode, 1, (inputs, result.stdout, result.stderr))
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertNotIn("Traceback", result.stdout)
+        refusal = json.loads(result.stdout)
+        self.assertEqual(refusal["disposition"], "FAIL_CLOSED")
+        for field in self.SIX_FIELDS:
+            self.assertTrue(refusal.get(field), (field, refusal))
+        self.assertEqual(refusal["failure_code"], code, refusal)
+        self.assertEqual(refusal["retry_entrypoint"],
+                         ".github/workflows/organization-ledger-transition.yml")
+        self.assertIs(refusal["consequence_committed"], False)
+
+    def test_an_absent_epoch_is_not_supplied(self):
+        self.assert_refused({"communication_id": "c-1"}, "HB_EPOCH_NOT_SUPPLIED")
+        self.assert_refused(None, "HB_EPOCH_NOT_SUPPLIED")
+
+    def test_an_invalid_epoch_is_refused(self):
+        for value in ("", "\u0663\u0663", "\uff13\uff13", "+33", " 33", "33.0", "31", "abc"):
+            with self.subTest(value=value):
+                self.assert_refused({"hb_epoch": value}, "HB_EPOCH_INVALID")
+
+    def test_a_supplied_epoch_passes(self):
+        result = self.run_gate({"hb_epoch": "4096", "communication_id": "c-1"})
+        self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
+        self.assertEqual(result.stdout, "")
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_the_legacy_inline_refusal_is_gone(self):
+        text = (ROOT / ".github/workflows/organization-ledger-transition.yml").read_text(
+            encoding="utf-8")
+        self.assertNotIn("DISPATCH_HB_EPOCH_INVALID", text)
+        self.assertIn("kernel.writer_epoch_refusal(hb_epoch", text)
 
 
 class DiagnosticSelfClosureOnAGitRefTests(unittest.TestCase):
