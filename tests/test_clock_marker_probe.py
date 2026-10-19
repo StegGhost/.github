@@ -1647,6 +1647,35 @@ class ProcessBoundaryExitSplit(unittest.TestCase):
                          (75, "EGRESS_PATH_IS_WRITABLE", False))
         self.assertFalse(self.quarantine.exists() and any(self.quarantine.iterdir()))
 
+    def test_a_marker_write_fault_is_non_terminal_and_the_next_run_quarantines(self):
+        # V-P11 @9641348 RUN_ONCE_MARKER_WRITE_FAULT_TRACEBACK: the marker is
+        # run_once's own write. Its fault (the quarantine dir under a regular
+        # file, or os.replace failing) is 75 non-terminal with the refusal in
+        # detail, no traceback and no temp file left; the next run quarantines.
+        envelope = self.tmp / "in.json"
+        envelope.write_text(json.dumps({k: v for k, v in self.envelope.items() if k != "evidence"}))
+        blocker = self.tmp / "a-file"
+        blocker.write_text("")
+        status, printed = self.run_once.run(envelope, self.tmp / "egress.json", blocker / "quarantine.d")
+        self.assertEqual((status, printed["failure_code"], printed["failed_predicate"], printed["terminal"]),
+                         (75, "PROCESS_BOUNDARY_WRITE_FAULT", "QUARANTINE_MARKER_IS_WRITABLE", False))
+        self.assertIn("FRAME_INGEST_FAILED", printed["detail"])
+        original = self.run_once.os.replace
+
+        def failing(*args, **kwargs):
+            raise OSError(5, "Input/output error")
+        self.run_once.os.replace = failing
+        try:
+            status, printed = self.run_once.run(envelope, self.tmp / "egress.json", self.quarantine)
+        finally:
+            self.run_once.os.replace = original
+        self.assertEqual((status, printed["failed_predicate"], printed["terminal"]),
+                         (75, "QUARANTINE_MARKER_IS_WRITABLE", False))
+        self.assertEqual(list(self.quarantine.glob("*")), [])
+        status, printed = self.run_once.run(envelope, self.tmp / "egress.json", self.quarantine)
+        self.assertEqual((status, printed["failure_code"], printed["terminal"]), (65, "FRAME_INGEST_FAILED", True))
+        self.assertEqual(len(list(self.quarantine.glob("*.json"))), 1)
+
     def test_every_content_fault_exits_65_with_a_terminal_record(self):
         # The refusals that were bare SystemExit strings route through 65.
         registry = json.loads((TREE / "org-boundary/registry/services.json").read_text())

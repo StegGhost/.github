@@ -31,9 +31,28 @@ def marker_path(packet_id,quarantine):
 
 def quarantine_envelope(packet_id,refusal,quarantine):
     """Write the quarantine marker for a terminal input fault (atomically)."""
-    path=marker_path(packet_id,quarantine); path.parent.mkdir(parents=True,exist_ok=True)
-    temp=path.with_suffix(".tmp"); temp.write_text(json.dumps({"packet_id":packet_id,**refusal},sort_keys=True)+"\n")
-    os.replace(temp,path)
+    path=marker_path(packet_id,quarantine); temp=path.with_suffix(".tmp")
+    try:
+        path.parent.mkdir(parents=True,exist_ok=True)
+        temp.write_text(json.dumps({"packet_id":packet_id,**refusal},sort_keys=True)+"\n")
+        os.replace(temp,path)
+    except OSError:
+        try: temp.unlink()
+        except OSError: pass
+        raise
+
+def terminal(packet_id,refusal,quarantine):
+    """Quarantine a terminal refusal and return it (65). If the marker itself
+    cannot be written -- this process's own fault -- return 75 non-terminal
+    with the refusal in detail; the next run re-derives it and quarantines."""
+    if packet_id is None:
+        return EXIT_INPUT_FAULT,refusal
+    try:
+        quarantine_envelope(packet_id,refusal,quarantine)
+    except OSError as error:
+        return EXIT_WRITE_FAULT,record("PROCESS_BOUNDARY_WRITE_FAULT","QUARANTINE_MARKER_IS_WRITABLE",
+                                       type(error).__name__+": "+str(error)+"; refusal: "+json.dumps(refusal,sort_keys=True),False)
+    return EXIT_INPUT_FAULT,refusal
 
 def run(ingress_path,egress_path,quarantine=QUARANTINE):
     """Process one envelope; return (exit status, printed record)."""
@@ -51,24 +70,21 @@ def run(ingress_path,egress_path,quarantine=QUARANTINE):
         validate_org_crossing(ingress,"INGRESS")
     except (ValueError,KeyError,TypeError) as error:
         refusal=record("FRAME_INGEST_FAILED","ENVELOPE_IS_A_VALID_ORG_CROSSING",str(error),True)
-        if packet_id is not None: quarantine_envelope(packet_id,refusal,quarantine)
-        return EXIT_INPUT_FAULT,refusal
+        return terminal(packet_id,refusal,quarantine)
     with tempfile.TemporaryDirectory() as td:
         result_path=Path(td)/"execution.json"
         done=subprocess.run(PROCESS_BOUNDARY+["--envelope",str(ingress_path),"--out",str(result_path)],
                             capture_output=True,text=True)
         if done.returncode==EXIT_INPUT_FAULT:
             refusal=record("FRAME_INGEST_FAILED","PROCESS_BOUNDARY_INPUT_FAULT",done.stderr.strip(),True)
-            quarantine_envelope(packet_id,refusal,quarantine)
-            return EXIT_INPUT_FAULT,refusal
+            return terminal(packet_id,refusal,quarantine)
         if done.returncode==EXIT_WRITE_FAULT:
             return EXIT_WRITE_FAULT,record("PROCESS_BOUNDARY_WRITE_FAULT","PROCESS_BOUNDARY_COMPLETES",
                                            done.stderr.strip(),False)
         if done.returncode!=0:
             refusal=record("PROCESS_BOUNDARY_REFUSED_EXIT_"+str(done.returncode),"PROCESS_BOUNDARY_EXITS_0_65_OR_75",
                            "exit "+str(done.returncode)+": "+done.stderr.strip(),True)
-            quarantine_envelope(packet_id,refusal,quarantine)
-            return EXIT_INPUT_FAULT,refusal
+            return terminal(packet_id,refusal,quarantine)
         # The child said success: reading its result is this process's own
         # state (an OSError is non-terminal 75), but a result that is not
         # valid JSON, or an envelope or result that builds no valid egress, is
@@ -88,8 +104,7 @@ def run(ingress_path,egress_path,quarantine=QUARANTINE):
         except (ValueError,KeyError,TypeError,AttributeError) as error:
             refusal=record("FRAME_INGEST_FAILED","EXIT_0_CARRIES_A_VALID_EXECUTION_RESULT_AND_EGRESS",
                            type(error).__name__+": "+str(error),True)
-            quarantine_envelope(packet_id,refusal,quarantine)
-            return EXIT_INPUT_FAULT,refusal
+            return terminal(packet_id,refusal,quarantine)
     try:
         Path(egress_path).parent.mkdir(parents=True,exist_ok=True)
         Path(egress_path).write_text(json.dumps(egress,indent=2,sort_keys=True)+"\n")
