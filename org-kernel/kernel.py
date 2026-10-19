@@ -1070,7 +1070,14 @@ def consume_and_respond(repo_root:Path, *, mesh_root:Path|None=None, seen:set[st
         # for it, so the frame is processed when a valid epoch is supplied.
         marker=None
         if result.get("quarantine") is not False:
-            marker=str(mark_federation_frame_seen(repo_root,item["path"],item["frame"],result))
+            try:
+                marker=str(mark_federation_frame_seen(repo_root,item["path"],item["frame"],result))
+            except OSError as error:
+                # The marker is this repository's write: the frame stays pending,
+                # and its recorded response is reused, not rebuilt (F-REPUB).
+                result={**result,"marker_refusal":{**ingest_refusal(FRAME_DISPATCH_IO_FAILED,
+                        type(error).__name__+": "+str(error)),"failed_predicate":type(error).__name__,
+                        "terminal":False}}
         out.append({"path":item["path"],"result":result,"response_publication":response_publication,
                     "response_refusal":response_refusal,"seen_marker":marker})
     return out
@@ -1093,6 +1100,25 @@ def frame_error_refusal(error:BaseException)->dict[str,Any]:
     if message in FRAME_INTEGRITY_ERRORS or type(error).__name__ in ("Error","JSONDecodeError","UnicodeDecodeError"):
         return ingest_refusal(FRAME_INTEGRITY_INVALID,type(error).__name__+": "+message)
     return {**ingest_refusal(FRAME_INGEST_FAILED,message),"failed_predicate":type(error).__name__}
+
+def recorded_response(repo_root:Path, response:dict[str,Any], epoch:int)->tuple[dict[str,Any],Path]:
+    """The response frame for a request, recorded once and reused byte for byte.
+
+    Keyed by the response's packet_id. Written before the response is
+    published, so a fault after publication (the seen marker, a gateway ack)
+    that leaves the request pending never yields a second, different response
+    on the next cycle: the recorded frame is published again unchanged (F-REPUB).
+    """
+    out=repo_root/"resident-runtime/federation/responses.d"
+    out.mkdir(parents=True,exist_ok=True)
+    path=out/(hashlib.sha256(response["packet_id"].encode()).hexdigest()+".json")
+    if path.exists():
+        return json.loads(path.read_text()),path
+    frame=carrier_frame(response,epoch=epoch)
+    staging=path.with_suffix(".tmp")
+    staging.write_text(json.dumps(frame,indent=2,sort_keys=True)+"\n")
+    os.replace(staging,path)
+    return frame,path
 
 def _consume_one(repo_root:Path, item:dict[str,Any], *, mesh_root:Path|None,
                  hb_epoch:Any)->tuple[dict[str,Any],dict[str,Any]|None,dict[str,Any]|None]:
@@ -1121,7 +1147,9 @@ def _consume_one(repo_root:Path, item:dict[str,Any], *, mesh_root:Path|None,
             # the response is refused six-field, never stamped from a clock.
             response_refusal=writer_epoch_refusal(None,retry_entrypoint=RESPONSE_RETRY_ENTRYPOINT)
         else:
-            response_publication=publish_packet(response,root=mesh_root,epoch=epoch)
+            frame,_record=recorded_response(repo_root,response,epoch)
+            response_publication={"packet":recover_packet(frame),"frame":frame,
+                                  "path":str(publish_frame(frame,root=mesh_root))}
     return result,response_publication,response_refusal
 
 def recorded_emissions(repo_root:Path, communication_id:str)->dict[str,dict[str,Any]]:

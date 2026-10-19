@@ -621,7 +621,9 @@ class InboundEpochIsSupplied(unittest.TestCase):
         valid, = [item for item in first if item["result"]["status"] == "CONSUMED"]
         self.assertSupplied(valid["response_publication"]["frame"])
         written = {p for p in self.b.rglob("*") if p.is_file() and "__pycache__" not in p.parts} - before
-        self.assertTrue(all("seen.d" in p.parts for p in written), written)
+        # Seen markers, plus the valid frame's one recorded response (F-REPUB).
+        self.assertEqual(len([p for p in written if "responses.d" in p.parts]), 1)
+        self.assertTrue(all("seen.d" in p.parts or "responses.d" in p.parts for p in written), written)
         self.assertEqual(KERNEL.consume_and_respond(self.b, mesh_root=self.mesh), [])
         self.assertEqual(CLOCK_CALLS, [])
 
@@ -841,6 +843,62 @@ class InboundEpochIsSupplied(unittest.TestCase):
         self.assertEqual([x["result"]["status"] for x in again], ["CONSUMED"])
         self.assertSupplied(again[0]["response_publication"]["frame"])
         self.assertEqual(KERNEL.consume_and_respond(self.b, mesh_root=self.mesh), [])
+        self.assertEqual(CLOCK_CALLS, [])
+
+    def test_a_fault_after_publication_never_yields_a_second_response(self):
+        # F-REPUB: the seen marker fails after the response is out, so the
+        # frame stays pending. The next cycle reuses the recorded response; a
+        # rebuilt one would differ (a counter makes every rebuild different).
+        builds = []
+        original_build, original_mark = KERNEL.build_control_response, KERNEL.mark_federation_frame_seen
+
+        def build(packet, execution):
+            builds.append(1)
+            response = original_build(packet, execution)
+            return {**response, "payload": {**response["payload"], "build": len(builds)}}
+
+        def failing_mark(*args, **kwargs):
+            raise OSError(5, "Input/output error")
+        KERNEL.build_control_response = build
+        self.addCleanup(setattr, KERNEL, "build_control_response", original_build)
+        KERNEL.publish_frame(self.frame, root=self.mesh)
+        KERNEL.mark_federation_frame_seen = failing_mark
+        try:
+            first, = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh)
+        finally:
+            KERNEL.mark_federation_frame_seen = original_mark
+        self.assertIsNone(first["seen_marker"])
+        self.assertEqual(first["result"]["marker_refusal"]["failure_code"], "FRAME_DISPATCH_IO_FAILED")
+        self.assertIs(first["result"]["marker_refusal"]["terminal"], False)
+        second, = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh)
+        self.assertEqual(second["response_publication"]["frame"], first["response_publication"]["frame"])
+        responses = [p for p in (self.mesh / "frames.d").glob("*.json")
+                     if json.loads(p.read_text()).get("destination_org") == "Org-A"]
+        self.assertEqual(len(responses), 1)
+        self.assertEqual(KERNEL.consume_and_respond(self.b, mesh_root=self.mesh), [])
+        self.assertEqual(CLOCK_CALLS, [])
+
+    def test_a_failed_gateway_ack_never_yields_a_second_response(self):
+        # F-REPUB at the gateway: the ack fails after the response is
+        # submitted; the redelivered frame is not answered again.
+        gateway = load("probe_gateway_repub", "resident-runtime/federation_gateway_transport.py")
+        gateway.K = KERNEL
+        submitted, acks = [], []
+        gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": self.frame}
+        gateway.submit_frame = lambda frame: submitted.append(frame) or {}
+
+        def ack(organization, frame, state, hb_epoch=None):
+            acks.append(state)
+            if len(acks) == 1:
+                raise OSError(104, "Connection reset by peer")
+            return {"state": state}
+        gateway.acknowledge_frame = ack
+        first = gateway.resident_gateway_cycle(self.b)
+        self.assertEqual(first["ack_state"], "ACK_FAILED")
+        second = gateway.resident_gateway_cycle(self.b)
+        self.assertEqual(second["ack_state"], "CONSUMED")
+        self.assertEqual(len(submitted), 1)
+        self.assertEqual(second["response_frame_sha256"], submitted[0]["frame_sha256"])
         self.assertEqual(CLOCK_CALLS, [])
 
     def test_monitor_request_status_takes_the_inbound_epoch(self):

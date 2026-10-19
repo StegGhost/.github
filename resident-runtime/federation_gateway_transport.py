@@ -244,17 +244,29 @@ def resident_gateway_cycle(repo_root: Path, hb_epoch: int | None = None) -> dict
                 response_refusal = K.writer_epoch_refusal(
                     None, retry_entrypoint="resident-runtime/federation_gateway_transport.py::resident_gateway_cycle (hb_epoch=)")
             else:
+                # Recorded once per request and submitted once: a redelivery
+                # after a failed ack reuses the record and is not resubmitted.
                 response = K.build_control_response(packet, execution)
-                response_frame = K.carrier_frame(response, epoch=epoch)
-                submit_frame(response_frame)
-                response_emitted = 1
+                response_frame, record = K.recorded_response(repo_root, response, epoch)
+                submitted = record.with_suffix(".submitted")
+                if not submitted.exists():
+                    submit_frame(response_frame)
+                    submitted.write_text(response_frame["frame_sha256"] + "\n")
+                    response_emitted = 1
                 response_ref = response_frame["frame_sha256"]
         elif message_class in K.ACK_CLASSES:
             _persist_response(repo_root, packet, execution)
         ack_state = "CONSUMED"
     else:
         ack_state = "BLOCKED"
-    ack = acknowledge_frame(organization, frame, ack_state, hb_epoch=epoch)
+    try:
+        ack = acknowledge_frame(organization, frame, ack_state, hb_epoch=epoch)
+    except OSError as error:
+        # The ack did not land: the gateway redelivers, and the recorded
+        # response is not submitted again (F-REPUB).
+        ack = {"state": "ACK_FAILED", "refusal": {
+            **K.ingest_refusal(K.FRAME_DISPATCH_IO_FAILED, type(error).__name__ + ": " + str(error)),
+            "failed_predicate": type(error).__name__, "terminal": False}}
     return {
         "schema_version": "stegverse.org-federation-gateway-cycle.v1",
         "organization": organization,
