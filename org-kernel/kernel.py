@@ -272,6 +272,19 @@ def derive_channel(payload_hash:str)->dict[str,Any]:
     return {"channel_id":f"HB:H1:P{slot}","phase_slot":slot,"phase_slot_count":CHANNEL_COUNT,
             "derivation":"PAYLOAD_SHA256_FIRST64_MOD_16","authority_effect":"NONE_CARRIER_ONLY"}
 
+def write_atomic(path:Path, text:str)->None:
+    """Write `text` to `path` whole or not at all: staged, then os.replace (B-P36q).
+
+    A fault part-way through leaves no torn file for a later read to refuse.
+    """
+    staging=path.with_name("."+path.name+".tmp")
+    try:
+        staging.write_text(text)
+        os.replace(staging,path)
+    finally:
+        if staging.exists():
+            staging.unlink()
+
 def carrier_frame(packet:dict[str,Any], *, now_ns:int|None=None, epoch:int|None=None,
                   carried:dict[str,Any]|None=None)->dict[str,Any]:
     raw=canon(packet); payload_hash=sha(packet.get("payload",{})); ref=hb_reference(now_ns,epoch=epoch); channel=derive_channel(payload_hash)
@@ -445,7 +458,7 @@ def persist_outbox(root:Path, frame:dict[str,Any])->Path:
     if path.exists():
         if json.loads(path.read_text())!=frame: raise ValueError("write_once_collision")
         return path
-    path.write_text(json.dumps(frame,indent=2,sort_keys=True)+"\n")
+    write_atomic(path,json.dumps(frame,indent=2,sort_keys=True)+"\n")
     return path
 
 #: Fields by which a carrier reference claims CARRIED provenance. A carrier
@@ -613,9 +626,7 @@ def record_admission(root:Path, frame:dict[str,Any], epoch:int, carried:dict[str
         if json.loads(path.read_text())!=record:
             raise ValueError("carried_admission_record_collision")
         return path
-    staging=path.with_suffix(".tmp")
-    staging.write_text(json.dumps(record,indent=2,sort_keys=True)+"\n")
-    os.replace(staging,path)
+    write_atomic(path,json.dumps(record,indent=2,sort_keys=True)+"\n")
     return path
 
 def ingest_refusal(code:str, detail:str)->dict[str,Any]:
@@ -698,7 +709,7 @@ def publish_frame(frame:dict[str,Any], *, root:Path|None=None)->Path:
         if existing!=frame:
             raise ValueError("federation_frame_write_once_collision")
         return path
-    path.write_text(json.dumps(frame,indent=2,sort_keys=True)+"\n")
+    write_atomic(path,json.dumps(frame,indent=2,sort_keys=True)+"\n")
     return path
 
 #: The largest frames.d file the scan reads. A carrier frame is a few KiB; a
@@ -929,7 +940,7 @@ def persist_work_request(root:Path, packet:dict[str,Any])->dict[str,Any]:
         if json.loads(path.read_text())!=record:
             raise ValueError("work_intake_write_once_collision")
     else:
-        path.write_text(json.dumps(record,indent=2,sort_keys=True)+"\n")
+        write_atomic(path,json.dumps(record,indent=2,sort_keys=True)+"\n")
     return {"state":record["state"],"intake_ref":str(path),"execution_authority_inferred":False}
 
 def handle_control_message(root:Path, packet:dict[str,Any], registry:dict[str,Any], *,
@@ -1163,9 +1174,7 @@ def recorded_response(repo_root:Path, response:dict[str,Any], epoch:int,
     if path.exists():
         return json.loads(path.read_text()),path
     frame=carrier_frame(response,epoch=epoch,carried=carried)
-    staging=path.with_suffix(".tmp")
-    staging.write_text(json.dumps(frame,indent=2,sort_keys=True)+"\n")
-    os.replace(staging,path)
+    write_atomic(path,json.dumps(frame,indent=2,sort_keys=True)+"\n")
     return frame,path
 
 def _consume_one(repo_root:Path, item:dict[str,Any], *, mesh_root:Path|None,
@@ -1382,5 +1391,5 @@ def mark_federation_frame_seen(repo_root:Path, frame_path:str, frame:dict[str,An
         if json.loads(marker_path.read_text())!=marker:
             raise ValueError("federation_seen_marker_collision")
     else:
-        marker_path.write_text(json.dumps(marker,indent=2,sort_keys=True)+"\n")
+        write_atomic(marker_path,json.dumps(marker,indent=2,sort_keys=True)+"\n")
     return marker_path

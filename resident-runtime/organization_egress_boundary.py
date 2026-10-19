@@ -468,16 +468,20 @@ def closure_record(resolved: Mapping[str, Any], origin: str, packet_id: str,
 def _record(transition_id: str, transition_class: str, predecessor: str, successor: str,
             record: Mapping[str, Any], hb_epoch: int | None) -> dict[str, Any]:
     """Append at both levels: the repository first, the organization consuming it."""
+    # Resumable (B-P36q): a retry after a fault part-way through returns the
+    # repository receipt already recorded for this exact transition, and the
+    # organization append returns the receipt already consuming it, so the
+    # pair completes exactly once.
     repository_receipt = repository_ledger.append(
         transition_id, transition_class, predecessor, successor,
-        dict(record), "NONE", hb_epoch=hb_epoch)
+        dict(record), "NONE", hb_epoch=hb_epoch, idempotent_on=())
     organization_receipt = organization_ledger.append(
         repository_receipt, "REPO_STATE_PROPAGATION", predecessor, successor,
         {"operation": OPERATION_ID,
          "intended_action": record["intended_action"],
          "disposition": record["disposition"],
          "crossed_an_organization_boundary": record["crossed_an_organization_boundary"]},
-        "NONE", hb_epoch=hb_epoch)
+        "NONE", hb_epoch=hb_epoch, idempotent=True)
     return {"repository_receipt": repository_receipt,
             "organization_receipt": organization_receipt}
 

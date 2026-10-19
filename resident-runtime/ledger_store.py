@@ -308,8 +308,13 @@ class PosixLedgerStore:
                     self.put(key, documents[key])
                 self.put(HEAD_KEY, new_head)
             except BaseException:
-                for key in reversed(written):
-                    self.discard_unpublished(key)
+                # Once HEAD names the new receipt (the fault came after its
+                # replace, at the directory fsync) the documents are published
+                # and stay; the caller retries and finds them. Otherwise
+                # nothing HEAD names was written, and it is removed.
+                if self.get(HEAD_KEY) != new_head:
+                    for key in reversed(written):
+                        self.discard_unpublished(key)
                 raise
             return True
 

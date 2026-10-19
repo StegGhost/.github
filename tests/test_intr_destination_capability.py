@@ -1275,6 +1275,83 @@ class FailedHeadPublishDoesNotWedgeTests(AddressedAndClosedTests):
         head = json.loads((Path(os.environ["STEGVERSE_ORG_LEDGER_ROOT"]) / "HEAD.json").read_text())
         self.assertEqual(head["receipt_sha256"], organization[0]["receipt_sha256"])
 
+    def test_an_io_fault_at_every_write_step_completes_exactly_once(self):
+        # B-P36q / torn writes: an OSError at each os.replace (5) and fsync (10)
+        # of one intr-destination append, repository and organization levels.
+        # The attempt is a non-terminal writer fault; the next cycle records
+        # exactly one receipt per level with both HEADs consistent; a later
+        # frame is unaffected.
+        for function, count in (("replace", 5), ("fsync", 10)):
+            for number in range(1, count + 1):
+                with self.subTest(fault=function + "#" + str(number)):
+                    work = Path(tempfile.mkdtemp(dir=self._work.name))
+                    os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(work / "repo")
+                    os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(work / "org")
+                    original = getattr(os, function)
+                    calls = []
+
+                    def faulty(*args, _original=original, _calls=calls, _number=number, **kwargs):
+                        _calls.append(1)
+                        if len(_calls) == _number:
+                            raise OSError(5, "Input/output error")
+                        return _original(*args, **kwargs)
+                    setattr(os, function, faulty)
+                    try:
+                        try:
+                            ingress.receive(diagnostic("torn"), registry=REGISTRY, packet_id="torn",
+                                            hb_epoch=self.SUPPLIED)
+                        except RuntimeError as error:
+                            self.assertIsNotNone(kernel.write_failure(error))
+                    finally:
+                        setattr(os, function, original)
+                    for _cycle in range(2):
+                        result = ingress.receive(diagnostic("torn"), registry=REGISTRY, packet_id="torn",
+                                                 hb_epoch=self.SUPPLIED)
+                        self.assertEqual(result["disposition"], "ALLOW", result)
+                    later = ingress.receive(diagnostic("later"), registry=REGISTRY, packet_id="later",
+                                            hb_epoch=self.SUPPLIED)
+                    self.assertEqual(later["disposition"], "ALLOW", later)
+                    repository = self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")
+                    organization = self.org_receipts()
+                    for packet in ("torn", "later"):
+                        self.assertEqual(len([r for r in repository if r["transition_id"].endswith(":" + packet)]), 1)
+                        self.assertEqual(len([r for r in organization
+                                              if r["source_transition_id"].endswith(":" + packet)]), 1)
+                    org_head = json.loads((work / "org" / "HEAD.json").read_text())["receipt_sha256"]
+                    repo_head = json.loads((work / "repo" / "HEAD.json").read_text())["receipt_sha256"]
+                    later_org, = [r for r in organization if r["source_transition_id"].endswith(":later")]
+                    later_repo, = [r for r in repository if r["transition_id"].endswith(":later")]
+                    self.assertEqual((org_head, repo_head), (later_org["receipt_sha256"], later_repo["receipt_sha256"]))
+
+    def test_the_egress_and_release_records_resume_after_a_torn_write(self):
+        # B-P36q: egress._record and release._record append repository then
+        # organization. A fault at the org HEAD publish (os.replace #5) leaves
+        # the repository receipt; the retry returns it and completes the pair
+        # once, with no second repository receipt.
+        release = _module("release_organization_batch_b_p36q", "resident-runtime/release_organization_batch.py")
+        record = {"intended_action": "PROBE", "disposition": "ALLOW", "crossed_an_organization_boundary": False}
+        for name, writer in (("egress", egress), ("release", release)):
+            with self.subTest(writer=name):
+                transition = "t:torn-" + name
+                restore = self.fail_replace_call(5)
+                try:
+                    with self.assertRaises(RuntimeError) as raised:
+                        writer._record(transition, "T", "sha256:" + "0" * 64, "sha256:" + "1" * 64,
+                                       record, self.SUPPLIED)
+                finally:
+                    restore()
+                self.assertIsNotNone(kernel.write_failure(raised.exception))
+                first = writer._record(transition, "T", "sha256:" + "0" * 64, "sha256:" + "1" * 64,
+                                       record, self.SUPPLIED)
+                again = writer._record(transition, "T", "sha256:" + "0" * 64, "sha256:" + "1" * 64,
+                                       record, self.SUPPLIED)
+                self.assertEqual(first, again)
+                repository = [r for r in self.receipts("STEGVERSE_REPO_LEDGER_ROOT",
+                                                       "stegverse.repo-transition-receipt/v1")
+                              if r["transition_id"] == transition]
+                organization = [r for r in self.org_receipts() if r["source_transition_id"] == transition]
+                self.assertEqual((len(repository), len(organization)), (1, 1))
+
     def test_a_failed_org_head_publish_rolls_back_and_the_next_cycle_appends_once(self):
         self.run_case("head-publish-rollback", keep_residue=False)
 

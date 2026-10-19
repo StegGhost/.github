@@ -354,9 +354,13 @@ def _record(transition_id: str, transition_class: str, predecessor: str,
     no organization receipt would be the one transition here that the ledger
     could not replay.
     """
+    # Resumable (B-P36q): a retry after a fault part-way through returns the
+    # repository receipt already recorded for this exact transition, and the
+    # organization append returns the receipt already consuming it, so the
+    # pair completes exactly once.
     repository_receipt = repository_ledger.append(
         transition_id, transition_class, predecessor, successor,
-        dict(record), "NONE", hb_epoch=hb_epoch)
+        dict(record), "NONE", hb_epoch=hb_epoch, idempotent_on=())
     organization_receipt = organization_ledger.append(
         repository_receipt, "REPO_STATE_PROPAGATION", predecessor, successor,
         {"operation": transition_class,
@@ -366,7 +370,7 @@ def _record(transition_id: str, transition_class: str, predecessor: str,
              record.get("released_organization_receipts", []),
          "batch_sha256": record.get("batch_sha256"),
          "crossed_an_organization_boundary": False},
-        "NONE", hb_epoch=hb_epoch)
+        "NONE", hb_epoch=hb_epoch, idempotent=True)
     return {"repository_receipt": repository_receipt,
             "organization_receipt": organization_receipt}
 
