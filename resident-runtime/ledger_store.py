@@ -220,7 +220,14 @@ class PosixLedgerStore:
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temp, path)
-            self._sync_directory(path.parent)
+            # The replace is the commit: once it returns, every reader sees the
+            # document. A fault syncing the directory afterwards does not undo
+            # it, so it is not reported as a failed write a retry would append
+            # again (V-P11 @5bc61ff). Durability of the rename is best effort.
+            try:
+                self._sync_directory(path.parent)
+            except OSError:
+                pass
         finally:
             if os.path.exists(temp):
                 os.unlink(temp)

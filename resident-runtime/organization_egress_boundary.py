@@ -480,6 +480,10 @@ def _record(transition_id: str, transition_class: str, predecessor: str, success
         {"operation": OPERATION_ID,
          "intended_action": record["intended_action"],
          "disposition": record["disposition"],
+         # Carried so a reader of the organization chain alone can tell which
+         # communication a crossing was (a batch release recognises its own
+         # submission by it).
+         "communication_id": record.get("communication_id"),
          "crossed_an_organization_boundary": record["crossed_an_organization_boundary"]},
         "NONE", hb_epoch=hb_epoch, idempotent=True)
     return {"repository_receipt": repository_receipt,

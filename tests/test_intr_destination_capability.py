@@ -1410,6 +1410,106 @@ class FailedHeadPublishDoesNotWedgeTests(AddressedAndClosedTests):
         self.assertEqual((match["disposition"], rematch["failure_code"]), ("ALLOW", "EMISSION_REPLAY_COLLISION"))
         self.assertEqual(len(list((mesh / "frames.d").glob("*.json"))), 2)
 
+    def faulting(self, function, number):
+        original = getattr(os, function)
+        calls = []
+
+        def faulty(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == number:
+                raise OSError(5, "Input/output error")
+            return original(*args, **kwargs)
+        setattr(os, function, faulty)
+        return lambda: setattr(os, function, original)
+
+    def fresh_ledgers(self):
+        work = Path(tempfile.mkdtemp(dir=self._work.name))
+        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(work / "repo")
+        os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(work / "org")
+        return work
+
+    def test_release_and_submit_completes_exactly_once_across_faults_and_repeats(self):
+        # V-P11 @5bc61ff: a fault at any os.replace (10) or fsync (20) of
+        # release --standing, then a retry and a repeated call, leaves exactly
+        # one release and one submission outcome. A repeated call releases
+        # nothing: the release's own receipts are not a new segment.
+        import io, contextlib
+        release = _module("release_organization_batch_v_p11", "resident-runtime/release_organization_batch.py")
+        emitter = _module("emit_v_p11", ".stegverse/transition-ledger/emit.py")
+        zero, one = "sha256:" + "0" * 64, "sha256:" + "1" * 64
+        for function, count in (("replace", 10), ("fsync", 20)):
+            for number in range(1, count + 1):
+                with self.subTest(fault=function + "#" + str(number)):
+                    self.fresh_ledgers()
+                    seed = emitter.append("seed:1", "T", zero, one, hb_epoch=self.SUPPLIED)
+                    release.organization_ledger.append(seed, "REPO_STATE_PROPAGATION", zero, one, {}, "NONE",
+                                                       hb_epoch=self.SUPPLIED)
+                    restore = self.faulting(function, number)
+                    try:
+                        release.release_and_submit(standing=STANDING, hb_epoch=self.SUPPLIED)
+                    except RuntimeError as error:
+                        self.assertIsNotNone(kernel.write_failure(error))
+                    finally:
+                        restore()
+                    release.release_and_submit(standing=STANDING, hb_epoch=self.SUPPLIED)
+                    repeated = release.release_and_submit(standing=STANDING, hb_epoch=self.SUPPLIED)
+                    self.assertIs(repeated["release"]["released"], False)
+                    self.assertIsNone(repeated["submission"])
+                    classes = [r["transition_class"] for r in self.receipts(
+                        "STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")]
+                    self.assertEqual(classes.count(release.RELEASE_CLASS), 1, classes)
+                    self.assertEqual(classes.count(release.SUBMIT_REFUSED_CLASS), 1, classes)
+
+    def test_a_writer_cli_fault_after_head_is_replaced_does_not_duplicate_on_retry(self):
+        # V-P11 @5bc61ff: emit.py and aggregate_repo_transition.py faulting at
+        # each fsync/replace print one record per run, and a retry of a failed
+        # run leaves exactly one receipt (a fault after HEAD's replace is
+        # committed, not reported as a failure to retry).
+        import io, contextlib, sys
+        emitter = _module("emit_cli_v_p11", ".stegverse/transition-ledger/emit.py")
+        aggregate = _module("aggregate_cli_v_p11", "resident-runtime/aggregate_repo_transition.py")
+        zero, one = "sha256:" + "0" * 64, "sha256:" + "1" * 64
+        for name, module in (("emit", emitter), ("aggregate", aggregate)):
+            for function in ("replace", "fsync"):
+                for number in range(1, 9):
+                    with self.subTest(cli=name, fault=function + "#" + str(number)):
+                        work = self.fresh_ledgers()
+                        if name == "emit":
+                            argv = ["emit", "--transition-id", "x:1", "--transition-class", "T",
+                                    "--predecessor-state-sha256", zero, "--successor-state-sha256", one,
+                                    "--hb-epoch", str(self.SUPPLIED)]
+                            ledger = work / "repo"
+                        else:
+                            seed = emitter.append("seed:1", "T", zero, one, hb_epoch=self.SUPPLIED)
+                            (work / "seed.json").write_text(json.dumps(seed))
+                            argv = ["aggregate", "--repo-receipt", str(work / "seed.json"),
+                                    "--predecessor-org-state-sha256", zero, "--successor-org-state-sha256", one,
+                                    "--hb-epoch", str(self.SUPPLIED)]
+                            ledger = work / "org"
+
+                        def run():
+                            saved, sys.argv = sys.argv, argv
+                            out = io.StringIO()
+                            try:
+                                with contextlib.redirect_stdout(out):
+                                    try:
+                                        code = module.main()
+                                    except SystemExit as exited:
+                                        code = exited.code
+                            finally:
+                                sys.argv = saved
+                            return code, out.getvalue()
+                        restore = self.faulting(function, number)
+                        try:
+                            code, printed = run()
+                        finally:
+                            restore()
+                        self.assertLessEqual(printed.count('"failure_code"'), 1, printed)
+                        if code not in (0, None):
+                            code, _ = run()
+                            self.assertIn(code, (0, None))
+                        self.assertEqual(len(list((ledger / "receipts").glob("*.json"))), 1)
+
     def test_a_failed_org_head_publish_rolls_back_and_the_next_cycle_appends_once(self):
         self.run_case("head-publish-rollback", keep_residue=False)
 

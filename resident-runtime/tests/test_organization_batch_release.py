@@ -129,10 +129,26 @@ print("RELEASE_IS_A_RECORDED_TRANSITION_AT_BOTH_LEDGER_LEVELS=PASS")
 # -------------------------------------------------------- exactly once, by reading
 after = B.verified_segment()
 assert after["already_released"] == 3, after
-assert after["segment_length"] == 1, (
-    "the release's own organization receipt is the only unreleased receipt left")
-assert after["segment"][0]["receipt_sha256"] == released["release_organization_receipt_sha256"]
+# The release's own receipts are its record, not a new segment (B-P36q): a
+# repeated release with nothing new to release writes nothing.
+assert after["segment_length"] == 0, after
+assert after["release_bookkeeping_receipts"] == 1, after
+again = B.release(hb_epoch=4300)
+assert again["released"] is False and again["reason"] == "NO_UNRELEASED_ORGANIZATION_RECEIPTS", again
+assert len(B.organization_chain()) == 4
 
+# A new transition is a new segment, and its release chains onto the first
+# batch's digest -- not onto a sorted receipt digest, not onto the genesis absence.
+def new_transition(communication_id, hb_epoch):
+    """One more real transition on the chain: an egress crossing to the peer."""
+    with tempfile.TemporaryDirectory() as td:
+        peer_root(td)
+        emitted = E.emit(PEER, payload(communication_id), standing=STANDING,
+                         root=TREE, mesh_root=Path(td) / "mesh", hb_epoch=hb_epoch)
+        assert emitted["disposition"] == E.ALLOW, emitted
+
+
+new_transition("batch-emit-later", 4300)
 second = B.release(hb_epoch=4300)
 assert second["released"] is True
 assert second["released_count"] == 1, second
@@ -143,10 +159,10 @@ assert released["batch_sha256"] not in second["release_record"][
     "released_organization_receipts"]
 
 third = B.release(hb_epoch=4400)
-assert third["released"] is True and third["released_count"] == 1
 # Re-releasing the same receipts would duplicate the organization records of
-# transitions already handed over, so each later run carries only the prior release.
-assert third["release_predecessor"] == second["batch_sha256"]
+# transitions already handed over, so a run with nothing new releases nothing.
+assert third["released"] is False, third
+third = second
 print("EXACTLY_ONCE_IS_READ_OFF_THE_CHAIN_NOT_REMEMBERED=PASS")
 
 
@@ -278,6 +294,7 @@ with tempfile.TemporaryDirectory() as td:
         "the directory must record where the peer declares the service, not "
         "declare it here")
 
+    new_transition("batch-emit-to-cross", 4800)
     crossed = B.release_and_submit(standing=STANDING, root=scratch,
                                    mesh_root=mesh, hb_epoch=4800)
     assert crossed["release"]["released"] is True, crossed["release"]
@@ -297,6 +314,14 @@ with tempfile.TemporaryDirectory() as td:
     # The batch travelled, and claimed nothing for the recorder.
     assert outbound["release_stands"] is True
     assert outbound["awaits_an_external_machine"] is False
+
+    # The custody crossing is the release's own record: a repeated call
+    # releases nothing and submits nothing (B-P36q).
+    length = len(B.organization_chain())
+    repeated = B.release_and_submit(standing=STANDING, root=scratch,
+                                    mesh_root=mesh, hb_epoch=4800)
+    assert repeated["release"]["released"] is False and repeated["submission"] is None, repeated
+    assert len(B.organization_chain()) == length
 print("THE_BATCH_CROSSES_TO_THE_DECLARED_RECORD_SERVICE=PASS")
 
 
@@ -316,6 +341,7 @@ with tempfile.TemporaryDirectory() as td:
         resolved = genuine(root=root)
         return {**resolved, "record_service": "master-records.some-other-service"}
 
+    new_transition("batch-emit-drift", 4900)
     B.organization_record_destination = lying_destination
     try:
         released_for_drift = B.release(hb_epoch=4900)

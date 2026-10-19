@@ -256,6 +256,10 @@ def run_writer_cli(main:Any, *, retry_entrypoint:str)->Any:
     try:
         return main()
     except (Exception,SystemExit) as error:
+        # A CLI that already reported and exited (SystemExit with its own status)
+        # is not reported a second time: its status is returned as it gave it.
+        if isinstance(error,SystemExit):
+            return error.code
         record=writer_fault_record(error,retry_entrypoint=retry_entrypoint)
         if record is None:
             raise

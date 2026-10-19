@@ -226,15 +226,60 @@ def release_predecessor(chain: list[dict[str, Any]]) -> str:
     return sha({"state": NO_PRIOR_RELEASE})
 
 
+def custody_communication_id(batch_sha256: Any) -> str:
+    """The communication id a batch's submission crosses under (a wire name)."""
+    return "custody-" + str(batch_sha256).split(":", 1)[-1][:24]
+
+
+def is_release_bookkeeping(receipt: Mapping[str, Any]) -> bool:
+    """A receipt the release machinery wrote about a release, not one to release.
+
+    The release itself, a refused submission, and the custody crossing (emitted,
+    refused or closed) are the release's own record. Releasing them in the next
+    batch would mint a new batch on every call -- each release would leave one
+    more unreleased receipt behind it -- so a retry or a repeated call would
+    never be a no-op (B-P36q).
+    """
+    evidence = receipt.get("boundary_evidence")
+    if not isinstance(evidence, Mapping):
+        return False
+    if evidence.get("operation") in (RELEASE_CLASS, SUBMIT_REFUSED_CLASS):
+        return True
+    communication = evidence.get("communication_id")
+    return isinstance(communication, str) and communication.startswith("custody-")
+
+
+def recorded_submission(chain: list[dict[str, Any]], batch_sha256: Any) -> bool:
+    """Whether the chain already records a submission outcome for this batch."""
+    custody = custody_communication_id(batch_sha256)
+    for receipt in chain:
+        evidence = receipt.get("boundary_evidence")
+        if not isinstance(evidence, Mapping):
+            continue
+        if (evidence.get("operation") == SUBMIT_REFUSED_CLASS
+                and evidence.get("batch_sha256") == batch_sha256):
+            return True
+        if evidence.get("communication_id") == custody:
+            return True
+    return False
+
+
 def verified_segment() -> dict[str, Any]:
-    """The contiguous, verified, not-yet-released tail of the organization chain."""
+    """The verified, not-yet-released organization receipts, in chain order.
+
+    The release machinery's own receipts are left out (`is_release_bookkeeping`),
+    so the segment is the chain's unreleased receipts other than those.
+    """
     chain = organization_chain()
     carried = already_released(chain)
-    segment = [r for r in chain if r["receipt_sha256"] not in carried]
+    bookkeeping = sum(1 for r in chain if is_release_bookkeeping(r))
+    segment = [r for r in chain if r["receipt_sha256"] not in carried
+               and not is_release_bookkeeping(r)]
     return {
         "release_predecessor": release_predecessor(chain),
         "organization_chain_length": len(chain),
-        "already_released": len(chain) - len(segment),
+        "already_released": len(chain) - len(segment) - bookkeeping,
+        "release_bookkeeping_receipts": bookkeeping,
         "segment": segment,
         "segment_length": len(segment),
         "every_receipt_verified_against_its_own_body": True,
@@ -503,7 +548,7 @@ def submit(batch_sha256: str, released: list[str], *,
         # a batch the recorder has not acknowledged is a value in evidence
         # state, not a blocker and not proof of non-occurrence.
         "message_class": "ecosystem.communication",
-        "communication_id": "custody-" + str(batch_sha256).split(":", 1)[-1][:24],
+        "communication_id": custody_communication_id(batch_sha256),
         "subject": "CUSTODY_RELEASED_ORGANIZATION_BATCH",
         "requested_action": None,
         "audience": "ORIGIN",
@@ -553,10 +598,28 @@ def submit(batch_sha256: str, released: list[str], *,
 def release_and_submit(*, standing: Mapping[str, Any],
                        root: Path | None = None, mesh_root: Path | None = None,
                        hb_epoch: int | None = None) -> dict[str, Any]:
-    """Release, then submit. The second result never changes the first."""
+    """Release, then submit. The second result never changes the first.
+
+    Resumable (B-P36q): with nothing new to release, the latest release is
+    submitted if the chain records no submission outcome for it yet -- the case
+    a fault between the release and its submission leaves behind -- and
+    otherwise nothing is written.
+    """
     released = release(hb_epoch=hb_epoch)
     if not released.get("released"):
-        return {"release": released, "submission": None,
+        chain = organization_chain()
+        releases = prior_releases(chain)
+        if not releases or recorded_submission(chain, releases[-1]["batch_sha256"]):
+            return {"release": released, "submission": None,
+                    "authority_effect": "NONE_RELEASE_RECORD_ONLY"}
+        latest = releases[-1]
+        submission = submit(latest["batch_sha256"],
+                            latest["released_organization_receipts"],
+                            standing=standing, root=root, mesh_root=mesh_root,
+                            hb_epoch=hb_epoch)
+        return {"release": released, "submission": submission,
+                "submission_resumed_for_batch": latest["batch_sha256"],
+                "release_is_final_regardless_of_the_submission": True,
                 "authority_effect": "NONE_RELEASE_RECORD_ONLY"}
     submission = submit(released["batch_sha256"],
                         released["release_record"]["released_organization_receipts"],
