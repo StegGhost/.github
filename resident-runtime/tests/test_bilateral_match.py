@@ -17,7 +17,7 @@ set, so the overrides are cleared and XDG_STATE_HOME is pointed at a scratch
 directory. Setting STEGVERSE_REPO_LEDGER_ROOT instead would give both
 organizations one store, and the forged case would pass by accident.
 """
-import importlib.util, json, os, shutil, sys, tempfile
+import atexit, importlib.util, json, os, shutil, sys, tempfile
 from pathlib import Path
 
 TREE = Path(__file__).resolve().parents[2]
@@ -25,6 +25,18 @@ _STATE = tempfile.mkdtemp()
 os.environ["XDG_STATE_HOME"] = _STATE
 os.environ.pop("STEGVERSE_REPO_LEDGER_ROOT", None)
 os.environ.pop("STEGVERSE_ORG_LEDGER_ROOT", None)
+
+# Consuming a frame marks it seen under this tree. A frame built from a supplied
+# epoch has the same name on every run, so a marker left behind would make the
+# next run skip the round trip's frame. The markers this run adds are removed.
+_SEEN = TREE / "resident-runtime/federation/seen.d"
+_SEEN_BEFORE = set(_SEEN.glob("*.json")) if _SEEN.exists() else set()
+
+
+@atexit.register
+def _forget_seen_markers():
+    for path in (set(_SEEN.glob("*.json")) if _SEEN.exists() else set()) - _SEEN_BEFORE:
+        path.unlink()
 
 #: A peer this organization's own directory already declares, so the crossing
 #: resolves without editing the real directory for a test. The identity is real
