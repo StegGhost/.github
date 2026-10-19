@@ -1159,7 +1159,7 @@ def frame_error_refusal(error:BaseException)->dict[str,Any]:
         return ingest_refusal(FRAME_INTEGRITY_INVALID,type(error).__name__+": "+message)
     return {**ingest_refusal(FRAME_INGEST_FAILED,message),"failed_predicate":type(error).__name__}
 
-COMMUNICATION_ID_COLLISION="COMMUNICATION_ID_COLLISION"
+RESPONSE_ID_COLLISION="RESPONSE_ID_COLLISION"
 
 def _response_record_path(repo_root:Path, response_packet_id:str)->Path:
     return (repo_root/"resident-runtime/federation/responses.d"/
@@ -1190,7 +1190,7 @@ def response_collision(repo_root:Path, request_frame:dict[str,Any])->dict[str,An
     holder=(record.get("request_packet_id"),record.get("request_frame_sha256"))
     if holder==(request_frame.get("packet_id"),request_frame.get("frame_sha256")):
         return None
-    return ingest_refusal(COMMUNICATION_ID_COLLISION,
+    return ingest_refusal(RESPONSE_ID_COLLISION,
                           "response "+response_id+" already answers request "+str(holder[0])+"; "
                           "a distinct request may not reuse its communication_id")
 

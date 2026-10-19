@@ -960,7 +960,7 @@ class InboundEpochIsSupplied(unittest.TestCase):
     def test_a_distinct_request_reusing_a_communication_id_is_refused(self):
         # F-REPUB keying: a recorded response is reused only for the request it
         # answers. A distinct request under the same communication_id (so the
-        # same response id) is refused COMMUNICATION_ID_COLLISION before it is
+        # same response id) is refused RESPONSE_ID_COLLISION before it is
         # consumed, and gets no response.
         monitor = KERNEL.build_ecosystem_packets(
             origin_org="Org-A", origin_service="org-a.org-control", organizations=["Org-B"],
@@ -974,7 +974,7 @@ class InboundEpochIsSupplied(unittest.TestCase):
         KERNEL.publish_frame(second, root=self.mesh)
         refused, = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh)
         refusal = refused["result"]["refusal"]
-        self.assertEqual(refusal["failure_code"], "COMMUNICATION_ID_COLLISION")
+        self.assertEqual(refusal["failure_code"], "RESPONSE_ID_COLLISION")
         for field in ("disposition", "failed_predicate", "required_evidence_or_repair",
                       "retry_entrypoint", "owning_existing_goal", "next_attempt"):
             self.assertIn(field, refusal)
@@ -989,7 +989,7 @@ class InboundEpochIsSupplied(unittest.TestCase):
         gateway.submit_frame = lambda frame: self.fail("a colliding request was answered")
         gateway.acknowledge_frame = lambda organization, frame, state, hb_epoch=None: {"state": state}
         out = gateway.resident_gateway_cycle(self.b)
-        self.assertEqual((out["state"], out["refusal"]["failure_code"]), ("BLOCKED", "COMMUNICATION_ID_COLLISION"))
+        self.assertEqual((out["state"], out["refusal"]["failure_code"]), ("BLOCKED", "RESPONSE_ID_COLLISION"))
         self.assertEqual(CLOCK_CALLS, [])
 
     def test_a_fault_at_each_gateway_write_submits_exactly_once(self):
