@@ -207,6 +207,7 @@ def resident_gateway_cycle(repo_root: Path, hb_epoch: int | None = None) -> dict
     epoch = hb_epoch if epoch is None else epoch
     response_emitted = 0
     response_ref = None
+    response_refusal = None
     if result.get("status") == "CONSUMED":
         execution = result["execution_result"]
         message_class = (packet.get("payload") or {}).get("message_class")
@@ -214,11 +215,16 @@ def resident_gateway_cycle(repo_root: Path, hb_epoch: int | None = None) -> dict
         # as the spool lane and would answer three of the four classes the map
         # declares answered.
         if message_class in K.RESPONDED_REQUEST_CLASSES:
-            response = K.build_control_response(packet, execution)
-            response_frame = K.carrier_frame(response, epoch=epoch)
-            submit_frame(response_frame)
-            response_emitted = 1
-            response_ref = response_frame["frame_sha256"]
+            if epoch is None:
+                # No supplied epoch: refused six-field, never a clock response.
+                response_refusal = K.writer_epoch_refusal(
+                    None, retry_entrypoint="resident-runtime/federation_gateway_transport.py::resident_gateway_cycle (hb_epoch=)")
+            else:
+                response = K.build_control_response(packet, execution)
+                response_frame = K.carrier_frame(response, epoch=epoch)
+                submit_frame(response_frame)
+                response_emitted = 1
+                response_ref = response_frame["frame_sha256"]
         elif message_class in K.ACK_CLASSES:
             _persist_response(repo_root, packet, execution)
         ack_state = "CONSUMED"
@@ -234,6 +240,7 @@ def resident_gateway_cycle(repo_root: Path, hb_epoch: int | None = None) -> dict
         "frames_consumed": 1 if ack_state == "CONSUMED" else 0,
         "responses_emitted": response_emitted,
         "response_frame_sha256": response_ref,
+        "response_refusal": response_refusal,
         "ack_state": ack.get("state"),
         "gateway_execution_authority": "NONE",
     }

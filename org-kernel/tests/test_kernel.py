@@ -164,8 +164,11 @@ with tempfile.TemporaryDirectory() as td:
                                     root=mesh,repo_root=a)
     assert out["emissions_recorded"] is True
     pid=out["publications"][0]["packet"]["packet_id"]
-    served=k.consume_and_respond(b,mesh_root=mesh)
+    # The request frame is clock-flagged and lends no epoch, so the response is
+    # published at the epoch supplied to the cycle, never from a clock.
+    served=k.consume_and_respond(b,mesh_root=mesh,hb_epoch=4096)
     assert [x["result"]["status"] for x in served]==["CONSUMED"]
+    assert served[0]["response_publication"]["frame"]["heartbeat_reference"]["derived_from_clock"] is False
     assert served[0]["response_publication"] is not None
 
     collected=k.collect_ecosystem_responses("Org-A",COMM,mesh_root=mesh,repo_root=a)

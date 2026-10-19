@@ -9,10 +9,10 @@ K=importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(K)
 GWSPEC=importlib.util.spec_from_file_location("federation_gateway_transport",ROOT/"resident-runtime"/"federation_gateway_transport.py")
 GW=importlib.util.module_from_spec(GWSPEC); GWSPEC.loader.exec_module(GW)
 
-#: A supplied epoch (--hb-epoch, else HB_EPOCH) is checked by the kernel's shared
-#: rule and refused six-field FAIL_CLOSED before anything is written. It stamps
-#: the cycle record and every response the cycle publishes. With neither given
-#: the cycle keeps the clock default, marked derived_from_clock true (WU-B13).
+#: The epoch is supplied (--hb-epoch, else HB_EPOCH) and checked by the kernel's
+#: shared rule; absent or invalid is refused six-field FAIL_CLOSED before
+#: anything is written. It stamps the cycle record and every response the cycle
+#: publishes. No clock is read.
 EPOCH_RETRY_ENTRYPOINT="resident-runtime/federation_cycle.py --hb-epoch (or HB_EPOCH)"
 
 def main(argv=None):
@@ -21,14 +21,12 @@ def main(argv=None):
                         help="supplied heartbeat epoch (ASCII digits, >= 32); refused FAIL_CLOSED when invalid")
     args=parser.parse_args(argv)
     raw=args.hb_epoch if args.hb_epoch is not None else os.environ.get("HB_EPOCH")
-    hb_epoch=None
-    if raw is not None:
-        refusal=K.writer_epoch_refusal(raw,retry_entrypoint=EPOCH_RETRY_ENTRYPOINT)
-        if refusal is not None:
-            print(json.dumps(refusal,sort_keys=True))
-            return 1
-        hb_epoch=int(raw)
-    heartbeat=K.hb_reference() if hb_epoch is None else K.hb_reference(epoch=hb_epoch)
+    refusal=K.writer_epoch_refusal(raw,retry_entrypoint=EPOCH_RETRY_ENTRYPOINT)
+    if refusal is not None:
+        print(json.dumps(refusal,sort_keys=True))
+        return 1
+    hb_epoch=int(raw)
+    heartbeat=K.hb_reference(epoch=hb_epoch)
     if os.getenv("STEGVERSE_ORG_FEDERATION_GATEWAY_URL","").strip():
         receipt=GW.resident_gateway_cycle(ROOT,hb_epoch=hb_epoch)
         receipt["heartbeat_reference"]=heartbeat

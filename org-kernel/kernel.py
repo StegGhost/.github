@@ -369,6 +369,7 @@ CARRIED_PROVENANCE_UNVERIFIED="CARRIED_PROVENANCE_UNVERIFIED"
 FRAME_REFUSED_QUARANTINED="FRAME_REFUSED_QUARANTINED"
 FRAME_PREDICATE="FRAME_CARRIES_A_SUPPLIED_OR_VERIFIED_HEARTBEAT_REFERENCE"
 INGEST_RETRY_ENTRYPOINT="org-kernel/kernel.py::ingest_frame"
+RESPONSE_RETRY_ENTRYPOINT="org-kernel/kernel.py::consume_and_respond (hb_epoch=)"
 
 def carried_claim_failure(root:Path, ref:dict[str,Any])->str|None:
     """Why a CARRIED claim does not verify against the current organization ledger head, or None.
@@ -714,7 +715,12 @@ def handle_control_message(root:Path, packet:dict[str,Any], registry:dict[str,An
       "execution_authority_effect":packet["transition"]["authority_effect"]
     }
     if message_class=="ecosystem.monitor.request":
-        result["monitor_status"]=resident_status(root,registry,hb_epoch=hb_epoch)
+        # A consumed request is answered at a supplied epoch or not at all: a
+        # clock-flagged frame lends none, and the clock default is not reached.
+        if hb_epoch is None:
+            result["monitor_status_refusal"]=writer_epoch_refusal(None,retry_entrypoint=INGEST_RETRY_ENTRYPOINT+" (hb_epoch=)")
+        else:
+            result["monitor_status"]=resident_status(root,registry,hb_epoch=hb_epoch)
     elif message_class=="ecosystem.work.request":
         result["work_intake"]=persist_work_request(root,packet)
     elif message_class=="ecosystem.communication":
@@ -853,6 +859,7 @@ def consume_and_respond(repo_root:Path, *, mesh_root:Path|None=None, seen:set[st
         message_class=payload.get("message_class")
         result=ingest_frame(repo_root,item["frame"],mesh_root=mesh_root,hb_epoch=hb_epoch)
         response_publication=None
+        response_refusal=None
         # Read from RESPONDED_REQUEST_CLASSES, not a second copy of it. A
         # literal set here disagreed with the map the moment the map gained a
         # class: it declared four answered classes while this responded to
@@ -865,10 +872,15 @@ def consume_and_respond(repo_root:Path, *, mesh_root:Path|None=None, seen:set[st
             # one; the clock default is reached only for a clock-derived request.
             epoch=frame_supplied_epoch(item["frame"])
             epoch=hb_epoch if epoch is None else epoch
-            response_publication=publish_packet(response,root=mesh_root,
-                                                now_ns=now_ns if epoch is None else None,epoch=epoch)
+            if epoch is None:
+                # A clock-flagged request lends no epoch and none was supplied:
+                # the response is refused six-field, never stamped from a clock.
+                response_refusal=writer_epoch_refusal(None,retry_entrypoint=RESPONSE_RETRY_ENTRYPOINT)
+            else:
+                response_publication=publish_packet(response,root=mesh_root,epoch=epoch)
         marker=mark_federation_frame_seen(repo_root,item["path"],item["frame"],result)
-        out.append({"path":item["path"],"result":result,"response_publication":response_publication,"seen_marker":str(marker)})
+        out.append({"path":item["path"],"result":result,"response_publication":response_publication,
+                    "response_refusal":response_refusal,"seen_marker":str(marker)})
     return out
 
 def recorded_emissions(repo_root:Path, communication_id:str)->dict[str,dict[str,Any]]:

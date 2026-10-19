@@ -125,9 +125,14 @@ class ClockMarkerProbe(unittest.TestCase):
         ref = out["publications"][0]["frame"]["heartbeat_reference"]
         self.assertIs(ref["derived_from_clock"], True)
         self.assertEqual(ref["sampled_unix_ns"], FIXED_NS)
+        # The clock-flagged request is consumed but lends no epoch, and none was
+        # supplied: the response is refused six-field, never clock-stamped.
+        clock_reads = len(CLOCK_CALLS)
         served = KERNEL.consume_and_respond(b, mesh_root=mesh)
-        self.assertIsNotNone(served[0]["response_publication"])
-        self.assertIs(served[0]["response_publication"]["frame"]["heartbeat_reference"]["derived_from_clock"], True)
+        self.assertEqual(served[0]["result"]["status"], "CONSUMED")
+        self.assertIsNone(served[0]["response_publication"])
+        self.assertEqual(served[0]["response_refusal"]["failure_code"], "HB_EPOCH_NOT_SUPPLIED")
+        self.assertEqual(len(CLOCK_CALLS), clock_reads)
         self.assertGreater(len(CLOCK_CALLS), 0)
         self.assertMarked(out, served, KERNEL.resident_status(a), *written(self.tmp))
 
@@ -194,8 +199,9 @@ class ClockMarkerProbe(unittest.TestCase):
         self.assertIs(sent[0]["derived_from_clock"], True)
         self.assertMarked(sent[0])
 
-    def test_federation_cycle_marks_latest_cycle(self):
-        # Row 2: takes no epoch; its frames and latest-cycle.json are clock-marked.
+    def test_federation_cycle_refuses_an_absent_epoch(self):
+        # S2: with no --hb-epoch and no HB_EPOCH the cycle is refused six-field
+        # NOT_SUPPLIED and writes nothing; no clock is read.
         root = self.tmp / "c"
         provision(root, "Org-C", "BOUNDARY_LOCAL_CONTROL", "org-c.org-control")
         cycle = load("probe_federation_cycle", "resident-runtime/federation_cycle.py")
@@ -205,18 +211,21 @@ class ClockMarkerProbe(unittest.TestCase):
         previous = os.environ.pop("STEGVERSE_ORG_FEDERATION_GATEWAY_URL", None)
         previous_epoch = os.environ.pop("HB_EPOCH", None)
         os.environ["STEGVERSE_ORG_FEDERATION_ROOT"] = str(self.tmp / "mesh")
+        import contextlib, io
+        out = io.StringIO()
         try:
-            self.assertEqual(cycle.main([]), 0)
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(cycle.main([]), 1)
         finally:
             os.environ.pop("STEGVERSE_ORG_FEDERATION_ROOT", None)
             if previous is not None:
                 os.environ["STEGVERSE_ORG_FEDERATION_GATEWAY_URL"] = previous
             if previous_epoch is not None:
                 os.environ["HB_EPOCH"] = previous_epoch
-        latest = json.loads((root / "resident-runtime/federation/latest-cycle.json").read_text())
-        self.assertIs(latest["heartbeat_reference"]["derived_from_clock"], True)
-        self.assertEqual(latest["heartbeat_reference"]["sampled_unix_ns"], FIXED_NS)
-        self.assertMarked(latest)
+        refusal = json.loads(out.getvalue())
+        self.assertEqual((refusal["disposition"], refusal["failure_code"]), ("FAIL_CLOSED", "HB_EPOCH_NOT_SUPPLIED"))
+        self.assertFalse((root / "resident-runtime/federation/latest-cycle.json").exists())
+        self.assertEqual(CLOCK_CALLS, [])
 
     def test_organization_runtime_receipts_take_the_supplied_epoch(self):
         # Row 3: activation and ingress receipts refuse an absent epoch before
@@ -408,6 +417,53 @@ class InboundEpochIsSupplied(unittest.TestCase):
     def assertMarked(self, *values):
         for value in values:
             self.assertEqual(unmarked_clock_values(value), [], value)
+
+    def test_a_clock_flagged_frame_is_answered_at_a_supplied_epoch_or_refused(self):
+        # S1 narrow: a clock-flagged request is consumed but lends no epoch.
+        # Every route that would answer it refuses six-field NOT_SUPPLIED and
+        # never reaches the clock default.
+        RAISING.clear()
+        monitor = KERNEL.build_ecosystem_packets(
+            origin_org="Org-A", origin_service="org-a.org-control", organizations=["Org-B"],
+            standing=STANDING, message_class="ecosystem.monitor.request", subject="monitor",
+            body={}, communication_id="clock-monitor-001")["packets"][0]
+        clock_monitor = KERNEL.carrier_frame(monitor)
+        clock_request = KERNEL.carrier_frame(self.request)
+        CLOCK_CALLS.clear()
+        RAISING.append(True)
+        status = KERNEL.ingest_frame(self.b, clock_monitor)["execution_result"]["application_result"]
+        self.assertNotIn("monitor_status", status)
+        self.assertEqual(status["monitor_status_refusal"]["failure_code"], "HB_EPOCH_NOT_SUPPLIED")
+        gateway = load("probe_gateway_clock", "resident-runtime/federation_gateway_transport.py")
+        gateway.K = KERNEL
+        submitted = []
+        gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": clock_request}
+        gateway.submit_frame = lambda frame: submitted.append(frame) or {}
+        gateway.acknowledge_frame = lambda organization, frame, state: {"state": state}
+        out = gateway.resident_gateway_cycle(self.b)
+        self.assertEqual((out["responses_emitted"], submitted), (0, []))
+        self.assertEqual(out["response_refusal"]["failure_code"], "HB_EPOCH_NOT_SUPPLIED")
+        self.assertEqual(gateway.resident_gateway_cycle(self.b, hb_epoch=4096)["responses_emitted"], 1)
+        self.assertSupplied(submitted[0])
+        self.assertEqual(CLOCK_CALLS, [])
+
+    def test_git_carrier_refuses_a_clock_flagged_egress(self):
+        RAISING.clear()
+        root = self.tmp / "g"
+        provision(root, "Diag", "BOUNDARY_LOCAL_DIAGNOSTIC", "diag.boundary-diagnostic")
+        (root / "org-boundary/runtime").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(TREE / "org-boundary/runtime/intr_transport.py", root / "org-boundary/runtime/intr_transport.py")
+        packet = KERNEL.build_packet(
+            origin_org="Peer", origin_service="peer.org-control", destination_org="Diag",
+            destination_service="diag.boundary-diagnostic", payload={"probe": "git"}, standing=STANDING)
+        carrier = load("probe_git_carrier_consume", "org-boundary/runtime/git_carrier.py")
+        out = carrier.consume(KERNEL.carrier_frame(packet), root=root)
+        self.assertEqual(out["status"], "CONSUMED")
+        self.assertIsNone(out["egress_persisted"])
+        self.assertEqual(out["egress_refusal"]["failure_code"], "HB_EPOCH_NOT_SUPPLIED")
+        supplied = carrier.consume(KERNEL.carrier_frame(dict(packet, packet_id=packet["packet_id"] + ":s"), epoch=4096),
+                                   root=root)
+        self.assertSupplied(json.loads(Path(supplied["egress_persisted"]).read_text()))
 
     def test_monitor_request_status_takes_the_inbound_epoch(self):
         # R2: resident_status is stamped from the request frame's epoch.

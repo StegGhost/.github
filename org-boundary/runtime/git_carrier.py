@@ -173,8 +173,14 @@ def consume(frame: dict[str, Any], *, root: Path | None = None,
     transport = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(transport)
 
+    epoch = kernel.frame_supplied_epoch(frame)
+    if epoch is None:
+        # A clock-flagged frame lends no epoch: the egress is refused six-field,
+        # never persisted under a clock stamp.
+        return {**result, "egress_persisted": None, "egress_refusal": kernel.writer_epoch_refusal(
+            None, retry_entrypoint="org-boundary/runtime/git_carrier.py::consume")}
     egress = transport.build_egress(result["packet"], result["execution_result"])
-    path = kernel.persist_outbox(base, kernel.carrier_frame(egress, epoch=kernel.frame_supplied_epoch(frame)))
+    path = kernel.persist_outbox(base, kernel.carrier_frame(egress, epoch=epoch))
     return {**result, "egress_persisted": str(path), "egress_packet_id": egress["packet_id"]}
 
 
