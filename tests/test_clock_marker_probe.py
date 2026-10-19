@@ -1564,6 +1564,53 @@ class ProcessBoundaryExitSplit(unittest.TestCase):
                     self.assertIn(field, printed)
                 self.assertEqual(len(list(quarantine.glob("*.json"))), 1)
 
+    def test_an_exit_0_without_a_valid_result_is_refused_terminal_and_quarantined(self):
+        # V-P11 @7ae7559 item 2: the child exits 0 and leaves an unreadable or
+        # invalid execution.json. Invalid content is a terminal six-field
+        # refusal with a marker; nothing is a traceback.
+        import sys
+        envelope = self.tmp / "in.json"
+        envelope.write_text(json.dumps(self.envelope))
+        writers = {
+            "not_json": "open(sys.argv[sys.argv.index('--out')+1], 'w').write('not json')",
+            "not_an_object": "open(sys.argv[sys.argv.index('--out')+1], 'w').write('[1]')",
+            "missing_fields": "open(sys.argv[sys.argv.index('--out')+1], 'w').write('{}')",
+        }
+        genuine = self.run_once.PROCESS_BOUNDARY
+        for case, writer in writers.items():
+            with self.subTest(result=case):
+                quarantine = self.tmp / ("quarantine-" + case)
+                self.run_once.PROCESS_BOUNDARY = [sys.executable, "-c", "import sys; " + writer]
+                try:
+                    status, printed = self.run_once.run(envelope, self.tmp / "egress.json", quarantine)
+                finally:
+                    self.run_once.PROCESS_BOUNDARY = genuine
+                self.assertEqual((status, printed["failure_code"], printed["terminal"]),
+                                 (65, "PROCESS_BOUNDARY_RESULT_INVALID", True), printed)
+                self.assertEqual(len(list(quarantine.glob("*.json"))), 1)
+                self.assertFalse((self.tmp / "egress.json").exists())
+
+    def test_its_own_result_read_or_egress_write_fault_is_non_terminal(self):
+        # run_once's own OSError: the result unreadable (no file written) or the
+        # egress unwritable is 75 non-terminal, with no marker.
+        import sys
+        envelope = self.tmp / "in.json"
+        envelope.write_text(json.dumps(self.envelope))
+        genuine = self.run_once.PROCESS_BOUNDARY
+        self.run_once.PROCESS_BOUNDARY = [sys.executable, "-c", "pass"]
+        try:
+            status, printed = self.run_once.run(envelope, self.tmp / "egress.json", self.quarantine)
+        finally:
+            self.run_once.PROCESS_BOUNDARY = genuine
+        self.assertEqual((status, printed["failure_code"], printed["terminal"]),
+                         (75, "PROCESS_BOUNDARY_WRITE_FAULT", False))
+        blocker = self.tmp / "a-file"
+        blocker.write_text("")
+        status, printed = self.run_once.run(envelope, blocker / "egress.json", self.quarantine)
+        self.assertEqual((status, printed["failed_predicate"], printed["terminal"]),
+                         (75, "EGRESS_PATH_IS_WRITABLE", False))
+        self.assertFalse(self.quarantine.exists() and any(self.quarantine.iterdir()))
+
     def test_every_content_fault_exits_65_with_a_terminal_record(self):
         # The refusals that were bare SystemExit strings route through 65.
         registry = json.loads((TREE / "org-boundary/registry/services.json").read_text())

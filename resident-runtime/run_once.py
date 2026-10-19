@@ -5,11 +5,13 @@ from org_boundary_runtime import build_egress, validate_org_crossing
 
 ROOT=Path(__file__).resolve().parents[1]
 PROCESS_BOUNDARY=["python3","org-boundary/runtime/process_boundary.py"]
-#: process_boundary's exit split (DC#10). Only 75 -- its own state faulting -- is
-#: non-terminal: no marker, and the same envelope is processed once on the next
-#: run (B-P36j/B-P36o). 65 is the envelope's own defect: terminal and
-#: quarantined. Any other exit (1, a crash, an unknown code) is refused terminal
-#: and quarantined too, so an unknown failure never stays pending forever.
+#: process_boundary's exit split (DC#10). Only 75 -- its own state faulting --
+#: and this process's own OSError are non-terminal: no marker, and the same
+#: envelope is processed once on the next run (B-P36j/B-P36o). 65 is the
+#: envelope's own defect: terminal and quarantined. Any other exit (1, a crash,
+#: an unknown code), and an exit 0 whose result is not a valid execution result,
+#: is refused terminal and quarantined too, so an unknown failure never stays
+#: pending forever.
 EXIT_INPUT_FAULT=65
 EXIT_WRITE_FAULT=75
 QUARANTINE=ROOT/"resident-runtime/federation/quarantine.d"
@@ -67,16 +69,34 @@ def run(ingress_path,egress_path,quarantine=QUARANTINE):
                            "exit "+str(done.returncode)+": "+done.stderr.strip(),True)
             quarantine_envelope(packet_id,refusal,quarantine)
             return EXIT_INPUT_FAULT,refusal
-        result=json.loads(result_path.read_text())
-    egress=build_egress(ingress,result)
-    validate_org_crossing(egress,"EGRESS")
+        # The child said success: reading its result is this process's own
+        # state (an OSError is non-terminal 75), but a result that is not
+        # valid JSON, or that builds no valid egress, is a success with no
+        # valid result -- refused terminal and quarantined, never a traceback.
+        try:
+            raw=result_path.read_text()
+        except OSError as error:
+            return EXIT_WRITE_FAULT,record("PROCESS_BOUNDARY_WRITE_FAULT","EXECUTION_RESULT_READS",
+                                           type(error).__name__+": "+str(error),False)
+        try:
+            result=json.loads(raw)
+            if not isinstance(result,dict): raise ValueError("execution result is not a JSON object")
+            egress=build_egress(ingress,result)
+            validate_org_crossing(egress,"EGRESS")
+            summary={"status":"PASS","packet_id":ingress["packet_id"],"egress_packet_id":egress["packet_id"],
+                     "consumed":result["consumed"],"reconstruction":result["reconstruction"]["status"]}
+        except (ValueError,KeyError,TypeError,AttributeError) as error:
+            refusal=record("PROCESS_BOUNDARY_RESULT_INVALID","EXIT_0_CARRIES_A_VALID_EXECUTION_RESULT",
+                           type(error).__name__+": "+str(error),True)
+            quarantine_envelope(packet_id,refusal,quarantine)
+            return EXIT_INPUT_FAULT,refusal
     try:
         Path(egress_path).parent.mkdir(parents=True,exist_ok=True)
         Path(egress_path).write_text(json.dumps(egress,indent=2,sort_keys=True)+"\n")
     except OSError as error:
         return EXIT_WRITE_FAULT,record("PROCESS_BOUNDARY_WRITE_FAULT","EGRESS_PATH_IS_WRITABLE",
                                        type(error).__name__+": "+str(error),False)
-    return 0,{"status":"PASS","packet_id":ingress["packet_id"],"egress_packet_id":egress["packet_id"],"consumed":result["consumed"],"reconstruction":result["reconstruction"]["status"]}
+    return 0,summary
 
 def main():
     ap=argparse.ArgumentParser()
