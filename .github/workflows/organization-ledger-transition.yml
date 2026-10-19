@@ -15,7 +15,7 @@ on:
         required: true
         type: string
       hb_epoch:
-        description: 'supplied heartbeat epoch the receipts carry (non-negative integer); no clock is read for it'
+        description: 'supplied heartbeat epoch the receipts carry (ASCII digits, value >= 32); no clock is read for it'
         required: true
         type: string
       packet_id:
