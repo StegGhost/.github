@@ -190,14 +190,22 @@ class ClockMarkerProbe(unittest.TestCase):
             self.assertIs(envelope["carrier"]["derived_from_clock"], True)
         self.assertMarked(ingress, egress)
 
-    def test_gateway_acknowledgement_marks_its_clock_reading(self):
-        # Row 6 on the federation_cycle gateway branch.
+    def test_gateway_acknowledgement_reads_no_clock(self):
+        # VALIDATOR (4): the ack is stamped from the epoch in hand, or carries
+        # none; it never reads the clock.
         gateway = load("probe_gateway", "resident-runtime/federation_gateway_transport.py")
         sent = []
         gateway._json_request = lambda method, path, *, body=None, headers=None: sent.append(body) or {"state": "OK"}
-        gateway.acknowledge_frame("Org-A", {"packet_id": "p", "frame_sha256": "sha256:" + "0" * 64}, "CONSUMED")
-        self.assertIs(sent[0]["derived_from_clock"], True)
-        self.assertMarked(sent[0])
+        RAISING.append(True)
+        self.addCleanup(RAISING.clear)
+        frame = {"packet_id": "p", "frame_sha256": "sha256:" + "0" * 64}
+        gateway.acknowledge_frame("Org-A", frame, "CONSUMED")
+        gateway.acknowledge_frame("Org-A", frame, "CONSUMED", hb_epoch=4096)
+        self.assertEqual((sent[0]["observed_at"], sent[0]["heartbeat_reference"]), (None, None))
+        self.assertEqual((sent[1]["heartbeat_reference"]["epoch"], sent[1]["heartbeat_reference"]["derived_from_clock"]),
+                         (4096, False))
+        self.assertEqual(CLOCK_CALLS, [])
+        self.assertMarked(*sent)
 
     def test_federation_cycle_refuses_an_absent_epoch(self):
         # S2: with no --hb-epoch and no HB_EPOCH the cycle is refused six-field
@@ -392,7 +400,7 @@ class InboundEpochIsSupplied(unittest.TestCase):
         submitted = []
         gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": self.frame}
         gateway.submit_frame = lambda frame: submitted.append(frame) or {}
-        gateway.acknowledge_frame = lambda organization, frame, state: {"state": state}
+        gateway.acknowledge_frame = lambda organization, frame, state, hb_epoch=None: {"state": state}
         out = gateway.resident_gateway_cycle(self.b)
         self.assertEqual(out["responses_emitted"], 1)
         self.assertSupplied(submitted[0])
@@ -465,7 +473,7 @@ class InboundEpochIsSupplied(unittest.TestCase):
         submitted = []
         gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": clock_request}
         gateway.submit_frame = lambda frame: submitted.append(frame) or {}
-        gateway.acknowledge_frame = lambda organization, frame, state: {"state": state}
+        gateway.acknowledge_frame = lambda organization, frame, state, hb_epoch=None: {"state": state}
         out = gateway.resident_gateway_cycle(self.b)
         self.assertEqual((out["responses_emitted"], submitted), (0, []))
         self.assertEqual(out["response_refusal"]["failure_code"], "HB_EPOCH_NOT_SUPPLIED")
@@ -717,6 +725,30 @@ class WritersVerifyACarriedClaim(unittest.TestCase):
             self.org_append(self.emit.append("t:other", "T", "sha256:" + "2" * 64, "sha256:" + "3" * 64,
                                              hb_epoch=4096),
                             hb_epoch=5000, hb_carried={**claim, "head_receipt_sha": org["receipt_sha256"]})
+
+class ManifestEntrypointsBindTheirEpoch(unittest.TestCase):
+    """B-P36n: every entrypoint the activation manifest declares that requires a
+    supplied epoch has an epoch binding and a dispatcher that passes it, so no
+    declared entrypoint is a standing refusal when invoked as declared."""
+
+    def test_every_epoch_requiring_entrypoint_has_a_binding(self):
+        manifest = json.loads((TREE / "resident-runtime/activation-manifest.json").read_text())
+        declared = {value for value in manifest.values()
+                    if isinstance(value, str) and value.endswith(".py") and (TREE / value).is_file()}
+        requiring = {path for path in declared if '"--hb-epoch"' in (TREE / path).read_text()}
+        self.assertIn("resident-runtime/federation_cycle.py", requiring)
+        bindings = manifest.get("epoch_bindings") or {}
+        for path in requiring:
+            with self.subTest(entrypoint=path):
+                binding = bindings.get(path)
+                self.assertIsNotNone(binding, path + " requires an epoch but the manifest binds none")
+                self.assertIn(binding["hb_epoch"]["from"], ("dispatch_input", "carried"))
+                self.assertIs(binding["hb_epoch"]["derived_from_clock"], False)
+                flag = binding["hb_epoch"]["cli_flag"]
+                self.assertIn('"' + flag + '"', (TREE / path).read_text())
+                self.assertIn(path + " " + flag + " ", binding["dispatcher"]["invocation"])
+                self.assertIs(binding["dispatcher"]["adds_dependency"], False)
+
 
 if __name__ == "__main__":
     unittest.main()

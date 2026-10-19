@@ -26,5 +26,23 @@
   "local_spool_scope": "SAME_HOST_FALLBACK_ONLY",
   "resident_cycle_entrypoint": "resident-runtime/federation_cycle.py",
   "federation_poll_mode": "OUTBOUND_ONLY",
-  "federation_network_route": "SHARED_SERVICE_GATEWAY"
+  "federation_network_route": "SHARED_SERVICE_GATEWAY",
+  "epoch_bindings": {
+    "resident-runtime/federation_cycle.py": {
+      "hb_epoch": {
+        "from": "dispatch_input",
+        "cli_flag": "--hb-epoch",
+        "env": "HB_EPOCH",
+        "rule": "SUBMISSION_CARRIES_THE_SUPPLIED_HB_EPOCH",
+        "absent_or_invalid": "six-field FAIL_CLOSED HB_EPOCH_NOT_SUPPLIED / HB_EPOCH_INVALID, rc 1, nothing written",
+        "derived_from_clock": false
+      },
+      "dispatcher": {
+        "kind": "OPERATOR_DISPATCH",
+        "invocation": "python3 resident-runtime/federation_cycle.py --hb-epoch <dispatch_input.hb_epoch>",
+        "dispatch_input": "hb_epoch: ASCII digits >= 32, supplied by the dispatcher, never read from a clock",
+        "adds_dependency": false
+      }
+    }
+  }
 }

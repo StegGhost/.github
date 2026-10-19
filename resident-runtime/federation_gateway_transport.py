@@ -2,7 +2,6 @@
 """Outbound-only Service Gateway transport for organization federation."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import importlib.util
 import json
 import os
@@ -83,16 +82,18 @@ def fetch_frame(organization: str) -> dict[str, Any]:
     )
 
 
-def acknowledge_frame(organization: str, frame: dict[str, Any], state: str) -> dict[str, Any]:
+def acknowledge_frame(organization: str, frame: dict[str, Any], state: str,
+                      hb_epoch: int | None = None) -> dict[str, Any]:
     ack = {
         "schema": "stegverse.org-federation-rendezvous.ack/v1",
         "organization": organization,
         "packet_id": frame["packet_id"],
         "frame_sha256": frame["frame_sha256"],
         "state": state,
-        "observed_at": datetime.now(timezone.utc).isoformat(),
-        # A host clock reading, marked as one rather than read as a heartbeat tick.
-        "derived_from_clock": True,
+        # No clock is read: the ack is stamped from the epoch in hand, or carries
+        # none. A wall-clock observed_at was a clock read on every cycle.
+        "observed_at": None,
+        "heartbeat_reference": None if hb_epoch is None else K.hb_reference(epoch=hb_epoch),
         "gateway_execution_authority": "NONE",
         "authority_effect": "NONE_OBSERVATION_ONLY",
     }
@@ -204,7 +205,7 @@ def resident_gateway_cycle(repo_root: Path, hb_epoch: int | None = None) -> dict
     packet = K.recover_packet(frame)
     result = K.ingest_frame(repo_root, frame, hb_epoch=hb_epoch)
     epoch = K.frame_supplied_epoch(frame)
-    if epoch is None and hb_epoch is not None:
+    if epoch is None and hb_epoch is not None and K.supplied_epoch_failure(hb_epoch) is None:
         epoch = int(str(hb_epoch))
     response_emitted = 0
     response_ref = None
@@ -231,7 +232,7 @@ def resident_gateway_cycle(repo_root: Path, hb_epoch: int | None = None) -> dict
         ack_state = "CONSUMED"
     else:
         ack_state = "BLOCKED"
-    ack = acknowledge_frame(organization, frame, ack_state)
+    ack = acknowledge_frame(organization, frame, ack_state, hb_epoch=epoch)
     return {
         "schema_version": "stegverse.org-federation-gateway-cycle.v1",
         "organization": organization,
