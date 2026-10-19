@@ -204,7 +204,8 @@ def resident_gateway_cycle(repo_root: Path, hb_epoch: int | None = None) -> dict
     packet = K.recover_packet(frame)
     result = K.ingest_frame(repo_root, frame, hb_epoch=hb_epoch)
     epoch = K.frame_supplied_epoch(frame)
-    epoch = hb_epoch if epoch is None else epoch
+    if epoch is None and hb_epoch is not None:
+        epoch = int(str(hb_epoch))
     response_emitted = 0
     response_ref = None
     response_refusal = None

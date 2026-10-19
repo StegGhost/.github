@@ -491,6 +491,45 @@ class InboundEpochIsSupplied(unittest.TestCase):
                                    root=root)
         self.assertSupplied(json.loads(Path(supplied["egress_persisted"]).read_text()))
 
+    def test_an_explicit_and_a_frame_epoch_must_agree(self):
+        # B-P36l: an invalid explicit epoch is refused whatever the frame says;
+        # two supplied epochs that disagree are refused HB_EPOCH_CONFLICT; one
+        # alone is the supplied epoch. A refusal writes nothing, not even a
+        # quarantine marker, so the frame is processed once a valid epoch comes.
+        for hb_epoch in ("+33", "31", True):
+            result = KERNEL.ingest_frame(self.b, self.frame, hb_epoch=hb_epoch)
+            self.assertEqual(result["status"], "REFUSED")
+            self.assertEqual(result["refusal"]["failure_code"], "HB_EPOCH_INVALID")
+        conflict = KERNEL.ingest_frame(self.b, self.frame, hb_epoch=5000)
+        self.assertEqual(conflict["refusal"]["failure_code"], "HB_EPOCH_CONFLICT")
+        for field in ("disposition", "failed_predicate", "required_evidence_or_repair",
+                      "retry_entrypoint", "owning_existing_goal", "next_attempt"):
+            self.assertIn(field, conflict["refusal"])
+        KERNEL.publish_frame(self.frame, root=self.mesh)
+        before = sorted(p for p in self.b.rglob("*") if p.is_file() and "__pycache__" not in p.parts)
+        served = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh, hb_epoch="5000")
+        self.assertEqual(served[0]["result"]["refusal"]["failure_code"], "HB_EPOCH_CONFLICT")
+        self.assertIsNone(served[0]["seen_marker"])
+        self.assertIsNone(served[0]["response_publication"])
+        self.assertEqual(sorted(p for p in self.b.rglob("*") if p.is_file() and "__pycache__" not in p.parts), before)
+        agreed = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh, hb_epoch="4096")
+        self.assertSupplied(agreed[0]["response_publication"]["frame"])
+        self.assertEqual(CLOCK_CALLS, [])
+
+    def test_an_explicit_epoch_alone_answers_a_clock_flagged_frame(self):
+        RAISING.clear()
+        monitor = KERNEL.build_ecosystem_packets(
+            origin_org="Org-A", origin_service="org-a.org-control", organizations=["Org-B"],
+            standing=STANDING, message_class="ecosystem.monitor.request", subject="monitor",
+            body={}, communication_id="explicit-monitor-001")["packets"][0]
+        clock_monitor = KERNEL.carrier_frame(monitor)
+        CLOCK_CALLS.clear()
+        RAISING.append(True)
+        status = KERNEL.ingest_frame(self.b, clock_monitor, hb_epoch="4096")[
+            "execution_result"]["application_result"]["monitor_status"]
+        self.assertSupplied(status)
+        self.assertEqual(CLOCK_CALLS, [])
+
     def test_monitor_request_status_takes_the_inbound_epoch(self):
         # R2: resident_status is stamped from the request frame's epoch.
         built = KERNEL.build_ecosystem_packets(

@@ -365,6 +365,7 @@ def persist_outbox(root:Path, frame:dict[str,Any])->Path:
 CARRIED_CLAIM_FIELDS=("source","head_receipt_sha","provenance")
 CARRIED_SOURCE="ORGANIZATION_LEDGER_HEAD"
 CARRIED_PROVENANCE_UNVERIFIED="CARRIED_PROVENANCE_UNVERIFIED"
+HB_EPOCH_CONFLICT="HB_EPOCH_CONFLICT"
 FRAME_REFUSED_QUARANTINED="FRAME_REFUSED_QUARANTINED"
 FRAME_PREDICATE="FRAME_CARRIES_A_SUPPLIED_OR_VERIFIED_HEARTBEAT_REFERENCE"
 INGEST_RETRY_ENTRYPOINT="org-kernel/kernel.py::ingest_frame"
@@ -422,6 +423,10 @@ def frame_refusal(root:Path, frame:dict[str,Any])->dict[str,Any]|None:
             code,detail=CARRIED_PROVENANCE_UNVERIFIED,unverified
     if code is None:
         return None
+    return ingest_refusal(code,detail)
+
+def ingest_refusal(code:str, detail:str)->dict[str,Any]:
+    """The six-field FAIL_CLOSED of a frame refused at ingest."""
     return {"disposition":"FAIL_CLOSED","failure_code":code,"failed_predicate":FRAME_PREDICATE,"detail":detail,
             "required_evidence_or_repair":("the sender re-emits the frame with a supplied heartbeat reference "
                                            "(derived_from_clock false, no sample) or a CARRIED reference naming "
@@ -436,6 +441,14 @@ def ingest_frame(root:Path, frame:dict[str,Any], *, mesh_root:Path|None=None,
     registry=load_registry(root)
     if frame["destination_org"]!=registry["organization"]:
         return {"status":"IGNORED_NOT_ADDRESSED","packet_id":frame["packet_id"]}
+    # An explicit epoch is held to the shared rule whatever the frame says
+    # (B-P36l). Refused as the caller's input, not the frame's: nothing is
+    # written and the frame is not quarantined.
+    if hb_epoch is not None:
+        failure=supplied_epoch_failure(hb_epoch)
+        if failure is not None:
+            return {"status":"REFUSED","packet_id":frame["packet_id"],"quarantine":False,
+                    "refusal":ingest_refusal(*failure)}
     # Refused before dispatch, so no role writes anything for it: no receipt,
     # no inbox intake. The fields are never stripped to admit it as supplied.
     refusal=frame_refusal(root,frame)
@@ -449,7 +462,14 @@ def ingest_frame(root:Path, frame:dict[str,Any], *, mesh_root:Path|None=None,
     ref=frame.get("heartbeat_reference")
     if epoch is None and isinstance(ref,dict) and any(field in ref for field in CARRIED_CLAIM_FIELDS):
         epoch=int(str(ref["epoch"]))
-    result=dispatch(root,packet,mesh_root=mesh_root,hb_epoch=hb_epoch if epoch is None else epoch)
+    # Both supplied and disagreeing: neither is chosen over the other.
+    if hb_epoch is not None and epoch is not None and int(str(hb_epoch))!=epoch:
+        return {"status":"REFUSED","packet_id":frame["packet_id"],"quarantine":False,
+                "refusal":ingest_refusal(HB_EPOCH_CONFLICT,"the supplied hb_epoch "+str(hb_epoch)+
+                                         " disagrees with the frame's epoch "+str(epoch))}
+    if epoch is None and hb_epoch is not None:
+        epoch=int(str(hb_epoch))
+    result=dispatch(root,packet,mesh_root=mesh_root,hb_epoch=epoch)
     return {"status":"CONSUMED","packet":packet,"execution_result":result}
 
 __all__=["hb_reference","derive_channel","carrier_frame","recover_packet","dispatch","persist_outbox","ingest_frame",
@@ -860,19 +880,24 @@ def consume_and_respond(repo_root:Path, *, mesh_root:Path|None=None, seen:set[st
         # surface that is supposed to decide what is closable.
         if result.get("status")=="CONSUMED" and message_class in RESPONDED_REQUEST_CLASSES:
             response=build_control_response(packet,result["execution_result"])
-            # Published at the request frame's validated epoch when it carries
-            # one; the clock default is reached only for a clock-derived request.
+            # Published at the request frame's validated epoch, else at the
+            # epoch supplied to this call (ingest refused any disagreement).
             epoch=frame_supplied_epoch(item["frame"])
-            epoch=hb_epoch if epoch is None else epoch
+            if epoch is None and hb_epoch is not None:
+                epoch=int(str(hb_epoch))
             if epoch is None:
                 # A clock-flagged request lends no epoch and none was supplied:
                 # the response is refused six-field, never stamped from a clock.
                 response_refusal=writer_epoch_refusal(None,retry_entrypoint=RESPONSE_RETRY_ENTRYPOINT)
             else:
                 response_publication=publish_packet(response,root=mesh_root,epoch=epoch)
-        marker=mark_federation_frame_seen(repo_root,item["path"],item["frame"],result)
+        # A refusal of the caller's epoch is not the frame's: nothing is written
+        # for it, so the frame is processed when a valid epoch is supplied.
+        marker=None
+        if result.get("quarantine") is not False:
+            marker=str(mark_federation_frame_seen(repo_root,item["path"],item["frame"],result))
         out.append({"path":item["path"],"result":result,"response_publication":response_publication,
-                    "response_refusal":response_refusal,"seen_marker":str(marker)})
+                    "response_refusal":response_refusal,"seen_marker":marker})
     return out
 
 def recorded_emissions(repo_root:Path, communication_id:str)->dict[str,dict[str,Any]]:
