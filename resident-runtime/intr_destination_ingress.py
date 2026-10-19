@@ -293,17 +293,30 @@ def receive(payload: Any, *, registry: Mapping[str, Any], standing: Mapping[str,
     return _recorded(ALLOW, payload, packet_id, hb_epoch)
 
 
+#: The CLI's epoch is refused six-field FAIL_CLOSED before anything is written.
+EPOCH_RETRY_ENTRYPOINT = "resident-runtime/intr_destination_ingress.py --hb-epoch"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--payload", type=Path, default=None)
     parser.add_argument("--registry", type=Path, default=None)
     parser.add_argument("--packet-id", default=None)
-    parser.add_argument("--hb-epoch", type=int, default=None)
+    # Taken as the raw string: an int() here would read "+33" or " 33" as 33
+    # before the kernel's shared rule could refuse it.
+    parser.add_argument("--hb-epoch", default=None,
+                        help="supplied heartbeat epoch (ASCII digits, >= 32); refused FAIL_CLOSED "
+                             "when absent, never read from a clock")
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--self-close", action="store_true",
                         help="close a diagnostic formed here on this destination")
     parser.add_argument("--communication-id", default=None)
     args = parser.parse_args()
+    refusal = repository_ledger.kernel.writer_epoch_refusal(
+        args.hb_epoch, retry_entrypoint=EPOCH_RETRY_ENTRYPOINT)
+    if refusal is not None:
+        print(json.dumps(refusal, sort_keys=True))
+        return 1
     registry_path = args.registry or (ROOT / "org-boundary/registry/services.json")
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     if args.self_close:

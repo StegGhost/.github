@@ -735,6 +735,11 @@ def close(destination_organization: str, packet_id: str, communication_id: str, 
     }
 
 
+#: Emitting and closing write receipts, so the CLI's epoch is refused six-field
+#: FAIL_CLOSED before either runs. Resolving writes nothing and needs none.
+EPOCH_RETRY_ENTRYPOINT = "resident-runtime/organization_egress_boundary.py --hb-epoch"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--destination-organization", required=True)
@@ -742,9 +747,11 @@ def main() -> int:
     parser.add_argument("--standing",
                         help="JSON file declaring mode, node_ref and the predecessor key")
     parser.add_argument("--transition-reference", default="ecosystem.transition.interorg.v1")
-    parser.add_argument("--hb-epoch", type=int, default=None,
-                        help="heartbeat epoch; derived from the host clock, and marked as "
-                             "derived, when absent")
+    # Taken as the raw string: an int() here would read "+33" or " 33" as 33
+    # before the kernel's shared rule could refuse it.
+    parser.add_argument("--hb-epoch", default=None,
+                        help="supplied heartbeat epoch (ASCII digits, >= 32); refused FAIL_CLOSED "
+                             "when absent, never read from a clock")
     parser.add_argument("--resolve", action="store_true",
                         help="resolve the peer and print the resolution without emitting")
     parser.add_argument("--close", action="store_true",
@@ -756,6 +763,12 @@ def main() -> int:
     parser.add_argument("--out")
     args = parser.parse_args()
 
+    if not args.resolve:
+        refusal = kernel.writer_epoch_refusal(args.hb_epoch,
+                                              retry_entrypoint=EPOCH_RETRY_ENTRYPOINT)
+        if refusal is not None:
+            print(json.dumps(refusal, indent=2, sort_keys=True))
+            return 1
     if args.resolve:
         try:
             result = resolve_destination(args.destination_organization, capability=args.capability)

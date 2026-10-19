@@ -563,6 +563,11 @@ def release_and_submit(*, standing: Mapping[str, Any],
             "authority_effect": "NONE_RELEASE_RECORD_ONLY"}
 
 
+#: Releasing writes receipts, so the CLI's epoch is refused six-field FAIL_CLOSED
+#: before it runs. Reporting the segment writes nothing and needs none.
+EPOCH_RETRY_ENTRYPOINT = "resident-runtime/release_organization_batch.py --hb-epoch"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Release a verified organization receipt-chain segment "
@@ -574,10 +579,20 @@ def main() -> int:
                         help="release against this organization's ledger and stop")
     parser.add_argument("--segment", action="store_true",
                         help="report the unreleased verified segment without releasing")
-    parser.add_argument("--hb-epoch", type=int, default=None)
+    # Taken as the raw string: an int() here would read "+33" or " 33" as 33
+    # before the kernel's shared rule could refuse it.
+    parser.add_argument("--hb-epoch", default=None,
+                        help="supplied heartbeat epoch (ASCII digits, >= 32); refused FAIL_CLOSED "
+                             "when absent, never read from a clock; unused by --segment")
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
 
+    if not args.segment:
+        refusal = organization_ledger.kernel.writer_epoch_refusal(
+            args.hb_epoch, retry_entrypoint=EPOCH_RETRY_ENTRYPOINT)
+        if refusal is not None:
+            print(json.dumps(refusal, sort_keys=True))
+            return 1
     try:
         if args.segment:
             result = {k: v for k, v in verified_segment().items() if k != "segment"}

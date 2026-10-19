@@ -223,6 +223,10 @@ def propagate_all(*, hb_epoch: int | None = None) -> dict[str, Any]:
     }
 
 
+#: The CLI's epoch is refused six-field FAIL_CLOSED before anything is written.
+EPOCH_RETRY_ENTRYPOINT = "resident-runtime/propagate_repository_receipts.py --hb-epoch"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Carry repository transition receipts onto the organization chain.")
@@ -230,11 +234,19 @@ def main() -> int:
                         help="one declared repository; omit to sweep every declared repository")
     parser.add_argument("--repository-ledger-root", type=Path, default=None,
                         help="address of that repository's ledger; derived from the ledger home when absent")
-    parser.add_argument("--hb-epoch", type=int, default=None,
-                        help="heartbeat epoch; derived from the host clock, and marked as derived, when absent")
+    # Taken as the raw string: an int() here would read "+33" or " 33" as 33
+    # before the kernel's shared rule could refuse it.
+    parser.add_argument("--hb-epoch", default=None,
+                        help="supplied heartbeat epoch (ASCII digits, >= 32); refused FAIL_CLOSED "
+                             "when absent, never read from a clock")
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
 
+    refusal = organization_ledger.kernel.writer_epoch_refusal(
+        args.hb_epoch, retry_entrypoint=EPOCH_RETRY_ENTRYPOINT)
+    if refusal is not None:
+        print(json.dumps(refusal, sort_keys=True))
+        return 1
     if args.repository:
         result = propagate(args.repository, repository_root=args.repository_ledger_root,
                            hb_epoch=args.hb_epoch)
