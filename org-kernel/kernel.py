@@ -1159,22 +1159,64 @@ def frame_error_refusal(error:BaseException)->dict[str,Any]:
         return ingest_refusal(FRAME_INTEGRITY_INVALID,type(error).__name__+": "+message)
     return {**ingest_refusal(FRAME_INGEST_FAILED,message),"failed_predicate":type(error).__name__}
 
+COMMUNICATION_ID_COLLISION="COMMUNICATION_ID_COLLISION"
+
+def _response_record_path(repo_root:Path, response_packet_id:str)->Path:
+    return (repo_root/"resident-runtime/federation/responses.d"/
+            (hashlib.sha256(response_packet_id.encode()).hexdigest()+".json"))
+
+def response_collision(repo_root:Path, request_frame:dict[str,Any])->dict[str,Any]|None:
+    """The six-field refusal of a request whose response id another request holds, or None.
+
+    A response's packet id derives from the communication id, so two distinct
+    requests sharing one would share a response record. A recorded response is
+    reused only for the request it answers (same request packet id and frame
+    digest); a different request is refused before it is consumed (F-REPUB).
+    """
+    try:
+        packet=recover_packet(request_frame)
+    except Exception:
+        return None
+    payload=packet.get("payload") or {}
+    if payload.get("message_class") not in RESPONDED_REQUEST_CLASSES:
+        return None
+    response_id=str(payload.get("communication_id"))+":response:"+organization_slug(packet["destination"]["org"])
+    path=_response_record_path(repo_root,response_id)
+    if not path.exists():
+        return None
+    record=json.loads(path.read_text())
+    if "frame" not in record:
+        return None  # a record written before requests were bound to it
+    holder=(record.get("request_packet_id"),record.get("request_frame_sha256"))
+    if holder==(request_frame.get("packet_id"),request_frame.get("frame_sha256")):
+        return None
+    return ingest_refusal(COMMUNICATION_ID_COLLISION,
+                          "response "+response_id+" already answers request "+str(holder[0])+"; "
+                          "a distinct request may not reuse its communication_id")
+
 def recorded_response(repo_root:Path, response:dict[str,Any], epoch:int,
-                      carried:dict[str,Any]|None=None)->tuple[dict[str,Any],Path]:
+                      carried:dict[str,Any]|None=None,
+                      request_frame:dict[str,Any]|None=None)->tuple[dict[str,Any],Path]:
     """The response frame for a request, recorded once and reused byte for byte.
 
-    Keyed by the response's packet_id. Written before the response is
-    published, so a fault after publication (the seen marker, a gateway ack)
-    that leaves the request pending never yields a second, different response
-    on the next cycle: the recorded frame is published again unchanged (F-REPUB).
+    Keyed by the response's packet_id and bound to the request it answers
+    (packet id and frame digest). Written before the response is published, so
+    a fault after publication (the seen marker, a gateway ack) that leaves the
+    request pending never yields a second, different response on the next
+    cycle: the recorded frame is published again unchanged (F-REPUB). A
+    different request under the same response id is refused at ingest
+    (response_collision) and never reaches here.
     """
-    out=repo_root/"resident-runtime/federation/responses.d"
-    out.mkdir(parents=True,exist_ok=True)
-    path=out/(hashlib.sha256(response["packet_id"].encode()).hexdigest()+".json")
+    path=_response_record_path(repo_root,response["packet_id"])
+    path.parent.mkdir(parents=True,exist_ok=True)
     if path.exists():
-        return json.loads(path.read_text()),path
+        record=json.loads(path.read_text())
+        return record.get("frame",record),path
     frame=carrier_frame(response,epoch=epoch,carried=carried)
-    write_atomic(path,json.dumps(frame,indent=2,sort_keys=True)+"\n")
+    request_frame=request_frame or {}
+    record={"request_packet_id":request_frame.get("packet_id"),
+            "request_frame_sha256":request_frame.get("frame_sha256"),"frame":frame}
+    write_atomic(path,json.dumps(record,indent=2,sort_keys=True)+"\n")
     return frame,path
 
 def _consume_one(repo_root:Path, item:dict[str,Any], *, mesh_root:Path|None,
@@ -1183,6 +1225,11 @@ def _consume_one(repo_root:Path, item:dict[str,Any], *, mesh_root:Path|None,
     packet=recover_packet(item["frame"])
     payload=packet.get("payload") or {}
     message_class=payload.get("message_class")
+    # Checked once the frame itself would be admitted, so a frame's own defect
+    # is reported as such, and before anything is consumed or published.
+    collision=response_collision(repo_root,item["frame"]) if frame_refusal(repo_root,item["frame"]) is None else None
+    if collision is not None:
+        return {"status":"REFUSED","packet_id":item["frame"].get("packet_id"),"refusal":collision},None,None
     result=ingest_frame(repo_root,item["frame"],mesh_root=mesh_root,hb_epoch=hb_epoch)
     response_publication=None
     response_refusal=None
@@ -1205,7 +1252,7 @@ def _consume_one(repo_root:Path, item:dict[str,Any], *, mesh_root:Path|None,
             # the response is refused six-field, never stamped from a clock.
             response_refusal=writer_epoch_refusal(None,retry_entrypoint=RESPONSE_RETRY_ENTRYPOINT)
         else:
-            frame,_record=recorded_response(repo_root,response,epoch,carried)
+            frame,_record=recorded_response(repo_root,response,epoch,carried,item["frame"])
             response_publication={"packet":recover_packet(frame),"frame":frame,
                                   "path":str(publish_frame(frame,root=mesh_root))}
     return result,response_publication,response_refusal

@@ -382,6 +382,11 @@ class InboundEpochIsSupplied(unittest.TestCase):
         self.request = built["packets"][0]
         self.frame = KERNEL.carrier_frame(self.request, epoch=4096)
 
+    def distinct(self, packet_id):
+        """A distinct request: its own packet id and its own communication id (F-REPUB)."""
+        return dict(self.request, packet_id=packet_id,
+                    payload={**self.request["payload"], "communication_id": packet_id})
+
     def assertSupplied(self, frame):
         ref = frame["heartbeat_reference"]
         self.assertEqual((ref["epoch"], ref["derived_from_clock"]), (4096, False))
@@ -411,7 +416,7 @@ class InboundEpochIsSupplied(unittest.TestCase):
         # quarantine marker, the valid one is answered, and a second cycle
         # proceeds without retrying the refused frame. No clock is read.
         KERNEL.publish_frame(self.frame, root=self.mesh)
-        unmarked_packet = dict(self.request, packet_id=self.request["packet_id"] + ":unmarked")
+        unmarked_packet = self.distinct(self.request["packet_id"] + ":unmarked")
         frame = KERNEL.carrier_frame(unmarked_packet, epoch=4096)
         body = {k: v for k, v in frame.items() if k != "frame_sha256"}
         body["heartbeat_reference"] = {k: v for k, v in frame["heartbeat_reference"].items()
@@ -420,7 +425,7 @@ class InboundEpochIsSupplied(unittest.TestCase):
         # A CLOCK-flagged frame, built before the clock is forbidden: consumed
         # (pending WU-B13), lending no epoch, its response refused NOT_SUPPLIED.
         RAISING.clear()
-        clock_packet = dict(self.request, packet_id=self.request["packet_id"] + ":clock")
+        clock_packet = self.distinct(self.request["packet_id"] + ":clock")
         clock_frame = KERNEL.carrier_frame(clock_packet)
         KERNEL.publish_frame(clock_frame, root=self.mesh)
         CLOCK_CALLS.clear()
@@ -532,7 +537,7 @@ class InboundEpochIsSupplied(unittest.TestCase):
         self.assertEqual([p for p in after if p not in before], [Path(served[0]["seen_marker"])])
         self.assertEqual(KERNEL.consume_and_respond(self.b, mesh_root=self.mesh, hb_epoch="4096"), [])
         # An invalid explicit epoch is the caller's error: nothing at all is written.
-        KERNEL.publish_frame(KERNEL.carrier_frame(dict(self.request, packet_id="explicit-invalid"), epoch=4096),
+        KERNEL.publish_frame(KERNEL.carrier_frame(self.distinct("explicit-invalid"), epoch=4096),
                              root=self.mesh)
         invalid, = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh, hb_epoch="+33")
         self.assertEqual(invalid["result"]["refusal"]["failure_code"], "HB_EPOCH_INVALID")
@@ -556,7 +561,7 @@ class InboundEpochIsSupplied(unittest.TestCase):
     def test_a_legacy_bare_sampled_frame_is_consumed_as_clock(self):
         # Lead 08:10Z: no flag plus a sample is legacy CLOCK, not UNMARKED. It
         # is consumed, lends no epoch, and its response refuses NOT_SUPPLIED.
-        packet = dict(self.request, packet_id=self.request["packet_id"] + ":bare")
+        packet = self.distinct(self.request["packet_id"] + ":bare")
         frame = KERNEL.carrier_frame(packet, epoch=4096)
         body = {k: v for k, v in frame.items() if k != "frame_sha256"}
         ref = {k: v for k, v in frame["heartbeat_reference"].items() if k != "derived_from_clock"}
@@ -586,7 +591,7 @@ class InboundEpochIsSupplied(unittest.TestCase):
             return {**body, "frame_sha256": KERNEL.sha(body)}
 
         def variant(suffix, service=None):
-            packet = dict(self.request, packet_id=self.request["packet_id"] + ":" + suffix)
+            packet = self.distinct(self.request["packet_id"] + ":" + suffix)
             if service:
                 packet = dict(packet, destination={**packet["destination"], "service": service})
             return KERNEL.carrier_frame(packet, epoch=4096)
@@ -634,7 +639,7 @@ class InboundEpochIsSupplied(unittest.TestCase):
         # silently; the valid frame is answered whether it sorts before or after.
         import hashlib
         RAISING.clear()
-        clock = KERNEL.carrier_frame(dict(self.request, packet_id="malformed-template"))
+        clock = KERNEL.carrier_frame(self.distinct("malformed-template"))
 
         def frame_name(frame):
             return hashlib.sha256((frame["packet_id"] + "|" + frame["frame_sha256"]).encode()).hexdigest()
@@ -647,7 +652,7 @@ class InboundEpochIsSupplied(unittest.TestCase):
                 ref.pop("epoch")
             else:
                 ref["epoch"] = epoch
-            packet = dict(self.request, packet_id="malformed:" + kind + ":" + repr(epoch) + ":" + str(salt))
+            packet = self.distinct("malformed:" + kind + ":" + repr(epoch) + ":" + str(salt))
             body = {k: v for k, v in KERNEL.carrier_frame(packet, epoch=4096).items() if k != "frame_sha256"}
             body["heartbeat_reference"] = ref
             return {**body, "frame_sha256": KERNEL.sha(body)}
@@ -688,7 +693,7 @@ class InboundEpochIsSupplied(unittest.TestCase):
         RAISING.clear()
         for field, value in (("generation", 1), ("heartbeat_id", "HB:1")):
             with self.subTest(field=field):
-                packet = dict(self.request, packet_id="incoherent-clock:" + field)
+                packet = self.distinct("incoherent-clock:" + field)
                 frame = KERNEL.carrier_frame(packet)
                 body = {k: v for k, v in frame.items() if k != "frame_sha256"}
                 body["heartbeat_reference"] = {**frame["heartbeat_reference"], field: value}
@@ -753,7 +758,7 @@ class InboundEpochIsSupplied(unittest.TestCase):
         # bare-sampled reference is CARRIED_PROVENANCE_UNVERIFIED; a malformed
         # epoch stays HB_EPOCH_INVALID.
         RAISING.clear()
-        clock = KERNEL.carrier_frame(dict(self.request, packet_id="carried-clock"))
+        clock = KERNEL.carrier_frame(self.distinct("carried-clock"))
         claim = {"source": "ORGANIZATION_LEDGER_HEAD", "head_receipt_sha": "sha256:" + "f" * 64}
         bare = {k: v for k, v in clock["heartbeat_reference"].items() if k != "derived_from_clock"}
         unflagged = {k: v for k, v in bare.items() if k != "sampled_unix_ns"}
@@ -782,7 +787,7 @@ class InboundEpochIsSupplied(unittest.TestCase):
             return hashlib.sha256((frame["packet_id"] + "|" + frame["frame_sha256"]).encode()).hexdigest()
 
         def wrong(value, salt):
-            packet = dict(self.request, packet_id="wrong-type:" + repr(value) + ":" + str(salt))
+            packet = self.distinct("wrong-type:" + repr(value) + ":" + str(salt))
             body = {k: v for k, v in KERNEL.carrier_frame(packet, epoch=4096).items() if k != "frame_sha256"}
             body["packet_base64"] = value
             return {**body, "frame_sha256": KERNEL.sha(body)}
@@ -943,7 +948,7 @@ class InboundEpochIsSupplied(unittest.TestCase):
         gateway = load("probe_gateway_carried", "resident-runtime/federation_gateway_transport.py")
         gateway.K = KERNEL
         submitted = []
-        other = KERNEL.carrier_frame(dict(self.request, packet_id=self.request["packet_id"] + ":gw"),
+        other = KERNEL.carrier_frame(self.distinct(self.request["packet_id"] + ":gw"),
                                      epoch=4096, carried=claim)
         gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": other}
         gateway.submit_frame = lambda f: submitted.append(f) or {}
@@ -951,6 +956,87 @@ class InboundEpochIsSupplied(unittest.TestCase):
         self.assertEqual(gateway.resident_gateway_cycle(self.b)["responses_emitted"], 1)
         self.assertEqual(submitted[0]["heartbeat_reference"]["head_receipt_sha"], claim["head_receipt_sha"])
         self.assertEqual(CLOCK_CALLS, [])
+
+    def test_a_distinct_request_reusing_a_communication_id_is_refused(self):
+        # F-REPUB keying: a recorded response is reused only for the request it
+        # answers. A distinct request under the same communication_id (so the
+        # same response id) is refused COMMUNICATION_ID_COLLISION before it is
+        # consumed, and gets no response.
+        monitor = KERNEL.build_ecosystem_packets(
+            origin_org="Org-A", origin_service="org-a.org-control", organizations=["Org-B"],
+            standing=STANDING, message_class="ecosystem.monitor.request", subject="same cid",
+            body={}, communication_id=self.request["payload"]["communication_id"])["packets"][0]
+        monitor = dict(monitor, packet_id=monitor["packet_id"] + ":monitor")
+        second = KERNEL.carrier_frame(monitor, epoch=4096)
+        KERNEL.publish_frame(self.frame, root=self.mesh)
+        first, = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh)
+        self.assertEqual(first["result"]["status"], "CONSUMED")
+        KERNEL.publish_frame(second, root=self.mesh)
+        refused, = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh)
+        refusal = refused["result"]["refusal"]
+        self.assertEqual(refusal["failure_code"], "COMMUNICATION_ID_COLLISION")
+        for field in ("disposition", "failed_predicate", "required_evidence_or_repair",
+                      "retry_entrypoint", "owning_existing_goal", "next_attempt"):
+            self.assertIn(field, refusal)
+        self.assertIsNone(refused["response_publication"])
+        responses = [p for p in (self.mesh / "frames.d").glob("*.json")
+                     if json.loads(p.read_text()).get("destination_org") == "Org-A"]
+        self.assertEqual(len(responses), 1)
+        # The gateway refuses it the same way.
+        gateway = load("probe_gateway_cid", "resident-runtime/federation_gateway_transport.py")
+        gateway.K = KERNEL
+        gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": second}
+        gateway.submit_frame = lambda frame: self.fail("a colliding request was answered")
+        gateway.acknowledge_frame = lambda organization, frame, state, hb_epoch=None: {"state": state}
+        out = gateway.resident_gateway_cycle(self.b)
+        self.assertEqual((out["state"], out["refusal"]["failure_code"]), ("BLOCKED", "COMMUNICATION_ID_COLLISION"))
+        self.assertEqual(CLOCK_CALLS, [])
+
+    def test_a_fault_at_each_gateway_write_submits_exactly_once(self):
+        # B-P36q at the gateway: an OSError writing the response record, writing
+        # the submitted flag, or from the submit itself leaves the request
+        # pending (not acknowledged); the next delivery submits exactly once.
+        for step in ("record", "flag", "submit"):
+            with self.subTest(step=step):
+                root = self.tmp / ("gw-" + step)
+                provision(root, "Org-B", "BOUNDARY_LOCAL_CONTROL", "org-b.org-control")
+                gateway = load("probe_gateway_io_" + step, "resident-runtime/federation_gateway_transport.py")
+                gateway.K = KERNEL
+                submitted, acks = [], []
+                gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": self.frame}
+                gateway.acknowledge_frame = lambda organization, frame, state, hb_epoch=None: acks.append(state) or {
+                    "state": state}
+                calls = []
+
+                def submit(frame, _calls=calls, _step=step):
+                    _calls.append(1)
+                    if _step == "submit" and len(_calls) == 1:
+                        raise OSError(104, "Connection reset by peer")
+                    submitted.append(frame)
+                    return {}
+                gateway.submit_frame = submit
+                original_write = KERNEL.write_atomic
+                writes = []
+
+                def write(path, text, _step=step, _writes=writes):
+                    target = "flag" if str(path).endswith(".submitted") else (
+                        "record" if "responses.d" in str(path) else "other")
+                    _writes.append(target)
+                    if target == _step and _writes.count(target) == 1:
+                        raise OSError(28, "No space left on device")
+                    return original_write(path, text)
+                KERNEL.write_atomic = write
+                try:
+                    first = gateway.resident_gateway_cycle(root)
+                finally:
+                    KERNEL.write_atomic = original_write
+                self.assertEqual(first["state"], "PENDING", first)
+                self.assertIs(first["refusal"]["terminal"], False)
+                self.assertEqual(acks, [])
+                second = gateway.resident_gateway_cycle(root)
+                third = gateway.resident_gateway_cycle(root)
+                self.assertEqual((second["state"], third["state"]), ("CONSUMED", "CONSUMED"))
+                self.assertEqual(len(submitted), 1)
 
     def test_monitor_request_status_takes_the_inbound_epoch(self):
         # R2: resident_status is stamped from the request frame's epoch.
@@ -1011,7 +1097,7 @@ class InboundEpochIsSupplied(unittest.TestCase):
         # B-P36l at the cycle: a frame at 77 met with --hb-epoch 4096 is
         # surfaced six-field HB_EPOCH_CONFLICT, quarantined, and the cycle that
         # consumed nothing returns 1; the next cycle does not meet it again.
-        KERNEL.publish_frame(KERNEL.carrier_frame(dict(self.request, packet_id="cycle-conflict"), epoch=77),
+        KERNEL.publish_frame(KERNEL.carrier_frame(self.distinct("cycle-conflict"), epoch=77),
                              root=self.mesh)
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(cycle.main(["--hb-epoch", "4096"]), 1)

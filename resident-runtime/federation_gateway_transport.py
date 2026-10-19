@@ -204,7 +204,11 @@ def resident_gateway_cycle(repo_root: Path, hb_epoch: int | None = None) -> dict
     frame = fetched["frame"]
     try:
         packet = K.recover_packet(frame)
-        result = K.ingest_frame(repo_root, frame, hb_epoch=hb_epoch)
+        collision = K.response_collision(repo_root, frame)
+        if collision is not None:
+            result = {"status": "REFUSED", "refusal": collision}
+        else:
+            result = K.ingest_frame(repo_root, frame, hb_epoch=hb_epoch)
     except (Exception, SystemExit) as caught:
         if K.write_failure(caught) is None:
             # A malformed frame is refused six-field and acknowledged BLOCKED, so
@@ -249,12 +253,34 @@ def resident_gateway_cycle(repo_root: Path, hb_epoch: int | None = None) -> dict
                 # Recorded once per request and submitted once: a redelivery
                 # after a failed ack reuses the record and is not resubmitted.
                 response = K.build_control_response(packet, execution)
-                response_frame, record = K.recorded_response(repo_root, response, epoch, carried)
-                submitted = record.with_suffix(".submitted")
-                if not submitted.exists():
-                    submit_frame(response_frame)
-                    submitted.write_text(response_frame["frame_sha256"] + "\n")
-                    response_emitted = 1
+                try:
+                    response_frame, record = K.recorded_response(repo_root, response, epoch, carried, frame)
+                    submitted = record.with_suffix(".submitted")
+                    if not submitted.exists():
+                        # Flagged before the submit and unflagged if it fails, so
+                        # a fault at either step never submits twice (B-P36q).
+                        K.write_atomic(submitted, response_frame["frame_sha256"] + "\n")
+                        try:
+                            submit_frame(response_frame)
+                        except BaseException:
+                            submitted.unlink()
+                            raise
+                        response_emitted = 1
+                except OSError as error:
+                    # This repository's own write failed: not acknowledged, so
+                    # the gateway redelivers and the record is reused (B-P36q).
+                    return {
+                        "schema_version": "stegverse.org-federation-gateway-cycle.v1",
+                        "organization": organization,
+                        "state": "PENDING",
+                        "packet_id": frame.get("packet_id"),
+                        "frames_consumed": 0,
+                        "responses_emitted": 0,
+                        "refusal": {**K.ingest_refusal(K.FRAME_DISPATCH_IO_FAILED,
+                                                       type(error).__name__ + ": " + str(error)),
+                                    "failed_predicate": type(error).__name__, "terminal": False},
+                        "gateway_execution_authority": "NONE",
+                    }
                 response_ref = response_frame["frame_sha256"]
         elif message_class in K.ACK_CLASSES:
             _persist_response(repo_root, packet, execution)
