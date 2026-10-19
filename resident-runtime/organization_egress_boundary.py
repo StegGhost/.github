@@ -569,6 +569,13 @@ def emit(destination_organization: Any, payload: Mapping[str, Any], *,
         resolved, origin, packet, published["frame"], payload, standing_disposition, attested)
     appended = _record(EMITTED_CLASS + ":" + packet["packet_id"], EMITTED_CLASS,
                        record["payload_sha256"], sha(record), record, hb_epoch)
+    if prior is not None:
+        would_publish = kernel.carrier_frame(packet, epoch=heartbeat["epoch"])
+        if would_publish["frame_sha256"] != prior.get("frame_sha256"):
+            # A re-emit with different content (another epoch) under a recorded
+            # packet id: refused six-field, nothing published. A byte-identical
+            # one falls through as an idempotent no-op returning the record.
+            return _emission_replay_collision(packet["packet_id"], prior, would_publish, appended, payload)
     result = {
         "schema": RESULT_SCHEMA,
         "operation": OPERATION_ID,
@@ -595,6 +602,35 @@ def emit(destination_organization: Any, payload: Mapping[str, Any], *,
             "peer_serves_this_capability_is_proven_here"]
         result["destination_capability_profile_id"] = capability
     return result
+
+
+EMISSION_REPLAY_COLLISION = "EMISSION_REPLAY_COLLISION"
+
+
+def _emission_replay_collision(packet_id: str, prior: Mapping[str, Any], would_publish: Mapping[str, Any],
+                               appended: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+    """A re-emit whose frame differs from the recorded emission's. Nothing is published."""
+    return {
+        "schema": RESULT_SCHEMA,
+        "operation": OPERATION_ID,
+        "disposition": "FAIL_CLOSED",
+        "failure_code": EMISSION_REPLAY_COLLISION,
+        "failed_predicate": "ONE_PACKET_ID_BINDS_ONE_EMITTED_FRAME",
+        "detail": ("packet " + packet_id + " is recorded as emitted in frame " + str(prior.get("frame_sha256"))
+                   + "; this emit would publish " + str(would_publish["frame_sha256"])),
+        "required_evidence_or_repair": ("re-emit byte-identically (the recorded epoch) for an idempotent "
+                                        "no-op, or emit a distinct payload under a new packet id"),
+        "retry_entrypoint": EPOCH_RETRY_ENTRYPOINT,
+        "owning_existing_goal": kernel.HB_EPOCH_OWNING_EXISTING_GOAL,
+        "next_attempt": "nothing was published; the recorded emission stands",
+        "emitted": False,
+        "packet_id": packet_id,
+        "communication_id": (payload or {}).get("communication_id"),
+        "recorded_frame_sha256": prior.get("frame_sha256"),
+        "emission_repository_receipt_sha256": appended["repository_receipt"]["receipt_sha256"],
+        "emission_organization_receipt_sha256": appended["organization_receipt"]["receipt_sha256"],
+        "authority_effect": "NONE_EGRESS_RECORD_ONLY",
+    }
 
 
 def _refusal_result(record: Mapping[str, Any], appended: Mapping[str, Any]) -> dict[str, Any]:

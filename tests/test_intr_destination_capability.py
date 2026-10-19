@@ -1377,22 +1377,28 @@ class FailedHeadPublishDoesNotWedgeTests(AddressedAndClosedTests):
                                    capability=PROFILE_ID, mesh_root=mesh, hb_epoch=self.SUPPLIED)
                 self.assertEqual(done["disposition"], "ALLOW", done)
 
-    def test_re_emitting_a_recorded_packet_at_a_later_epoch_replays_it(self):
-        # V-P11 @bbd81b6: the same payload re-emitted at a later epoch is
-        # checked against this chain before anything is published. It is not
-        # published again and does not raise: the recorded emission is
-        # returned (one frame, one repository and one organization receipt).
+    def test_re_emitting_a_recorded_packet_is_a_no_op_or_a_six_field_collision(self):
+        # V-P11 @bbd81b6: a re-emit is checked against this chain before
+        # anything is published, and never publishes then raises.
         mesh = Path(tempfile.mkdtemp(dir=self._work.name))
         first = egress.emit(PEER, diagnostic("re-emit"), standing=STANDING, capability=PROFILE_ID,
                             mesh_root=mesh, hb_epoch=self.SUPPLIED)
+        # A byte-identical re-emit (the recorded epoch) is an idempotent no-op.
+        same = egress.emit(PEER, diagnostic("re-emit"), standing=STANDING, capability=PROFILE_ID,
+                           mesh_root=mesh, hb_epoch=self.SUPPLIED)
+        self.assertEqual((first["disposition"], same["disposition"]), ("ALLOW", "ALLOW"), same)
+        self.assertIs(same["emission_replayed"], True)
+        self.assertEqual(same["emission_repository_receipt_sha256"], first["emission_repository_receipt_sha256"])
+        self.assertEqual(same["emission_organization_receipt_sha256"], first["emission_organization_receipt_sha256"])
+        # A different-content re-emit (4096 then 5000) is refused six-field;
+        # nothing is published.
         again = egress.emit(PEER, diagnostic("re-emit"), standing=STANDING, capability=PROFILE_ID,
-                            mesh_root=mesh, hb_epoch=self.SUPPLIED + 904)
-        self.assertEqual((first["disposition"], again["disposition"]), ("ALLOW", "ALLOW"), again)
-        self.assertIs(again["emission_replayed"], True)
-        self.assertEqual(again["packet_id"], first["packet_id"])
-        self.assertEqual(again["emission_repository_receipt_sha256"], first["emission_repository_receipt_sha256"])
-        self.assertEqual(again["emission_organization_receipt_sha256"],
-                         first["emission_organization_receipt_sha256"])
+                            mesh_root=mesh, hb_epoch=5000)
+        self.assertEqual((again["disposition"], again["failure_code"]), ("FAIL_CLOSED", "EMISSION_REPLAY_COLLISION"))
+        for field in ("failed_predicate", "required_evidence_or_repair", "retry_entrypoint",
+                      "owning_existing_goal", "next_attempt"):
+            self.assertIn(field, again)
+        self.assertIs(again["emitted"], False)
         self.assertEqual(len(list((mesh / "frames.d").glob("*.json"))), 1)
         repository = [r for r in self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")
                       if r["transition_id"] == egress.EMITTED_CLASS + ":" + first["packet_id"]]
@@ -1400,9 +1406,9 @@ class FailedHeadPublishDoesNotWedgeTests(AddressedAndClosedTests):
         match = egress.request_bilateral_match(PEER, "some-packet", standing=STANDING, mesh_root=mesh,
                                                hb_epoch=self.SUPPLIED)
         rematch = egress.request_bilateral_match(PEER, "some-packet", standing=STANDING, mesh_root=mesh,
-                                                 hb_epoch=self.SUPPLIED + 1)
-        self.assertEqual((match["disposition"], rematch["disposition"]), ("ALLOW", "ALLOW"), rematch)
-        self.assertIs(rematch["emission_replayed"], True)
+                                                 hb_epoch=5000)
+        self.assertEqual((match["disposition"], rematch["failure_code"]), ("ALLOW", "EMISSION_REPLAY_COLLISION"))
+        self.assertEqual(len(list((mesh / "frames.d").glob("*.json"))), 2)
 
     def test_a_failed_org_head_publish_rolls_back_and_the_next_cycle_appends_once(self):
         self.run_case("head-publish-rollback", keep_residue=False)
