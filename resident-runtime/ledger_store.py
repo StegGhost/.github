@@ -34,6 +34,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 from contextlib import contextmanager
@@ -224,10 +225,18 @@ class PosixLedgerStore:
             # document. A fault syncing the directory afterwards does not undo
             # it, so it is not reported as a failed write a retry would append
             # again (V-P11 @5bc61ff). Durability of the rename is best effort.
+            # The document is content-addressed and already written, so the
+            # failure cannot sit in its own evidence; it is recorded as
+            # evidence of this run instead -- on the store and as one
+            # non-terminal line on stderr -- never as a write failure.
             try:
                 self._sync_directory(path.parent)
-            except OSError:
-                pass
+            except OSError as error:
+                self.durability_unconfirmed = [*getattr(self, "durability_unconfirmed", []), key]
+                sys.stderr.write(json.dumps({
+                    "durability_unconfirmed": key, "failed_step": "DIRECTORY_FSYNC_AFTER_REPLACE",
+                    "detail": type(error).__name__ + ": " + str(error),
+                    "write_committed": True, "terminal": False}, sort_keys=True) + "\n")
         finally:
             if os.path.exists(temp):
                 os.unlink(temp)

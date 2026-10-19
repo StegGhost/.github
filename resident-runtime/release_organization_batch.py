@@ -231,11 +231,20 @@ def custody_communication_id(batch_sha256: Any) -> str:
     return "custody-" + str(batch_sha256).split(":", 1)[-1][:24]
 
 
-def is_release_bookkeeping(receipt: Mapping[str, Any]) -> bool:
+def release_custody_ids(chain: list[dict[str, Any]]) -> set[str]:
+    """The communication ids this organization's own releases submit under."""
+    return {custody_communication_id(entry["batch_sha256"]) for entry in prior_releases(chain)
+            if isinstance(entry["batch_sha256"], str) and entry["batch_sha256"]}
+
+
+def is_release_bookkeeping(receipt: Mapping[str, Any], custody_ids: set[str] = frozenset()) -> bool:
     """A receipt the release machinery wrote about a release, not one to release.
 
     The release itself, a refused submission, and the custody crossing (emitted,
-    refused or closed) are the release's own record. Releasing them in the next
+    refused or closed) are the release's own record. A crossing is a custody
+    crossing only under the exact id of a release this chain records
+    (`custody_ids`), so a caller's own communication that merely starts with
+    "custody-" is released like any other. Releasing them in the next
     batch would mint a new batch on every call -- each release would leave one
     more unreleased receipt behind it -- so a retry or a repeated call would
     never be a no-op (B-P36q).
@@ -245,8 +254,7 @@ def is_release_bookkeeping(receipt: Mapping[str, Any]) -> bool:
         return False
     if evidence.get("operation") in (RELEASE_CLASS, SUBMIT_REFUSED_CLASS):
         return True
-    communication = evidence.get("communication_id")
-    return isinstance(communication, str) and communication.startswith("custody-")
+    return evidence.get("communication_id") in custody_ids
 
 
 def recorded_submission(chain: list[dict[str, Any]], batch_sha256: Any) -> bool:
@@ -272,11 +280,17 @@ def verified_segment() -> dict[str, Any]:
     """
     chain = organization_chain()
     carried = already_released(chain)
-    bookkeeping = sum(1 for r in chain if is_release_bookkeeping(r))
+    custody = release_custody_ids(chain)
+    bookkeeping = sum(1 for r in chain if is_release_bookkeeping(r, custody))
     segment = [r for r in chain if r["receipt_sha256"] not in carried
-               and not is_release_bookkeeping(r)]
+               and not is_release_bookkeeping(r, custody)]
+    releases = prior_releases(chain)
     return {
         "release_predecessor": release_predecessor(chain),
+        # The prior release's own receipt digest (head_receipt_sha form), so a
+        # verifier can walk the batch chain through the ledger and recompute.
+        "release_predecessor_receipt_sha256":
+            releases[-1]["organization_receipt_sha256"] if releases else None,
         "organization_chain_length": len(chain),
         "already_released": len(chain) - len(segment) - bookkeeping,
         "release_bookkeeping_receipts": bookkeeping,
@@ -361,6 +375,7 @@ def organization_record_destination(root: Path | None = None) -> dict[str, Any]:
 
 def release_record(segment: Mapping[str, Any], predecessor: str) -> dict[str, Any]:
     digests = [r["receipt_sha256"] for r in segment["segment"]]
+    predecessor_receipt = segment.get("release_predecessor_receipt_sha256")
     return {
         "schema": BATCH_SCHEMA,
         "organization": contract()["organization"],
@@ -368,10 +383,12 @@ def release_record(segment: Mapping[str, Any], predecessor: str) -> dict[str, An
         "disposition": ALLOW,
         "release_predecessor_required": RELEASE_PREDECESSOR_REQUIRED,
         "release_predecessor": predecessor,
+        "release_predecessor_receipt_sha256": predecessor_receipt,
         "released_organization_receipts": digests,
         "released_count": len(digests),
         "batch_sha256": sha({"released_organization_receipts": digests,
-                             "release_predecessor": predecessor}),
+                             "release_predecessor": predecessor,
+                             "release_predecessor_receipt_sha256": predecessor_receipt}),
         "first_released_receipt_sha256": digests[0] if digests else None,
         "last_released_receipt_sha256": digests[-1] if digests else None,
         "every_receipt_verified_against_its_own_body": True,
@@ -386,6 +403,49 @@ def release_record(segment: Mapping[str, Any], predecessor: str) -> dict[str, An
         "release_awaits_the_recorder": False,
         "authority_effect": "NONE",
     }
+
+
+RELEASE_PREDECESSOR_PREDICATE = "THE_RELEASE_PREDECESSOR_RESOLVES_AND_RECOMPUTES_IN_THE_LEDGER"
+
+
+def release_predecessor_refusal(record: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Six fields when a batch's predecessor does not resolve or recompute, else None.
+
+    The prior release's receipt is read from the organization ledger by its
+    digest and recomputed from its body, and it must be the release whose batch
+    digest the record names. A missing receipt is RELEASE_PREDECESSOR_UNRESOLVED,
+    one that does not recompute (or is another batch's) is
+    RELEASE_PREDECESSOR_DIGEST_MISMATCH. Both are non-terminal: the release is
+    retried after the ledger is repaired. The genesis release has none to check.
+    """
+    digest = record.get("release_predecessor_receipt_sha256")
+    predecessor = record.get("release_predecessor")
+    if digest is None and predecessor == sha({"state": NO_PRIOR_RELEASE}):
+        return None
+    code, detail = None, None
+    receipt = (PosixLedgerStore(organization_ledger.ledger_root()).get(receipt_key(digest))
+               if isinstance(digest, str) and digest.startswith("sha256:") else None)
+    if receipt is None:
+        code, detail = "RELEASE_PREDECESSOR_UNRESOLVED", "no ledger receipt " + str(digest)
+    else:
+        body = {k: v for k, v in receipt.items() if k != "receipt_sha256"}
+        evidence = receipt.get("boundary_evidence") if isinstance(receipt.get("boundary_evidence"), Mapping) else {}
+        if receipt.get("receipt_sha256") != digest or sha(body) != digest:
+            code, detail = "RELEASE_PREDECESSOR_DIGEST_MISMATCH", "receipt " + digest + " does not recompute"
+        elif evidence.get("operation") != RELEASE_CLASS or evidence.get("batch_sha256") != predecessor:
+            code, detail = ("RELEASE_PREDECESSOR_DIGEST_MISMATCH",
+                            "receipt " + digest + " is not the release of batch " + str(predecessor))
+    if code is None:
+        return None
+    return {"disposition": "FAIL_CLOSED", "failure_code": code,
+            "failed_predicate": RELEASE_PREDECESSOR_PREDICATE, "detail": detail,
+            "release_predecessor": predecessor, "release_predecessor_receipt_sha256": digest,
+            "required_evidence_or_repair": ("the organization ledger holds the prior release's receipt "
+                                            "under its digest, recomputing from its body"),
+            "retry_entrypoint": EPOCH_RETRY_ENTRYPOINT + " (after ledger repair)",
+            "owning_existing_goal": organization_ledger.kernel.HB_EPOCH_OWNING_EXISTING_GOAL,
+            "next_attempt": "repair the organization ledger and re-run the release; nothing was written",
+            "terminal": False, "derived_from_clock": False, "consequence_committed": False}
 
 
 def _record(transition_id: str, transition_class: str, predecessor: str,
@@ -442,6 +502,9 @@ def release(*, hb_epoch: int | None = None) -> dict[str, Any]:
 
     predecessor = segment["release_predecessor"]
     record = release_record(segment, predecessor)
+    refused = release_predecessor_refusal(record)
+    if refused is not None:
+        return {"schema": RESULT_SCHEMA, "operation": RELEASE_CLASS, "released": False, **refused}
     appended = _record(RELEASE_CLASS + ":" + record["batch_sha256"][:24],
                        RELEASE_CLASS, predecessor, record["batch_sha256"],
                        record, hb_epoch)
@@ -606,6 +669,10 @@ def release_and_submit(*, standing: Mapping[str, Any],
     otherwise nothing is written.
     """
     released = release(hb_epoch=hb_epoch)
+    if released.get("failure_code"):
+        # A refused release (an unresolved or mismatched predecessor) resumes nothing.
+        return {"release": released, "submission": None,
+                "authority_effect": "NONE_RELEASE_RECORD_ONLY"}
     if not released.get("released"):
         chain = organization_chain()
         releases = prior_releases(chain)
@@ -686,7 +753,8 @@ def main() -> int:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(rendered)
     print(rendered)
-    return 0
+    release_result = result.get("release", result) if isinstance(result, dict) else {}
+    return 1 if isinstance(release_result, dict) and release_result.get("failure_code") else 0
 
 
 if __name__ == "__main__":

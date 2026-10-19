@@ -1552,6 +1552,128 @@ class FailedHeadPublishDoesNotWedgeTests(AddressedAndClosedTests):
                                 self.assertEqual(again.get("failure_code"), "EMISSION_REPLAY_COLLISION", again)
                                 self.assertIs(again["emitted"], False)
 
+    # ------------------------------------------- lead ruling 09:44Z on the batch chain
+
+    def release_modules(self, tag):
+        release = _module("release_organization_batch_" + tag, "resident-runtime/release_organization_batch.py")
+        emitter = _module("emit_" + tag, ".stegverse/transition-ledger/emit.py")
+        return release, emitter
+
+    def seed_transition(self, release, emitter, name):
+        zero, one = "sha256:" + "0" * 64, "sha256:" + "1" * 64
+        seed = emitter.append(name, "T", zero, one, hb_epoch=self.SUPPLIED)
+        release.organization_ledger.append(seed, "REPO_STATE_PROPAGATION", zero, one, {}, "NONE",
+                                           hb_epoch=self.SUPPLIED)
+
+    def release_classes(self, release):
+        return [r["transition_class"] for r in self.receipts("STEGVERSE_REPO_LEDGER_ROOT",
+                                                             "stegverse.repo-transition-receipt/v1")
+                ].count(release.RELEASE_CLASS)
+
+    def test_release_predecessor_carries_the_prior_release_receipt_digest(self):
+        # Condition 2: the next batch names the prior release's own receipt
+        # digest; it resolves in the ledger and recomputes. Condition 1: the
+        # prior release receipt stays on the chain, excluded from the payload.
+        release, emitter = self.release_modules("ruling_c2")
+        self.fresh_ledgers()
+        self.seed_transition(release, emitter, "c2:1")
+        first = release.release(hb_epoch=self.SUPPLIED)
+        self.assertIsNone(first["release_record"]["release_predecessor_receipt_sha256"])
+        self.seed_transition(release, emitter, "c2:2")
+        second = release.release(hb_epoch=self.SUPPLIED)
+        record = second["release_record"]
+        self.assertEqual(record["release_predecessor_receipt_sha256"], first["release_organization_receipt_sha256"])
+        self.assertEqual(record["release_predecessor"], first["batch_sha256"])
+        self.assertNotIn(first["release_organization_receipt_sha256"], record["released_organization_receipts"])
+        self.assertIn(first["release_organization_receipt_sha256"],
+                      [r["receipt_sha256"] for r in release.organization_chain()])
+        self.assertIsNone(release.release_predecessor_refusal(record))
+
+    def refused_release(self, release, segment):
+        genuine = release.verified_segment
+        release.verified_segment = lambda: segment
+        try:
+            return release.release(hb_epoch=self.SUPPLIED)
+        finally:
+            release.verified_segment = genuine
+
+    def assert_predecessor_refusal(self, refused, code):
+        self.assertEqual((refused["disposition"], refused["failure_code"]), ("FAIL_CLOSED", code), refused)
+        self.assertIs(refused["terminal"], False)
+        self.assertIs(refused["released"], False)
+        self.assertIn("after ledger repair", refused["retry_entrypoint"])
+        for field in ("failed_predicate", "required_evidence_or_repair", "retry_entrypoint",
+                      "owning_existing_goal", "next_attempt"):
+            self.assertIn(field, refused)
+
+    def test_a_release_whose_predecessor_does_not_resolve_is_refused_six_field(self):
+        # Condition 3: RELEASE_PREDECESSOR_UNRESOLVED, non-terminal, nothing written.
+        release, emitter = self.release_modules("ruling_c3_unresolved")
+        self.fresh_ledgers()
+        self.seed_transition(release, emitter, "c3u:1")
+        release.release(hb_epoch=self.SUPPLIED)
+        self.seed_transition(release, emitter, "c3u:2")
+        segment = dict(release.verified_segment(), release_predecessor_receipt_sha256="sha256:" + "f" * 64)
+        refused = self.refused_release(release, segment)
+        self.assert_predecessor_refusal(refused, "RELEASE_PREDECESSOR_UNRESOLVED")
+        self.assertEqual(self.release_classes(release), 1)
+
+    def test_a_release_whose_predecessor_does_not_recompute_is_refused_six_field(self):
+        # Condition 3: RELEASE_PREDECESSOR_DIGEST_MISMATCH, non-terminal, nothing written.
+        release, emitter = self.release_modules("ruling_c3_mismatch")
+        work = self.fresh_ledgers()
+        self.seed_transition(release, emitter, "c3m:1")
+        first = release.release(hb_epoch=self.SUPPLIED)
+        self.seed_transition(release, emitter, "c3m:2")
+        segment = release.verified_segment()
+        digest = first["release_organization_receipt_sha256"]
+        path = work / "org" / "receipts" / (digest.split(":", 1)[1] + ".json")
+        tampered = {**json.loads(path.read_text()), "authority_effect": "TAMPERED"}
+        path.write_text(json.dumps(tampered))
+        refused = self.refused_release(release, segment)
+        self.assert_predecessor_refusal(refused, "RELEASE_PREDECESSOR_DIGEST_MISMATCH")
+        self.assertEqual(self.release_classes(release), 1)
+
+    def test_a_callers_custody_prefixed_communication_is_still_released(self):
+        # V-P11 @35c7cec deferral CUSTODY_PREFIX_USER_COMMUNICATION_NEVER_RELEASED:
+        # only the exact custody id of a recorded release is bookkeeping.
+        release, emitter = self.release_modules("custody_prefix")
+        work = self.fresh_ledgers()
+        emitted = egress.emit(PEER, diagnostic("custody-a-callers-own-thread"), standing=STANDING,
+                              capability=PROFILE_ID, mesh_root=work / "mesh", hb_epoch=self.SUPPLIED)
+        self.assertEqual(emitted["disposition"], "ALLOW", emitted)
+        segment = release.verified_segment()
+        self.assertEqual(segment["segment_length"], 1, segment)
+        self.assertEqual(segment["release_bookkeeping_receipts"], 0)
+
+    def test_a_failed_directory_fsync_is_recorded_as_evidence_not_a_failure(self):
+        # Lead ruling: the replace is the commit; a failed directory fsync after
+        # it is one non-terminal evidence line, the append returns once.
+        import contextlib, io
+        release, emitter = self.release_modules("dir_fsync")
+        self.fresh_ledgers()
+        store_class = emitter.ledger_store.PosixLedgerStore
+        original = store_class.__dict__["_sync_directory"]
+
+        def failing(directory):
+            raise OSError(5, "Input/output error")
+        store_class._sync_directory = staticmethod(failing)
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err):
+                receipt = emitter.append("fsync:1", "T", "sha256:" + "0" * 64, "sha256:" + "1" * 64,
+                                         hb_epoch=self.SUPPLIED)
+        finally:
+            store_class._sync_directory = original
+        lines = [json.loads(line) for line in err.getvalue().splitlines() if line.strip()]
+        self.assertTrue(lines)
+        for line in lines:
+            self.assertEqual(line["failed_step"], "DIRECTORY_FSYNC_AFTER_REPLACE")
+            self.assertIs(line["write_committed"], True)
+            self.assertIs(line["terminal"], False)
+        repository = self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")
+        self.assertEqual([r["receipt_sha256"] for r in repository], [receipt["receipt_sha256"]])
+
     def test_a_failed_org_head_publish_rolls_back_and_the_next_cycle_appends_once(self):
         self.run_case("head-publish-rollback", keep_residue=False)
 
