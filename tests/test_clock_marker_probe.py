@@ -478,6 +478,11 @@ class InboundEpochIsSupplied(unittest.TestCase):
         self.assertEqual((out["responses_emitted"], submitted), (0, []))
         self.assertEqual(out["response_refusal"]["failure_code"], "HB_EPOCH_NOT_SUPPLIED")
         self.assertEqual(gateway.resident_gateway_cycle(self.b, hb_epoch=4096)["responses_emitted"], 1)
+        # B-P36o: a tampered frame is refused six-field and acknowledged BLOCKED.
+        tampered = dict(clock_request, frame_sha256="sha256:" + "0" * 64)
+        gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": tampered}
+        blocked = gateway.resident_gateway_cycle(self.b, hb_epoch=4096)
+        self.assertEqual((blocked["state"], blocked["refusal"]["failure_code"]), ("BLOCKED", "FRAME_INTEGRITY_INVALID"))
         self.assertSupplied(submitted[0])
         self.assertEqual(CLOCK_CALLS, [])
 
@@ -569,6 +574,55 @@ class InboundEpochIsSupplied(unittest.TestCase):
                                                          **({} if epoch is None else {"epoch": epoch})}}
             unmarked = {**unmarked, "frame_sha256": KERNEL.sha(unmarked)}
             self.assertEqual(KERNEL.frame_refusal(self.b, unmarked)["failure_code"], "HB_EPOCH_PROVENANCE_UNMARKED")
+        self.assertEqual(CLOCK_CALLS, [])
+
+    def test_a_malformed_frame_is_quarantined_and_never_starves_the_batch(self):
+        # B-P36o: an error raised while ingesting one frame is that frame's
+        # six-field refusal and terminal quarantine; the loop continues, the
+        # valid frame is answered, and a second cycle offers none of the bad.
+        def rehash(frame, **changes):
+            body = {k: v for k, v in frame.items() if k != "frame_sha256"}
+            body.update(changes)
+            return {**body, "frame_sha256": KERNEL.sha(body)}
+
+        def variant(suffix, service=None):
+            packet = dict(self.request, packet_id=self.request["packet_id"] + ":" + suffix)
+            if service:
+                packet = dict(packet, destination={**packet["destination"], "service": service})
+            return KERNEL.carrier_frame(packet, epoch=4096)
+
+        generation = variant("generation")
+        generation = rehash(generation, heartbeat_reference={**generation["heartbeat_reference"], "generation": 4097})
+        identity = variant("identity")
+        identity = rehash(identity, heartbeat_reference={**identity["heartbeat_reference"], "heartbeat_id": "HB:1"})
+        tampered_frame = dict(variant("frame-sha"), frame_sha256="sha256:" + "0" * 64)
+        tampered_packet = rehash(variant("packet-sha"), packet_sha256="sha256:" + "0" * 64)
+        adapter = variant("adapter", service="org-b.no-such-service")
+        expected = {generation["packet_id"]: "HB_REFERENCE_INVALID", identity["packet_id"]: "HB_REFERENCE_INVALID",
+                    tampered_frame["packet_id"]: "FRAME_INTEGRITY_INVALID",
+                    tampered_packet["packet_id"]: "FRAME_INTEGRITY_INVALID",
+                    adapter["packet_id"]: "FRAME_INGEST_FAILED"}
+        for frame in (generation, identity, tampered_frame, tampered_packet, adapter, self.frame):
+            KERNEL.publish_frame(frame, root=self.mesh)
+        before = {p for p in self.b.rglob("*") if p.is_file() and "__pycache__" not in p.parts}
+        first = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh)
+        self.assertEqual(len(first), 6)
+        refused = {item["result"]["packet_id"]: item for item in first if item["result"]["status"] == "REFUSED"}
+        self.assertEqual({pid: item["result"]["refusal"]["failure_code"] for pid, item in refused.items()}, expected)
+        self.assertEqual(refused[adapter["packet_id"]]["result"]["refusal"]["failed_predicate"], "ValueError")
+        for item in refused.values():
+            refusal = item["result"]["refusal"]
+            for field in ("disposition", "failed_predicate", "required_evidence_or_repair",
+                          "retry_entrypoint", "owning_existing_goal", "next_attempt"):
+                self.assertIn(field, refusal)
+            marker = json.loads(Path(item["seen_marker"]).read_text())
+            self.assertEqual(marker["failure_code"], "FRAME_REFUSED_QUARANTINED")
+            self.assertIsNone(item["response_publication"])
+        valid, = [item for item in first if item["result"]["status"] == "CONSUMED"]
+        self.assertSupplied(valid["response_publication"]["frame"])
+        written = {p for p in self.b.rglob("*") if p.is_file() and "__pycache__" not in p.parts} - before
+        self.assertTrue(all("seen.d" in p.parts for p in written), written)
+        self.assertEqual(KERNEL.consume_and_respond(self.b, mesh_root=self.mesh), [])
         self.assertEqual(CLOCK_CALLS, [])
 
     def test_monitor_request_status_takes_the_inbound_epoch(self):

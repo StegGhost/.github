@@ -450,6 +450,13 @@ def frame_refusal(root:Path, frame:dict[str,Any])->dict[str,Any]|None:
                 code,detail=CARRIED_PROVENANCE_UNVERIFIED,unverified
     elif marker is not None and marker[0]==HB_EPOCH_PROVENANCE_UNMARKED:
         code,detail=marker
+    # A reference the rule passes as supplied must also cohere: its generation,
+    # id, frequency and progression agree with its epoch (B-P36o).
+    if code is None and isinstance(ref,dict) and supplied_epoch_failure(ref.get("epoch"),ref) is None:
+        try:
+            validate_hb_reference(dict(ref))
+        except ValueError as incoherent:
+            code,detail=HB_REFERENCE_INVALID,str(incoherent)
     if code is None:
         return None
     return ingest_refusal(code,detail)
@@ -900,31 +907,17 @@ def consume_and_respond(repo_root:Path, *, mesh_root:Path|None=None, seen:set[st
     effective_seen=set(seen or set())|durable_seen
     out=[]
     for item in scan_addressed_frames(organization,root=mesh_root,seen=effective_seen):
-        packet=recover_packet(item["frame"])
-        payload=packet.get("payload") or {}
-        message_class=payload.get("message_class")
-        result=ingest_frame(repo_root,item["frame"],mesh_root=mesh_root,hb_epoch=hb_epoch)
-        response_publication=None
-        response_refusal=None
-        # Read from RESPONDED_REQUEST_CLASSES, not a second copy of it. A
-        # literal set here disagreed with the map the moment the map gained a
-        # class: it declared four answered classes while this responded to
-        # three, so an emission the closability gate admitted was consumed and
-        # never answered -- the unclosable crossing, arriving through the one
-        # surface that is supposed to decide what is closable.
-        if result.get("status")=="CONSUMED" and message_class in RESPONDED_REQUEST_CLASSES:
-            response=build_control_response(packet,result["execution_result"])
-            # Published at the request frame's validated epoch, else at the
-            # epoch supplied to this call (ingest refused any disagreement).
-            epoch=frame_supplied_epoch(item["frame"])
-            if epoch is None and hb_epoch is not None:
-                epoch=int(str(hb_epoch))
-            if epoch is None:
-                # A clock-flagged request lends no epoch and none was supplied:
-                # the response is refused six-field, never stamped from a clock.
-                response_refusal=writer_epoch_refusal(None,retry_entrypoint=RESPONSE_RETRY_ENTRYPOINT)
-            else:
-                response_publication=publish_packet(response,root=mesh_root,epoch=epoch)
+        try:
+            result,response_publication,response_refusal=_consume_one(
+                repo_root,item,mesh_root=mesh_root,hb_epoch=hb_epoch)
+        except Exception as error:
+            # One frame's failure is that frame's refusal, not the cycle's: it is
+            # quarantined six-field and the loop continues, so a malformed frame
+            # never starves the valid frames behind it (B-P36o). Nothing was
+            # dispatched for it and no clock is read.
+            frame=item["frame"] if isinstance(item["frame"],dict) else {}
+            result={"status":"REFUSED","packet_id":frame.get("packet_id"),"refusal":frame_error_refusal(error)}
+            response_publication=response_refusal=None
         # A refusal of the caller's epoch is not the frame's: nothing is written
         # for it, so the frame is processed when a valid epoch is supplied.
         marker=None
@@ -933,6 +926,54 @@ def consume_and_respond(repo_root:Path, *, mesh_root:Path|None=None, seen:set[st
         out.append({"path":item["path"],"result":result,"response_publication":response_publication,
                     "response_refusal":response_refusal,"seen_marker":marker})
     return out
+
+#: Messages the frame-integrity checks raise (recover_packet).
+FRAME_INTEGRITY_ERRORS=("carrier_frame_hash_mismatch","packet_hash_mismatch","packet_id_mismatch",
+                        "destination_org_mismatch")
+HB_REFERENCE_INVALID="HB_REFERENCE_INVALID"
+FRAME_INTEGRITY_INVALID="FRAME_INTEGRITY_INVALID"
+FRAME_INGEST_FAILED="FRAME_INGEST_FAILED"
+
+def frame_error_refusal(error:BaseException)->dict[str,Any]:
+    """The six-field refusal of an error raised while ingesting one frame."""
+    message=str(error)
+    if message.startswith("heartbeat_epoch") or message.startswith("epoch_"):
+        return ingest_refusal(HB_EPOCH_INVALID,message)
+    if message.startswith("heartbeat_"):
+        return ingest_refusal(HB_REFERENCE_INVALID,message)
+    if message in FRAME_INTEGRITY_ERRORS or type(error).__name__ in ("Error","JSONDecodeError","UnicodeDecodeError"):
+        return ingest_refusal(FRAME_INTEGRITY_INVALID,type(error).__name__+": "+message)
+    return {**ingest_refusal(FRAME_INGEST_FAILED,message),"failed_predicate":type(error).__name__}
+
+def _consume_one(repo_root:Path, item:dict[str,Any], *, mesh_root:Path|None,
+                 hb_epoch:Any)->tuple[dict[str,Any],dict[str,Any]|None,dict[str,Any]|None]:
+    """Ingest one addressed frame and answer it; raises for the caller to quarantine."""
+    packet=recover_packet(item["frame"])
+    payload=packet.get("payload") or {}
+    message_class=payload.get("message_class")
+    result=ingest_frame(repo_root,item["frame"],mesh_root=mesh_root,hb_epoch=hb_epoch)
+    response_publication=None
+    response_refusal=None
+    # Read from RESPONDED_REQUEST_CLASSES, not a second copy of it. A
+    # literal set here disagreed with the map the moment the map gained a
+    # class: it declared four answered classes while this responded to
+    # three, so an emission the closability gate admitted was consumed and
+    # never answered -- the unclosable crossing, arriving through the one
+    # surface that is supposed to decide what is closable.
+    if result.get("status")=="CONSUMED" and message_class in RESPONDED_REQUEST_CLASSES:
+        response=build_control_response(packet,result["execution_result"])
+        # Published at the request frame's validated epoch, else at the
+        # epoch supplied to this call (ingest refused any disagreement).
+        epoch=frame_supplied_epoch(item["frame"])
+        if epoch is None and hb_epoch is not None:
+            epoch=int(str(hb_epoch))
+        if epoch is None:
+            # A clock-flagged request lends no epoch and none was supplied:
+            # the response is refused six-field, never stamped from a clock.
+            response_refusal=writer_epoch_refusal(None,retry_entrypoint=RESPONSE_RETRY_ENTRYPOINT)
+        else:
+            response_publication=publish_packet(response,root=mesh_root,epoch=epoch)
+    return result,response_publication,response_refusal
 
 def recorded_emissions(repo_root:Path, communication_id:str)->dict[str,dict[str,Any]]:
     """What this organization recorded emitting for a communication, by packet id.

@@ -202,8 +202,14 @@ def resident_gateway_cycle(repo_root: Path, hb_epoch: int | None = None) -> dict
     if fetched.get("state") != "FRAME_AVAILABLE":
         raise FederationGatewayTransportError("unexpected gateway fetch state")
     frame = fetched["frame"]
-    packet = K.recover_packet(frame)
-    result = K.ingest_frame(repo_root, frame, hb_epoch=hb_epoch)
+    try:
+        packet = K.recover_packet(frame)
+        result = K.ingest_frame(repo_root, frame, hb_epoch=hb_epoch)
+    except Exception as error:
+        # A malformed frame is refused six-field and acknowledged BLOCKED, so
+        # the gateway does not redeliver it to stall every later cycle (B-P36o).
+        packet = None
+        result = {"status": "REFUSED", "refusal": K.frame_error_refusal(error)}
     epoch = K.frame_supplied_epoch(frame)
     if epoch is None and hb_epoch is not None and K.supplied_epoch_failure(hb_epoch) is None:
         epoch = int(str(hb_epoch))
@@ -243,6 +249,7 @@ def resident_gateway_cycle(repo_root: Path, hb_epoch: int | None = None) -> dict
         "responses_emitted": response_emitted,
         "response_frame_sha256": response_ref,
         "response_refusal": response_refusal,
+        "refusal": result.get("refusal"),
         "ack_state": ack.get("state"),
         "gateway_execution_authority": "NONE",
     }
