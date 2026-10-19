@@ -366,4 +366,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A fault in this CLI's own writes prints six fields, not a traceback.
+    sys.exit(repository_ledger.kernel.run_writer_cli(main, retry_entrypoint=EPOCH_RETRY_ENTRYPOINT))

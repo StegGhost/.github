@@ -1254,5 +1254,120 @@ class ManifestEntrypointsBindTheirEpoch(unittest.TestCase):
                         self.assertIsNone(re.search(r"python3?\s+\S*/" + re.escape(name), line), line)
 
 
+class WriterEntryPointsReportFaultsSixField(unittest.TestCase):
+    """F-WRITER-TRACE: every epoch-taking writer CLI, run as its __main__ runs
+    it (kernel.run_writer_cli), turns a fault in its own writes into the
+    non-terminal six-field record: no raw OSError, no traceback. The next run
+    completes the write once."""
+
+    CLIS = (".stegverse/transition-ledger/emit.py", "resident-runtime/aggregate_repo_transition.py",
+            "resident-runtime/intr_destination_ingress.py", "resident-runtime/organization_egress_boundary.py",
+            "resident-runtime/release_organization_batch.py", "resident-runtime/propagate_repository_receipts.py",
+            "runtime/organization_runtime.py", "resident-runtime/federation_cycle.py")
+
+    def setUp(self):
+        import os
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        saved = {k: os.environ.get(k) for k in ("STEGVERSE_ORG_LEDGER_ROOT", "STEGVERSE_REPO_LEDGER_ROOT",
+                                               "STEGVERSE_ORG_FEDERATION_ROOT", "HB_EPOCH",
+                                               "STEGVERSE_ORG_FEDERATION_GATEWAY_URL")}
+        for key in saved:
+            os.environ.pop(key, None)
+        os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(self.tmp / "org")
+        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(self.tmp / "repo")
+        os.environ["STEGVERSE_ORG_FEDERATION_ROOT"] = str(self.tmp / "mesh")
+
+        def restore():
+            for key, value in saved.items():
+                os.environ.pop(key, None)
+                if value is not None:
+                    os.environ[key] = value
+        self.addCleanup(restore)
+
+    def test_every_writer_cli_main_runs_through_the_fault_wrapper(self):
+        for relative in self.CLIS:
+            with self.subTest(cli=relative):
+                main_block = (TREE / relative).read_text().split("__main__", 1)[1]
+                self.assertIn("run_writer_cli(", main_block)
+
+    def run_cli(self, module, argv, fault):
+        import contextlib, io, os, sys
+        original, calls = os.replace, []
+
+        def replace(*args, **kwargs):
+            calls.append(1)
+            if fault and len(calls) == 1:
+                raise OSError(28, "No space left on device")
+            return original(*args, **kwargs)
+        saved_argv, out, err = sys.argv, io.StringIO(), io.StringIO()
+        sys.argv = [module.__name__] + argv
+        os.replace = replace
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = KERNEL.run_writer_cli(module.main, retry_entrypoint="probe")
+        finally:
+            os.replace, sys.argv = original, saved_argv
+        return code, out.getvalue(), err.getvalue()
+
+    def assert_fault_then_once(self, module, argv):
+        code, out, err = self.run_cli(module, argv, fault=True)
+        self.assertNotIn("Traceback", out + err)
+        self.assertEqual(code, 1)
+        record = json.loads(out.strip().splitlines()[-1])
+        self.assertIs(record["terminal"], False)
+        for field in ("disposition", "failure_code", "failed_predicate", "required_evidence_or_repair",
+                      "retry_entrypoint", "owning_existing_goal", "next_attempt"):
+            self.assertIn(field, record)
+        code, out, err = self.run_cli(module, argv, fault=False)
+        self.assertIn(code, (0, None), out + err)
+        return out
+
+    def test_emit_cli(self):
+        emit = load("probe_emit_cli", ".stegverse/transition-ledger/emit.py")
+        argv = ["--transition-id", "t:cli", "--transition-class", "T", "--predecessor-state-sha256",
+                "sha256:" + "0" * 64, "--successor-state-sha256", "sha256:" + "1" * 64, "--hb-epoch", "4096"]
+        self.assert_fault_then_once(emit, argv)
+        receipts = list((self.tmp / "repo" / "receipts").glob("*.json"))
+        self.assertEqual(len(receipts), 1)
+
+    def test_aggregate_cli(self):
+        org = load("probe_aggregate_cli", "resident-runtime/aggregate_repo_transition.py")
+        body = {"schema": "stegverse.repo-transition-receipt/v1", "repository": org.C["organization"] + "/cli",
+                "transition_id": "cli", "transition_class": "CLI", "predecessor_state_sha256": "sha256:" + "1" * 64,
+                "successor_state_sha256": "sha256:" + "2" * 64, "evidence": {}, "authority_effect": "NONE",
+                "hb_reference": KERNEL.hb_reference(epoch=4096), "previous_receipt_sha256": None}
+        source = self.tmp / "source.json"
+        source.write_text(json.dumps({**body, "receipt_sha256": org.sha(body)}))
+        argv = ["--repo-receipt", str(source), "--predecessor-org-state-sha256", "sha256:" + "1" * 64,
+                "--successor-org-state-sha256", "sha256:" + "2" * 64, "--hb-epoch", "4096"]
+        self.assert_fault_then_once(org, argv)
+        self.assertEqual(len(list((self.tmp / "org" / "receipts").glob("*.json"))), 1)
+
+    def test_intr_destination_self_close_cli(self):
+        ingress = load("probe_ingress_cli", "resident-runtime/intr_destination_ingress.py")
+        argv = ["--self-close", "--hb-epoch", "4096", "--communication-id", "cli-close", "--packet-id", "cli-close"]
+        self.assert_fault_then_once(ingress, argv)
+        self.assertEqual(len(list((self.tmp / "org" / "receipts").glob("*.json"))), 1)
+        self.assertEqual(len(list((self.tmp / "repo" / "receipts").glob("*.json"))), 1)
+
+    def test_organization_runtime_cli(self):
+        runtime = load("probe_runtime_cli", "runtime/organization_runtime.py")
+        runtime.ACTIVATIONS = self.tmp / "activations"
+        self.assert_fault_then_once(runtime, ["activate", "--activation-id", "cli", "--node-ref", "n",
+                                              "--hb-epoch", "4096"])
+        self.assertEqual(len(list((self.tmp / "activations").glob("*.json"))), 1)
+
+    def test_federation_cycle_cli(self):
+        root = self.tmp / "cycle"
+        provision(root, "Org-C", "BOUNDARY_LOCAL_CONTROL", "org-c.org-control")
+        cycle = load("probe_cycle_cli", "resident-runtime/federation_cycle.py")
+        cycle.ROOT = root
+        cycle.main.__globals__["ROOT"] = root
+        self.assert_fault_then_once(cycle, ["--hb-epoch", "4096"])
+        latest = json.loads((root / "resident-runtime/federation/latest-cycle.json").read_text())
+        self.assertEqual(latest["heartbeat_reference"]["epoch"], 4096)
+
+
 if __name__ == "__main__":
     unittest.main()

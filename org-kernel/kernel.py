@@ -236,6 +236,32 @@ def write_failure(error:BaseException)->BaseException|None:
         error=error.__cause__ or error.__context__
     return None
 
+def writer_fault_record(error:BaseException, *, retry_entrypoint:str)->dict[str,Any]|None:
+    """The six-field, non-terminal record of a fault in this repository's own writes, or None."""
+    fault=write_failure(error)
+    if fault is None:
+        return None
+    if isinstance(fault,LedgerWriteFailed) or isinstance(getattr(fault,"refusal",None),dict):
+        return dict(fault.refusal)
+    return dict(LedgerWriteFailed(fault,retry_entrypoint=retry_entrypoint).refusal)
+
+def run_writer_cli(main:Any, *, retry_entrypoint:str)->Any:
+    """Run a writer CLI's main; a fault in its own writes prints six fields, never a traceback.
+
+    Every epoch-taking writer entry point is run through this (F-WRITER-TRACE):
+    an OSError or LedgerWriteFailed anywhere in the failure's chain becomes the
+    non-terminal six-field record on stdout and exit status 1, so the next run
+    completes the write once. Any other failure is re-raised unchanged.
+    """
+    try:
+        return main()
+    except (Exception,SystemExit) as error:
+        record=writer_fault_record(error,retry_entrypoint=retry_entrypoint)
+        if record is None:
+            raise
+        print(json.dumps(record,sort_keys=True))
+        return 1
+
 def supplied_hb_reference(hb_epoch:Any, *, retry_entrypoint:str, carried:Any=None,
                           root:Path|None=None)->dict[str,Any]:
     """The heartbeat reference of a supplied epoch, or SuppliedEpochRefused. No clock is read.

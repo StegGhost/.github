@@ -31,7 +31,7 @@ def write_once(p:Path,v:Mapping[str,Any])->Path:
     if p.exists():
         if p.read_bytes()==raw:return p
         raise RuntimeBoundaryError("write-once collision")
-    p.write_bytes(raw)
+    kernel.write_atomic(p,raw.decode())  # whole or not at all: never a torn record (B-P36q)
     if p.read_bytes()!=raw: raise RuntimeBoundaryError("write verification failed")
     return p
 def activate(activation_id:str,node_ref:str,hb_epoch:Any=None)->dict[str,Any]:
@@ -69,4 +69,4 @@ def main()->int:
     except kernel.SuppliedEpochRefused as exc:
         print(json.dumps(exc.refusal,sort_keys=True)); return 1
     print(json.dumps(r,sort_keys=True)); return 0
-if __name__=="__main__": raise SystemExit(main())
+if __name__=="__main__": raise SystemExit(kernel.run_writer_cli(main,retry_entrypoint=EPOCH_RETRY_ENTRYPOINT))

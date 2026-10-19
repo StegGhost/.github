@@ -53,7 +53,7 @@ def main(argv=None):
         }
     out=ROOT/"resident-runtime"/"federation"/"latest-cycle.json"
     out.parent.mkdir(parents=True,exist_ok=True)
-    out.write_text(json.dumps(receipt,indent=2,sort_keys=True)+"\n")
+    K.write_atomic(out,json.dumps(receipt,indent=2,sort_keys=True)+"\n")
     print(json.dumps(receipt,sort_keys=True))
     # A cycle that met frames and consumed none of them did not succeed.
     if receipt.get("frames_refused") and not receipt.get("frames_consumed"):
@@ -61,4 +61,5 @@ def main(argv=None):
     return 0
 
 if __name__=="__main__":
-    raise SystemExit(main())
+    # A fault in the cycle's own writes prints six fields, not a traceback.
+    raise SystemExit(K.run_writer_cli(main,retry_entrypoint=EPOCH_RETRY_ENTRYPOINT))

@@ -85,4 +85,4 @@ def main():
  except (RepoLedgerEpochRefused,kernel.LedgerWriteFailed) as exc:
   print(json.dumps(exc.refusal,sort_keys=True));raise SystemExit(1)
  print(json.dumps(r,sort_keys=True))
-if __name__=="__main__":main()
+if __name__=="__main__":raise SystemExit(kernel.run_writer_cli(main,retry_entrypoint=EPOCH_RETRY_ENTRYPOINT))
