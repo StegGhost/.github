@@ -505,15 +505,25 @@ class InboundEpochIsSupplied(unittest.TestCase):
         for field in ("disposition", "failed_predicate", "required_evidence_or_repair",
                       "retry_entrypoint", "owning_existing_goal", "next_attempt"):
             self.assertIn(field, conflict["refusal"])
+        # In a cycle the conflicting frame is quarantined (B-P36j): nothing but
+        # the terminal marker is written, and the next cycle does not meet it.
         KERNEL.publish_frame(self.frame, root=self.mesh)
         before = sorted(p for p in self.b.rglob("*") if p.is_file() and "__pycache__" not in p.parts)
         served = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh, hb_epoch="5000")
         self.assertEqual(served[0]["result"]["refusal"]["failure_code"], "HB_EPOCH_CONFLICT")
-        self.assertIsNone(served[0]["seen_marker"])
         self.assertIsNone(served[0]["response_publication"])
-        self.assertEqual(sorted(p for p in self.b.rglob("*") if p.is_file() and "__pycache__" not in p.parts), before)
-        agreed = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh, hb_epoch="4096")
-        self.assertSupplied(agreed[0]["response_publication"]["frame"])
+        marker = json.loads(Path(served[0]["seen_marker"]).read_text())
+        self.assertEqual((marker["failure_code"], marker["refused_failure_code"]),
+                         ("FRAME_REFUSED_QUARANTINED", "HB_EPOCH_CONFLICT"))
+        after = sorted(p for p in self.b.rglob("*") if p.is_file() and "__pycache__" not in p.parts)
+        self.assertEqual([p for p in after if p not in before], [Path(served[0]["seen_marker"])])
+        self.assertEqual(KERNEL.consume_and_respond(self.b, mesh_root=self.mesh, hb_epoch="4096"), [])
+        # An invalid explicit epoch is the caller's error: nothing at all is written.
+        KERNEL.publish_frame(KERNEL.carrier_frame(dict(self.request, packet_id="explicit-invalid"), epoch=4096),
+                             root=self.mesh)
+        invalid, = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh, hb_epoch="+33")
+        self.assertEqual(invalid["result"]["refusal"]["failure_code"], "HB_EPOCH_INVALID")
+        self.assertIsNone(invalid["seen_marker"])
         self.assertEqual(CLOCK_CALLS, [])
 
     def test_an_explicit_epoch_alone_answers_a_clock_flagged_frame(self):
@@ -608,6 +618,23 @@ class InboundEpochIsSupplied(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(cycle.main([]), 0)
         self.assertSupplied(json.loads(latest.read_text()))
+        os.environ.pop("HB_EPOCH", None)
+        # B-P36l at the cycle: a frame at 77 met with --hb-epoch 4096 is
+        # surfaced six-field HB_EPOCH_CONFLICT, quarantined, and the cycle that
+        # consumed nothing returns 1; the next cycle does not meet it again.
+        KERNEL.publish_frame(KERNEL.carrier_frame(dict(self.request, packet_id="cycle-conflict"), epoch=77),
+                             root=self.mesh)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(cycle.main(["--hb-epoch", "4096"]), 1)
+        record = json.loads(latest.read_text())
+        self.assertEqual(record["frames_refused"], 1)
+        self.assertEqual(record["refusals"][0]["failure_code"], "HB_EPOCH_CONFLICT")
+        for field in ("disposition", "failed_predicate", "required_evidence_or_repair",
+                      "retry_entrypoint", "owning_existing_goal", "next_attempt"):
+            self.assertIn(field, record["refusals"][0])
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(cycle.main(["--hb-epoch", "4096"]), 0)
+        self.assertEqual(json.loads(latest.read_text())["frames_seen"], 0)
         self.assertEqual(CLOCK_CALLS, [])
 
     def test_a_clock_or_unmarked_inbound_frame_lends_no_epoch(self):

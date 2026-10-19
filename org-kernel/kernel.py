@@ -494,9 +494,10 @@ def ingest_frame(root:Path, frame:dict[str,Any], *, mesh_root:Path|None=None,
     if epoch is None and isinstance(ref,dict) and any(field in ref for field in CARRIED_CLAIM_FIELDS):
         epoch=int(str(ref["epoch"]))
         carried={"source":ref["source"],"head_receipt_sha":ref["head_receipt_sha"]}
-    # Both supplied and disagreeing: neither is chosen over the other.
+    # Both supplied and disagreeing: neither is chosen over the other. The
+    # frame is quarantined (B-P36j), so it does not stall every later cycle.
     if hb_epoch is not None and epoch is not None and int(str(hb_epoch))!=epoch:
-        return {"status":"REFUSED","packet_id":frame["packet_id"],"quarantine":False,
+        return {"status":"REFUSED","packet_id":frame["packet_id"],
                 "refusal":ingest_refusal(HB_EPOCH_CONFLICT,"the supplied hb_epoch "+str(hb_epoch)+
                                          " disagrees with the frame's epoch "+str(epoch))}
     if epoch is None and hb_epoch is not None:

@@ -35,6 +35,10 @@ def main(argv=None):
         results=K.consume_and_respond(ROOT,hb_epoch=hb_epoch)
         consumed=sum(1 for x in results if (x.get("result") or {}).get("status")=="CONSUMED")
         responses=sum(1 for x in results if x.get("response_publication"))
+        # Each refusal is surfaced six-field, never silently passed over; the
+        # frame itself was quarantined by the kernel so it is not met again.
+        refusals=[x["result"]["refusal"] for x in results
+                  if (x.get("result") or {}).get("status")=="REFUSED" and x["result"].get("refusal")]
         receipt={
           "schema_version":"stegverse.org-federation-cycle.v1",
           "organization":K.load_registry(ROOT)["organization"],
@@ -42,6 +46,8 @@ def main(argv=None):
           "frames_seen":len(results),
           "frames_consumed":consumed,
           "responses_emitted":responses,
+          "frames_refused":len(refusals),
+          "refusals":refusals,
           "authority_effect":"NONE_CARRIER_ONLY",
           "transport":"LOCAL_SPOOL_FALLBACK"
         }
@@ -49,6 +55,9 @@ def main(argv=None):
     out.parent.mkdir(parents=True,exist_ok=True)
     out.write_text(json.dumps(receipt,indent=2,sort_keys=True)+"\n")
     print(json.dumps(receipt,sort_keys=True))
+    # A cycle that met frames and consumed none of them did not succeed.
+    if receipt.get("frames_refused") and not receipt.get("frames_consumed"):
+        return 1
     return 0
 
 if __name__=="__main__":
