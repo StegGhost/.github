@@ -92,11 +92,8 @@ def supplied_epoch_failure(hb_epoch: Any, reference: Any = None) -> tuple[str, s
     integer value >= 32 (the HB32 anchor). `reference`, the carrier frame's
     heartbeat reference when there is one, must be an object, and a
     `derived_from_clock` it carries must be exactly false. Any failure is
-    HB_EPOCH_INVALID, except a reference that states no `derived_from_clock`
-    (SUPPLIED and CARRIED both state it false; a bare `sampled_unix_ns` is
-    legacy CLOCK), which is HB_EPOCH_PROVENANCE_UNMARKED. A `sampled_unix_ns`
-    beside a false flag is HB_EPOCH_INVALID. Returns
-    (failure_code, detail), or None when the epoch is supplied. No clock is read.
+    HB_EPOCH_INVALID. Returns (failure_code, detail), or None when the epoch is
+    supplied. No clock is read.
     """
     if reference is not None and not isinstance(reference, dict):
         return "HB_EPOCH_INVALID", "the carrier's heartbeat reference is not an object"
@@ -114,15 +111,17 @@ def supplied_epoch_failure(hb_epoch: Any, reference: Any = None) -> tuple[str, s
         return "HB_EPOCH_INVALID", "hb_epoch " + repr(hb_epoch) + " is not ASCII [0-9]+"
     if int(text) < 32:
         return "HB_EPOCH_INVALID", "hb_epoch " + text + " is below the HB32 anchor (32)"
-    if reference is not None and "derived_from_clock" not in reference:
-        return "HB_EPOCH_PROVENANCE_UNMARKED", "the carrier's heartbeat reference does not state derived_from_clock; a bare sampled_unix_ns is legacy CLOCK"
     if reference is not None and "derived_from_clock" in reference \
             and reference["derived_from_clock"] is not False:
         return "HB_EPOCH_INVALID", ("the carrier's derived_from_clock is not exactly false; "
                                     "a clock-derived epoch is not a supplied one")
-    if reference is not None and "sampled_unix_ns" in reference:
-        return "HB_EPOCH_INVALID", "the carrier's heartbeat reference carries a clock sample; it is not a supplied one"
+    if reference is not None and "sampled_unix_ns" in reference: return "HB_EPOCH_INVALID", "the carrier's heartbeat reference carries sampled_unix_ns; a sampled clock value is CLOCK, never a supplied epoch"
+    if reference is not None and "derived_from_clock" not in reference: return "HB_EPOCH_PROVENANCE_UNMARKED", "the carrier's heartbeat reference carries no derived_from_clock; an unmarked clock value is laundering, and a carrier cannot self-assert CARRIED provenance"
     return None
+
+#: sha256(inspect.getsource(supplied_epoch_failure).encode()) of the FINAL shared
+#: rule, StegVerse-Labs/.github#3282 @e1b3ac8. Pinned so a local edit is caught.
+SHARED_VALIDATOR_SHA256="ad8ff52936d5bcd9a2ad6caceb2d9a637a099518989b34bbb3370301c7a4cce2"
 
 class SuppliedEpochRefused(ValueError):
     """A receipt writer's refusal of an absent or invalid supplied epoch.
@@ -376,10 +375,6 @@ def carried_claim_failure(root:Path, ref:dict[str,Any])->str|None:
 
     Read-only: the ledger is opened without initializing it and nothing is written.
     """
-    if ref.get("derived_from_clock") is not False:
-        return "a CARRIED reference states derived_from_clock exactly false"
-    if "sampled_unix_ns" in ref:
-        return "a CARRIED reference carries no clock sample"
     if ref.get("source")!=CARRIED_SOURCE:
         return "source "+repr(ref.get("source"))+" is not "+CARRIED_SOURCE
     path=root/"resident-runtime/aggregate_repo_transition.py"
@@ -405,29 +400,26 @@ def carried_claim_failure(root:Path, ref:dict[str,Any])->str|None:
 def frame_refusal(root:Path, frame:dict[str,Any])->dict[str,Any]|None:
     """The six-field FAIL_CLOSED refusal of an inbound frame's heartbeat reference, or None.
 
-    Applied at ingest, before dispatch, for every role. Marker vocabulary:
-    a CARRIED claim must verify (CARRIED_PROVENANCE_UNVERIFIED); a sample
-    beside a false flag, or a sample with no flag, is HB_EPOCH_INVALID; no
-    flag at all is HB_EPOCH_PROVENANCE_UNMARKED. A reference flagged
-    derived_from_clock true is CLOCK: it is consumed as a frame-only crossing
-    (WU-B13) and lends no epoch. No clock is read.
+    Applied at ingest, before dispatch, for every role. The reference is held
+    to the shared rule (supplied_epoch_failure), and a CARRIED claim the rule
+    passes must then verify (CARRIED_PROVENANCE_UNVERIFIED). A reference
+    flagged derived_from_clock true with no CARRIED claim is CLOCK: it is
+    consumed as a frame-only crossing pending WU-B13 and lends no epoch
+    (CLOCK_FLAGGED_FRAMES_CONSUMED_PENDING_WU_B13). No clock is read.
     """
     ref=frame.get("heartbeat_reference")
-    code=detail=None
-    if not isinstance(ref,dict):
-        code,detail=HB_EPOCH_INVALID,"the frame's heartbeat reference is not an object"
-    elif any(field in ref for field in CARRIED_CLAIM_FIELDS):
-        failure=carried_claim_failure(root,ref)
-        if failure is not None:
-            code,detail=CARRIED_PROVENANCE_UNVERIFIED,failure
-    elif ref.get("derived_from_clock") is True:
+    carried=isinstance(ref,dict) and any(field in ref for field in CARRIED_CLAIM_FIELDS)
+    if isinstance(ref,dict) and ref.get("derived_from_clock") is True and not carried:
         return None
-    elif "derived_from_clock" in ref and ref["derived_from_clock"] is not False:
-        code,detail=HB_EPOCH_INVALID,"the frame's derived_from_clock is neither true nor exactly false"
-    elif "sampled_unix_ns" in ref:
-        code,detail=HB_EPOCH_INVALID,"the frame's heartbeat reference carries a clock sample without derived_from_clock true"
-    elif "derived_from_clock" not in ref:
-        code,detail=HB_EPOCH_PROVENANCE_UNMARKED,"the frame's heartbeat reference does not state derived_from_clock"
+    code=detail=None
+    failure=supplied_epoch_failure(ref.get("epoch") if isinstance(ref,dict) else None,
+                                   ref if ref is not None else "absent")
+    if failure is not None:
+        code,detail=failure
+    elif carried:
+        unverified=carried_claim_failure(root,ref)
+        if unverified is not None:
+            code,detail=CARRIED_PROVENANCE_UNVERIFIED,unverified
     if code is None:
         return None
     return {"disposition":"FAIL_CLOSED","failure_code":code,"failed_predicate":FRAME_PREDICATE,"detail":detail,

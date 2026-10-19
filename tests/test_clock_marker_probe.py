@@ -288,11 +288,24 @@ class SharedRuleAndSourceProvenance(unittest.TestCase):
         # Marker vocabulary: CARRIED states false too; a bare sample is legacy CLOCK.
         self.assertEqual(k.supplied_epoch_failure(4096, {"provenance": "CARRIED:LEGACY_CLOCK_RECEIPT"})[0],
                          "HB_EPOCH_PROVENANCE_UNMARKED")
-        self.assertEqual(k.supplied_epoch_failure(4096, {"sampled_unix_ns": 1})[0], "HB_EPOCH_PROVENANCE_UNMARKED")
+        self.assertEqual(k.supplied_epoch_failure(4096, {"sampled_unix_ns": 1})[0], "HB_EPOCH_INVALID")
+        self.assertEqual(k.supplied_epoch_failure(4096, {"source": "ORGANIZATION_LEDGER_HEAD",
+                                                         "head_receipt_sha": "sha256:" + "f" * 64})[0],
+                         "HB_EPOCH_PROVENANCE_UNMARKED")
+        # The rule passes a false+source reference; the writer or ingest verifies it.
+        self.assertIsNone(k.supplied_epoch_failure(4096, {"derived_from_clock": False, "source": "X"}))
         self.assertEqual(k.supplied_epoch_failure(4096, {"derived_from_clock": False, "sampled_unix_ns": 1})[0],
                          "HB_EPOCH_INVALID")
         self.assertIsNone(k.supplied_epoch_failure(4096, k.hb_reference(epoch=4096)))
         self.assertIsNone(k.supplied_epoch_failure(4096))
+
+    def test_the_shared_rule_is_the_pinned_final_text(self):
+        import hashlib, inspect
+        k = self.org.kernel
+        digest = hashlib.sha256(inspect.getsource(k.supplied_epoch_failure).encode()).hexdigest()
+        self.assertEqual(digest, k.SHARED_VALIDATOR_SHA256)
+        self.assertEqual(k.SHARED_VALIDATOR_SHA256,
+                         "ad8ff52936d5bcd9a2ad6caceb2d9a637a099518989b34bbb3370301c7a4cce2")
 
     def repo_receipt(self, transition_id, hb):
         body = {"schema": "stegverse.repo-transition-receipt/v1", "repository": self.org.C["organization"] + "/probe",
@@ -396,9 +409,22 @@ class InboundEpochIsSupplied(unittest.TestCase):
         body["heartbeat_reference"] = {k: v for k, v in frame["heartbeat_reference"].items()
                                        if k != "derived_from_clock"}
         KERNEL.publish_frame({**body, "frame_sha256": KERNEL.sha(body)}, root=self.mesh)
+        # A CLOCK-flagged frame, built before the clock is forbidden: consumed
+        # (pending WU-B13), lending no epoch, its response refused NOT_SUPPLIED.
+        RAISING.clear()
+        clock_packet = dict(self.request, packet_id=self.request["packet_id"] + ":clock")
+        clock_frame = KERNEL.carrier_frame(clock_packet)
+        KERNEL.publish_frame(clock_frame, root=self.mesh)
+        CLOCK_CALLS.clear()
+        RAISING.append(True)
         first = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh)
         statuses = sorted(item["result"]["status"] for item in first)
-        self.assertEqual(statuses, ["CONSUMED", "REFUSED"])
+        self.assertEqual(statuses, ["CONSUMED", "CONSUMED", "REFUSED"])
+        clock = next(item for item in first if item["result"].get("packet", {}).get("packet_id") == clock_packet["packet_id"])
+        self.assertIsNone(clock["response_publication"])
+        self.assertEqual(clock["response_refusal"]["failure_code"], "HB_EPOCH_NOT_SUPPLIED")
+        supplied = next(item for item in first if item["result"].get("packet", {}).get("packet_id") == self.request["packet_id"])
+        self.assertSupplied(supplied["response_publication"]["frame"])
         refused = next(item for item in first if item["result"]["status"] == "REFUSED")
         self.assertIsNone(refused["response_publication"])
         marker = json.loads(Path(refused["seen_marker"]).read_text())
