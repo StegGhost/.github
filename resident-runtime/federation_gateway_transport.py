@@ -226,7 +226,9 @@ def resident_gateway_cycle(repo_root: Path, hb_epoch: int | None = None) -> dict
                             "failed_predicate": type(error).__name__, "terminal": False},
                 "gateway_execution_authority": "NONE",
             }
-    epoch = K.frame_supplied_epoch(frame)
+    epoch, carried = K.admitted_epoch(frame) if result.get("status") == "CONSUMED" else (None, None)
+    if epoch is None:
+        epoch = K.frame_supplied_epoch(frame)
     if epoch is None and hb_epoch is not None and K.supplied_epoch_failure(hb_epoch) is None:
         epoch = int(str(hb_epoch))
     response_emitted = 0
@@ -247,7 +249,7 @@ def resident_gateway_cycle(repo_root: Path, hb_epoch: int | None = None) -> dict
                 # Recorded once per request and submitted once: a redelivery
                 # after a failed ack reuses the record and is not resubmitted.
                 response = K.build_control_response(packet, execution)
-                response_frame, record = K.recorded_response(repo_root, response, epoch)
+                response_frame, record = K.recorded_response(repo_root, response, epoch, carried)
                 submitted = record.with_suffix(".submitted")
                 if not submitted.exists():
                     submit_frame(response_frame)

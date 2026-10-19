@@ -901,6 +901,57 @@ class InboundEpochIsSupplied(unittest.TestCase):
         self.assertEqual(second["response_frame_sha256"], submitted[0]["frame_sha256"])
         self.assertEqual(CLOCK_CALLS, [])
 
+    def test_a_verified_carried_crossing_is_answered_carried_and_recorded(self):
+        # VALIDATOR @7a12ee6 rows 2-3 (B-P36m 09:00Z): a frame whose CARRIED
+        # claim names the real current org head is admitted with a durable
+        # admission record, and its response is stamped from the admitted claim
+        # (epoch, source, head_receipt_sha, derived_from_clock false).
+        import os
+        RAISING.clear()
+        for relative in ("resident-runtime/aggregate_repo_transition.py", "resident-runtime/ledger_store.py",
+                         ".stegverse/transition-ledger/org-contract.json"):
+            (self.b / relative).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(TREE / relative, self.b / relative)
+        saved = os.environ.get("STEGVERSE_ORG_LEDGER_ROOT")
+        os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(self.tmp / "org-ledger")
+        self.addCleanup(lambda: os.environ.__setitem__("STEGVERSE_ORG_LEDGER_ROOT", saved)
+                        if saved is not None else os.environ.pop("STEGVERSE_ORG_LEDGER_ROOT", None))
+        org = load("probe_carried_org", "resident-runtime/aggregate_repo_transition.py")
+        body = {"schema": "stegverse.repo-transition-receipt/v1", "repository": org.C["organization"] + "/probe",
+                "transition_id": "seed", "transition_class": "SEED", "predecessor_state_sha256": "sha256:" + "1" * 64,
+                "successor_state_sha256": "sha256:" + "2" * 64, "evidence": {}, "authority_effect": "NONE",
+                "hb_reference": KERNEL.hb_reference(epoch=4096), "previous_receipt_sha256": None}
+        head = org.append({**body, "receipt_sha256": org.sha(body)}, "REPO_STATE_PROPAGATION",
+                          "sha256:" + "1" * 64, "sha256:" + "2" * 64, {}, "NONE", hb_epoch=4096)
+        claim = {"source": "ORGANIZATION_LEDGER_HEAD", "head_receipt_sha": head["receipt_sha256"]}
+        frame = KERNEL.carrier_frame(self.request, epoch=4096, carried=claim)
+        KERNEL.publish_frame(frame, root=self.mesh)
+        CLOCK_CALLS.clear()
+        RAISING.append(True)
+        served, = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh)
+        self.assertEqual(served["result"]["status"], "CONSUMED", served["result"])
+        reference = served["response_publication"]["frame"]["heartbeat_reference"]
+        self.assertEqual({k: reference[k] for k in ("epoch", "derived_from_clock", "source", "head_receipt_sha")},
+                         {"epoch": 4096, "derived_from_clock": False, **claim})
+        self.assertNotIn("sampled_unix_ns", reference)
+        admissions = list((self.b / "resident-runtime/federation/admissions.d").glob("*.json"))
+        self.assertEqual(len(admissions), 1)
+        record = json.loads(admissions[0].read_text())
+        self.assertEqual((record["packet_id"], record["head_receipt_sha"], record["epoch"], record["derived_from_clock"]),
+                         (frame["packet_id"], claim["head_receipt_sha"], 4096, False))
+        # The gateway answers the same way.
+        gateway = load("probe_gateway_carried", "resident-runtime/federation_gateway_transport.py")
+        gateway.K = KERNEL
+        submitted = []
+        other = KERNEL.carrier_frame(dict(self.request, packet_id=self.request["packet_id"] + ":gw"),
+                                     epoch=4096, carried=claim)
+        gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": other}
+        gateway.submit_frame = lambda f: submitted.append(f) or {}
+        gateway.acknowledge_frame = lambda organization, f, state, hb_epoch=None: {"state": state}
+        self.assertEqual(gateway.resident_gateway_cycle(self.b)["responses_emitted"], 1)
+        self.assertEqual(submitted[0]["heartbeat_reference"]["head_receipt_sha"], claim["head_receipt_sha"])
+        self.assertEqual(CLOCK_CALLS, [])
+
     def test_monitor_request_status_takes_the_inbound_epoch(self):
         # R2: resident_status is stamped from the request frame's epoch.
         built = KERNEL.build_ecosystem_packets(

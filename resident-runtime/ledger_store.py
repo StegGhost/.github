@@ -298,10 +298,29 @@ class PosixLedgerStore:
                     raise ValueError("ledger_receipt_collision")
                 if existing is None:
                     missing.append(key)
-            for key in missing:
-                self.put(key, documents[key])
-            self.put(HEAD_KEY, new_head)
+            # A failed put (an OSError at fsync or replace, of a document or of
+            # HEAD) rolls back what this transaction wrote, so a failed append
+            # leaves no unpublished document to wedge the next one.
+            written = []
+            try:
+                for key in missing:
+                    written.append(key)
+                    self.put(key, documents[key])
+                self.put(HEAD_KEY, new_head)
+            except BaseException:
+                for key in reversed(written):
+                    self.discard_unpublished(key)
+                raise
             return True
+
+    def discard_unpublished(self, key):
+        """Remove a document no published HEAD names (a failed append's residue)."""
+        try:
+            self._path(key).unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
 
     @staticmethod
     def _sync_directory(directory):

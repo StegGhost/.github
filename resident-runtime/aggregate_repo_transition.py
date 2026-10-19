@@ -210,6 +210,45 @@ def _validate_existing_head(store):
     return previous
 
 
+def _reconcile_unpublished(store):
+    """Complete or clear what a failed append left unpublished, under the lock.
+
+    A receipt that HEAD never came to name is adopted when it is the only one,
+    recomputes, chains to the current HEAD and has its source copy: the append
+    that wrote it is completed by publishing HEAD. A source copy that no
+    receipt names is discarded, so the next append rewrites it. Anything else
+    is left for _validate_existing_head to refuse, as before.
+    """
+    head = store.get(HEAD_KEY)
+    previous = head.get("receipt_sha256") if isinstance(head, dict) else None
+    reachable = set()
+    cursor = previous
+    while cursor and cursor not in reachable:
+        record = store.get(receipt_key(cursor))
+        if record is None:
+            return
+        reachable.add(cursor)
+        cursor = record.get("previous_receipt_sha256")
+    orphans = sorted(store.list_prefix(RECEIPT_PREFIX) - {receipt_key(d) for d in reachable})
+    if len(orphans) == 1:
+        receipt = store.get(orphans[0])
+        body = {k: v for k, v in (receipt or {}).items() if k != "receipt_sha256"}
+        digest = (receipt or {}).get("receipt_sha256")
+        source = (receipt or {}).get("source_transition_sha256")
+        if (receipt is not None and digest == sha(body) and receipt_key(digest) == orphans[0]
+                and receipt.get("previous_receipt_sha256") == previous
+                and (not isinstance(source, str) or store.get(source_key(source)) is not None)):
+            store.put(HEAD_KEY, {"organization": C["organization"], "receipt_sha256": digest,
+                                 "receipt_path": store.locator(orphans[0])})
+            reachable.add(digest)
+    named = {source_key(store.get(receipt_key(d))["source_transition_sha256"]) for d in reachable
+             if isinstance(store.get(receipt_key(d)).get("source_transition_sha256"), str)}
+    discard = getattr(store, "discard_unpublished", None)
+    if discard is not None and not (store.list_prefix(RECEIPT_PREFIX) - {receipt_key(d) for d in reachable}):
+        for key in sorted(store.list_prefix(SOURCE_PREFIX) - named):
+            discard(key)
+
+
 def _recorded_for_source(store, head_digest, source_transition_sha256):
     """The organization receipt this chain already holds for a source receipt."""
     cursor = head_digest
@@ -308,6 +347,7 @@ def append(source_receipt, org_transition_class, predecessor_state, successor_st
         # and HEAD publication. The substrate transaction publishes the retained
         # source, the organization receipt, and HEAD together.
         with store.exclusive():
+            _reconcile_unpublished(store)
             expected_head = store.get(HEAD_KEY)
             previous = _validate_existing_head(store)
             # A source receipt is consumed once. With `idempotent` a receipt already

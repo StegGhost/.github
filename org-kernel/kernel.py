@@ -155,6 +155,22 @@ def writer_epoch_refusal(hb_epoch:Any, *, retry_entrypoint:str, reference:Any=No
             "next_attempt":"call again with the supplied epoch; nothing was written",
             "derived_from_clock":False,"consequence_committed":False}
 
+def admitted_epoch(frame:Any)->tuple[int|None,dict[str,Any]|None]:
+    """The epoch, and CARRIED claim if any, an admitted inbound frame lends.
+
+    Called only for a frame ingest admitted (CONSUMED): a SUPPLIED frame lends
+    its epoch; a frame whose CARRIED claim ingest verified lends the claim's
+    epoch with the claim; anything else lends nothing.
+    """
+    epoch=frame_supplied_epoch(frame)
+    if epoch is not None:
+        return epoch,None
+    ref=frame.get("heartbeat_reference") if isinstance(frame,dict) else None
+    if (isinstance(ref,dict) and "source" in ref and "head_receipt_sha" in ref
+            and supplied_epoch_failure(ref.get("epoch"),ref) is None):
+        return int(str(ref["epoch"])),{"source":ref["source"],"head_receipt_sha":ref["head_receipt_sha"]}
+    return None,None
+
 def frame_supplied_epoch(frame:Any)->int|None:
     """The validated epoch an inbound frame carries, or None when it has none.
 
@@ -256,8 +272,14 @@ def derive_channel(payload_hash:str)->dict[str,Any]:
     return {"channel_id":f"HB:H1:P{slot}","phase_slot":slot,"phase_slot_count":CHANNEL_COUNT,
             "derivation":"PAYLOAD_SHA256_FIRST64_MOD_16","authority_effect":"NONE_CARRIER_ONLY"}
 
-def carrier_frame(packet:dict[str,Any], *, now_ns:int|None=None, epoch:int|None=None)->dict[str,Any]:
+def carrier_frame(packet:dict[str,Any], *, now_ns:int|None=None, epoch:int|None=None,
+                  carried:dict[str,Any]|None=None)->dict[str,Any]:
     raw=canon(packet); payload_hash=sha(packet.get("payload",{})); ref=hb_reference(now_ns,epoch=epoch); channel=derive_channel(payload_hash)
+    if carried is not None:
+        # An answer within an admitted CARRIED crossing reads CARRIED, never a
+        # bare supplied stamp (B-P36m): the admitted source and head travel on.
+        if epoch is None: raise ValueError("carried_requires_epoch")
+        ref={**ref,"source":carried["source"],"head_receipt_sha":carried["head_receipt_sha"]}
     body={"schema":CARRIER_SCHEMA,"packet_id":packet["packet_id"],"packet_sha256":sha(raw),
           "packet_base64":base64.b64encode(raw).decode("ascii"),"heartbeat_reference":ref,
           "channel":channel,"origin_org":packet["origin"]["org"],"destination_org":packet["destination"]["org"],
@@ -572,6 +594,30 @@ def frame_refusal(root:Path, frame:dict[str,Any])->dict[str,Any]|None:
         return None
     return ingest_refusal(code,detail)
 
+def record_admission(root:Path, frame:dict[str,Any], epoch:int, carried:dict[str,Any])->Path:
+    """The crossing's durable admission record of a verified CARRIED claim (B-P36m).
+
+    Written once at ingest, before dispatch, for every role: the head the claim
+    was verified against when it was admitted. A replay of the same frame
+    finds the identical record; a different one is a collision.
+    """
+    out=root/"resident-runtime/federation/admissions.d"
+    out.mkdir(parents=True,exist_ok=True)
+    record={"schema_version":"stegverse.federation-carried-admission.v1","packet_id":frame.get("packet_id"),
+            "frame_sha256":frame.get("frame_sha256"),"destination_org":frame.get("destination_org"),
+            "epoch":epoch,"derived_from_clock":False,"source":carried["source"],
+            "head_receipt_sha":carried["head_receipt_sha"],
+            "admitted_against":"CURRENT_VERIFIED_ORGANIZATION_LEDGER_HEAD","authority_effect":"NONE_ADMISSION_ONLY"}
+    path=out/(hashlib.sha256((str(frame.get("packet_id"))+"|"+str(frame.get("frame_sha256"))).encode()).hexdigest()+".json")
+    if path.exists():
+        if json.loads(path.read_text())!=record:
+            raise ValueError("carried_admission_record_collision")
+        return path
+    staging=path.with_suffix(".tmp")
+    staging.write_text(json.dumps(record,indent=2,sort_keys=True)+"\n")
+    os.replace(staging,path)
+    return path
+
 def ingest_refusal(code:str, detail:str)->dict[str,Any]:
     """The six-field FAIL_CLOSED of a frame refused at ingest."""
     return {"disposition":"FAIL_CLOSED","failure_code":code,"failed_predicate":FRAME_PREDICATE,"detail":detail,
@@ -612,6 +658,7 @@ def ingest_frame(root:Path, frame:dict[str,Any], *, mesh_root:Path|None=None,
     if epoch is None and isinstance(ref,dict) and any(field in ref for field in CARRIED_CLAIM_FIELDS):
         epoch=int(str(ref["epoch"]))
         carried={"source":ref["source"],"head_receipt_sha":ref["head_receipt_sha"]}
+        record_admission(root,frame,epoch,carried)
     # Both supplied and disagreeing: neither is chosen over the other. The
     # frame is quarantined (B-P36j), so it does not stall every later cycle.
     if hb_epoch is not None and epoch is not None and int(str(hb_epoch))!=epoch:
@@ -1101,7 +1148,8 @@ def frame_error_refusal(error:BaseException)->dict[str,Any]:
         return ingest_refusal(FRAME_INTEGRITY_INVALID,type(error).__name__+": "+message)
     return {**ingest_refusal(FRAME_INGEST_FAILED,message),"failed_predicate":type(error).__name__}
 
-def recorded_response(repo_root:Path, response:dict[str,Any], epoch:int)->tuple[dict[str,Any],Path]:
+def recorded_response(repo_root:Path, response:dict[str,Any], epoch:int,
+                      carried:dict[str,Any]|None=None)->tuple[dict[str,Any],Path]:
     """The response frame for a request, recorded once and reused byte for byte.
 
     Keyed by the response's packet_id. Written before the response is
@@ -1114,7 +1162,7 @@ def recorded_response(repo_root:Path, response:dict[str,Any], epoch:int)->tuple[
     path=out/(hashlib.sha256(response["packet_id"].encode()).hexdigest()+".json")
     if path.exists():
         return json.loads(path.read_text()),path
-    frame=carrier_frame(response,epoch=epoch)
+    frame=carrier_frame(response,epoch=epoch,carried=carried)
     staging=path.with_suffix(".tmp")
     staging.write_text(json.dumps(frame,indent=2,sort_keys=True)+"\n")
     os.replace(staging,path)
@@ -1137,9 +1185,10 @@ def _consume_one(repo_root:Path, item:dict[str,Any], *, mesh_root:Path|None,
     # surface that is supposed to decide what is closable.
     if result.get("status")=="CONSUMED" and message_class in RESPONDED_REQUEST_CLASSES:
         response=build_control_response(packet,result["execution_result"])
-        # Published at the request frame's validated epoch, else at the
-        # epoch supplied to this call (ingest refused any disagreement).
-        epoch=frame_supplied_epoch(item["frame"])
+        # Published at the request frame's validated epoch (with its admitted
+        # CARRIED claim, if any), else at the epoch supplied to this call
+        # (ingest refused any disagreement).
+        epoch,carried=admitted_epoch(item["frame"])
         if epoch is None and hb_epoch is not None:
             epoch=int(str(hb_epoch))
         if epoch is None:
@@ -1147,7 +1196,7 @@ def _consume_one(repo_root:Path, item:dict[str,Any], *, mesh_root:Path|None,
             # the response is refused six-field, never stamped from a clock.
             response_refusal=writer_epoch_refusal(None,retry_entrypoint=RESPONSE_RETRY_ENTRYPOINT)
         else:
-            frame,_record=recorded_response(repo_root,response,epoch)
+            frame,_record=recorded_response(repo_root,response,epoch,carried)
             response_publication={"packet":recover_packet(frame),"frame":frame,
                                   "path":str(publish_frame(frame,root=mesh_root))}
     return result,response_publication,response_refusal

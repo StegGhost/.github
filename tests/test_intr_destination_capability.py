@@ -1215,6 +1215,73 @@ class LedgerWriteFaultIsNonTerminalTests(AddressedAndClosedTests):
                 self.assertEqual((after[0] - before[0] + after_fault[0], after[1] - before[1] + after_fault[1]), (1, 1))
 
 
+class FailedHeadPublishDoesNotWedgeTests(AddressedAndClosedTests):
+    """VALIDATOR @7a12ee6 row 1: an OSError at the org HEAD publish (os.replace
+    call #5 of one intr-destination append) must not wedge the ledger. The
+    transaction rolls back what it wrote; if residue survives, the next append
+    adopts a complete, recomputing receipt that chains to HEAD."""
+
+    SUPPLIED = 4096
+
+    def fail_replace_call(self, number):
+        original = os.replace
+        calls = []
+
+        def replace(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == number:
+                raise OSError(5, "Input/output error")
+            return original(*args, **kwargs)
+        os.replace = replace
+        return lambda: setattr(os, "replace", original)
+
+    def org_receipts(self):
+        return self.receipts("STEGVERSE_ORG_LEDGER_ROOT", "stegverse.organization-transition-receipt/v1")
+
+    def test_a_packet_id_collision_is_refused_six_field_and_writes_nothing(self):
+        ingress.receive(diagnostic("collision-a"), registry=REGISTRY, packet_id="collision", hb_epoch=self.SUPPLIED)
+        before = (self.org_receipts(), self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1"))
+        collided = ingress.receive(diagnostic("collision-b"), registry=REGISTRY, packet_id="collision",
+                                   hb_epoch=self.SUPPLIED)
+        self.assertEqual((collided["disposition"], collided["failure_code"]), ("FAIL_CLOSED", "LEDGER_RECEIPT_COLLISION"))
+        for field in ("failed_predicate", "required_evidence_or_repair", "retry_entrypoint",
+                      "owning_existing_goal", "next_attempt"):
+            self.assertIn(field, collided)
+        self.assertEqual((self.org_receipts(),
+                          self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")), before)
+
+    def run_case(self, packet_id, keep_residue):
+        import sys
+        store_class = sys.modules[ingress.organization_ledger.open_store.__module__].PosixLedgerStore
+        if keep_residue:
+            original_discard = store_class.discard_unpublished
+            store_class.discard_unpublished = lambda self, key: None
+        restore = self.fail_replace_call(5)
+        try:
+            with self.assertRaises(RuntimeError) as raised:
+                ingress.receive(diagnostic(packet_id), registry=REGISTRY, packet_id=packet_id,
+                                hb_epoch=self.SUPPLIED)
+        finally:
+            restore()
+            if keep_residue:
+                store_class.discard_unpublished = original_discard
+        self.assertIsNotNone(kernel.write_failure(raised.exception))
+        for _cycle in range(2):
+            result = ingress.receive(diagnostic(packet_id), registry=REGISTRY, packet_id=packet_id,
+                                     hb_epoch=self.SUPPLIED)
+            self.assertEqual(result["disposition"], "ALLOW", result)
+        organization = [r for r in self.org_receipts() if r["source_transition_id"].endswith(":" + packet_id)]
+        self.assertEqual(len(organization), 1)
+        head = json.loads((Path(os.environ["STEGVERSE_ORG_LEDGER_ROOT"]) / "HEAD.json").read_text())
+        self.assertEqual(head["receipt_sha256"], organization[0]["receipt_sha256"])
+
+    def test_a_failed_org_head_publish_rolls_back_and_the_next_cycle_appends_once(self):
+        self.run_case("head-publish-rollback", keep_residue=False)
+
+    def test_residue_of_a_failed_publish_is_adopted_by_the_next_append(self):
+        self.run_case("head-publish-adopted", keep_residue=True)
+
+
 def subprocess_git(args):
     import subprocess
     completed = subprocess.run(["git", *args], capture_output=True, text=True)

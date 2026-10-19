@@ -253,7 +253,16 @@ def _recorded(disposition: str, payload: Any, packet_id: str, hb_epoch: int | No
         collided = _evidence(payload, packet_id, FAIL_CLOSED,
                              failed_predicate="ONE_PACKET_ID_BINDS_ONE_DIAGNOSTIC",
                              detail=str(exc))
-        return _result(collided, None, replayed=False, received=False)
+        result = _result(collided, None, replayed=False, received=False)
+        # Six-field, like every other refusal from this operation.
+        result.update({
+            "failure_code": "LEDGER_RECEIPT_COLLISION",
+            "required_evidence_or_repair": ("a fresh packet id for a different diagnostic; "
+                                            "the recorded transition for this packet id stands"),
+            "retry_entrypoint": repository_ledger.EPOCH_RETRY_ENTRYPOINT,
+            "owning_existing_goal": repository_ledger.kernel.HB_EPOCH_OWNING_EXISTING_GOAL,
+            "next_attempt": "resubmit under a new packet id; nothing was written"})
+        return result
     return _result(evidence, appended, replayed=replayed, received=disposition == ALLOW)
 
 
