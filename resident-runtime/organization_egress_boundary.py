@@ -545,7 +545,13 @@ def emit(destination_organization: Any, payload: Mapping[str, Any], *,
                 raise EgressRefused(refused.failed_predicate, refused.reason) from None
             attested = attestation_module.record(declared, signature, receipt)
             packet = {**packet, "attestation": signature}
-        published = kernel.publish_packet(packet, root=mesh_root, epoch=heartbeat["epoch"])
+        # Checked before anything is published: an emission this chain already
+        # records for this packet is not published again. Its record is
+        # replayed instead, which returns the recorded pair or completes it
+        # after a fault part-way (B-P36q), and never publishes then raises.
+        prior = recorded_emission(packet["packet_id"])
+        if prior is None:
+            published = kernel.publish_packet(packet, root=mesh_root, epoch=heartbeat["epoch"])
     except EgressRefused as exc:
         record = emit_refusal_record(exc.failed_predicate, exc.reason,
                                      destination_organization, origin, payload)
@@ -559,8 +565,8 @@ def emit(destination_organization: Any, payload: Mapping[str, Any], *,
                            record["payload_sha256"], sha(record), record, hb_epoch)
         return _refusal_result(record, appended)
 
-    record = emission_record(resolved, origin, packet, published["frame"], payload,
-                             standing_disposition, attested)
+    record = prior if prior is not None else emission_record(
+        resolved, origin, packet, published["frame"], payload, standing_disposition, attested)
     appended = _record(EMITTED_CLASS + ":" + packet["packet_id"], EMITTED_CLASS,
                        record["payload_sha256"], sha(record), record, hb_epoch)
     result = {
@@ -578,6 +584,7 @@ def emit(destination_organization: Any, payload: Mapping[str, Any], *,
                                   "origin_is_attested_by_the_credential_authority",
                                   "signer_supplied")},
         "emission_record": record,
+        "emission_replayed": prior is not None,
         "emission_transition_class": EMITTED_CLASS,
         "emission_repository_receipt_sha256": appended["repository_receipt"]["receipt_sha256"],
         "emission_organization_receipt_sha256": appended["organization_receipt"]["receipt_sha256"],

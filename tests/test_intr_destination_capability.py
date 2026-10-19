@@ -1377,6 +1377,33 @@ class FailedHeadPublishDoesNotWedgeTests(AddressedAndClosedTests):
                                    capability=PROFILE_ID, mesh_root=mesh, hb_epoch=self.SUPPLIED)
                 self.assertEqual(done["disposition"], "ALLOW", done)
 
+    def test_re_emitting_a_recorded_packet_at_a_later_epoch_replays_it(self):
+        # V-P11 @bbd81b6: the same payload re-emitted at a later epoch is
+        # checked against this chain before anything is published. It is not
+        # published again and does not raise: the recorded emission is
+        # returned (one frame, one repository and one organization receipt).
+        mesh = Path(tempfile.mkdtemp(dir=self._work.name))
+        first = egress.emit(PEER, diagnostic("re-emit"), standing=STANDING, capability=PROFILE_ID,
+                            mesh_root=mesh, hb_epoch=self.SUPPLIED)
+        again = egress.emit(PEER, diagnostic("re-emit"), standing=STANDING, capability=PROFILE_ID,
+                            mesh_root=mesh, hb_epoch=self.SUPPLIED + 904)
+        self.assertEqual((first["disposition"], again["disposition"]), ("ALLOW", "ALLOW"), again)
+        self.assertIs(again["emission_replayed"], True)
+        self.assertEqual(again["packet_id"], first["packet_id"])
+        self.assertEqual(again["emission_repository_receipt_sha256"], first["emission_repository_receipt_sha256"])
+        self.assertEqual(again["emission_organization_receipt_sha256"],
+                         first["emission_organization_receipt_sha256"])
+        self.assertEqual(len(list((mesh / "frames.d").glob("*.json"))), 1)
+        repository = [r for r in self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")
+                      if r["transition_id"] == egress.EMITTED_CLASS + ":" + first["packet_id"]]
+        self.assertEqual(len(repository), 1)
+        match = egress.request_bilateral_match(PEER, "some-packet", standing=STANDING, mesh_root=mesh,
+                                               hb_epoch=self.SUPPLIED)
+        rematch = egress.request_bilateral_match(PEER, "some-packet", standing=STANDING, mesh_root=mesh,
+                                                 hb_epoch=self.SUPPLIED + 1)
+        self.assertEqual((match["disposition"], rematch["disposition"]), ("ALLOW", "ALLOW"), rematch)
+        self.assertIs(rematch["emission_replayed"], True)
+
     def test_a_failed_org_head_publish_rolls_back_and_the_next_cycle_appends_once(self):
         self.run_case("head-publish-rollback", keep_residue=False)
 
