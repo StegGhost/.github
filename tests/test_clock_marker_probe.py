@@ -243,5 +243,82 @@ class ClockMarkerProbe(unittest.TestCase):
         self.assertMarked(activation, receipt, *written(self.tmp))
 
 
+class SharedRuleAndSourceProvenance(unittest.TestCase):
+    """B-P36h: an unmarked reference is refused, and a clock-provenance
+    repository receipt is not consumed as an organization source."""
+
+    def setUp(self):
+        import os
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.ledger = self.tmp / "org-ledger"
+        previous = os.environ.get("STEGVERSE_ORG_LEDGER_ROOT")
+        os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(self.ledger)
+        self.addCleanup(lambda: os.environ.__setitem__("STEGVERSE_ORG_LEDGER_ROOT", previous)
+                        if previous is not None else os.environ.pop("STEGVERSE_ORG_LEDGER_ROOT", None))
+        spec = importlib.util.spec_from_file_location("probe_aggregate", TREE / "resident-runtime/aggregate_repo_transition.py")
+        self.org = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.org)
+
+    def test_reference_without_derived_from_clock_is_refused(self):
+        k = self.org.kernel
+        self.assertEqual(k.supplied_epoch_failure(4096, {"epoch": 4096})[0], "HB_EPOCH_PROVENANCE_UNMARKED")
+        refusal = k.writer_epoch_refusal(4096, retry_entrypoint="probe", reference={"epoch": 4096})
+        self.assertEqual(refusal["failure_code"], "HB_EPOCH_PROVENANCE_UNMARKED")
+        for field in ("disposition", "failed_predicate", "required_evidence_or_repair",
+                      "retry_entrypoint", "owning_existing_goal", "next_attempt"):
+            self.assertIn(field, refusal)
+        self.assertEqual(k.supplied_epoch_failure(4096, {"derived_from_clock": True})[0], "HB_EPOCH_INVALID")
+        self.assertIsNone(k.supplied_epoch_failure(4096, {"derived_from_clock": False}))
+        self.assertIsNone(k.supplied_epoch_failure(4096, {"provenance": "CARRIED:LEGACY_CLOCK_RECEIPT"}))
+        self.assertIsNone(k.supplied_epoch_failure(4096))
+
+    def repo_receipt(self, transition_id, hb):
+        body = {"schema": "stegverse.repo-transition-receipt/v1", "repository": self.org.C["organization"] + "/probe",
+                "transition_id": transition_id, "transition_class": "PROBE",
+                "predecessor_state_sha256": "sha256:" + "1" * 64, "successor_state_sha256": "sha256:" + "2" * 64,
+                "evidence": {}, "authority_effect": "NONE", "hb_reference": hb, "previous_receipt_sha256": None}
+        return {**body, "receipt_sha256": self.org.sha(body)}
+
+    def append(self, receipt, **kw):
+        return self.org.append(receipt, "REPO_STATE_PROPAGATION", "sha256:" + "1" * 64, "sha256:" + "2" * 64,
+                               {}, "NONE", hb_epoch="4096", **kw)
+
+    def files(self):
+        return sorted(p for p in self.ledger.rglob("*") if p.is_file()) if self.ledger.exists() else []
+
+    def test_clock_provenance_source_is_refused_and_writes_nothing(self):
+        k = self.org.kernel
+        clock = self.repo_receipt("clock-source", k.hb_reference(k.HB_ANCHOR_UNIX_NS + 1_000_000_000))
+        for idempotent in (False, True):
+            with self.assertRaises(k.SuppliedEpochRefused) as refused:
+                self.append(clock, idempotent=idempotent)
+            refusal = refused.exception.refusal
+            self.assertEqual(refusal["failure_code"], "SOURCE_RECEIPT_IS_CLOCK_PROVENANCE")
+            self.assertEqual(refusal["disposition"], "FAIL_CLOSED")
+            self.assertIn("CARRIED:LEGACY_CLOCK_RECEIPT", refusal["required_evidence_or_repair"])
+            self.assertIn("never mutated", refusal["required_evidence_or_repair"])
+            for field in ("failed_predicate", "retry_entrypoint", "owning_existing_goal", "next_attempt"):
+                self.assertIn(field, refusal)
+            self.assertEqual(self.files(), [])
+        supplied = self.repo_receipt("supplied-source", k.hb_reference(epoch=4096))
+        self.assertEqual(self.append(supplied)["hb_reference"]["epoch"], 4096)
+
+    def test_already_recorded_clock_source_still_replays(self):
+        # A ledger written before the guard holds an organization receipt over a
+        # clock-provenance source. Replay returns it; nothing is rewritten.
+        k = self.org.kernel
+        clock = self.repo_receipt("legacy-clock-source", k.hb_reference(k.HB_ANCHOR_UNIX_NS + 1_000_000_000))
+        guard = self.org.source_clock_refusal
+        self.org.source_clock_refusal = lambda receipt: None
+        try:
+            recorded = self.append(clock)
+        finally:
+            self.org.source_clock_refusal = guard
+        before = {p: p.read_bytes() for p in self.files()}
+        self.assertEqual(self.append(clock, idempotent=True), recorded)
+        self.assertEqual({p: p.read_bytes() for p in self.files()}, before)
+
+
 if __name__ == "__main__":
     unittest.main()

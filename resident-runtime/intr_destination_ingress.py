@@ -224,9 +224,10 @@ def _recorded(disposition: str, payload: Any, packet_id: str, hb_epoch: int | No
     transition_class = OPERATION_ID if disposition == ALLOW else REFUSED_CLASS
     try:
         appended, replayed = _append(transition_class, packet_id, evidence, hb_epoch)
-    except repository_ledger.RepoLedgerEpochRefused as exc:
+    except (repository_ledger.RepoLedgerEpochRefused, organization_ledger.OrgLedgerEpochRefused) as exc:
         # No epoch was supplied, so neither receipt is written; a clock is not
-        # read to stand in for it.
+        # read to stand in for it. A clock-provenance repository receipt is not
+        # consumed as the organization receipt's source either.
         refused = _evidence(payload, packet_id, FAIL_CLOSED,
                             failed_predicate=exc.failed_predicate, detail=str(exc))
         result = _result(refused, None, replayed=False, received=False)

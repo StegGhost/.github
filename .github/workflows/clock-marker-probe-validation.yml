@@ -11,6 +11,7 @@ on:
       - 'resident-runtime/federation_cycle.py'
       - 'resident-runtime/federation_gateway_transport.py'
       - 'runtime/organization_runtime.py'
+      - 'resident-runtime/aggregate_repo_transition.py'
       - 'tests/test_clock_marker_probe.py'
       - '.github/workflows/clock-marker-probe-validation.yml'
   push:
@@ -23,6 +24,7 @@ on:
       - 'resident-runtime/federation_cycle.py'
       - 'resident-runtime/federation_gateway_transport.py'
       - 'runtime/organization_runtime.py'
+      - 'resident-runtime/aggregate_repo_transition.py'
       - 'tests/test_clock_marker_probe.py'
       - '.github/workflows/clock-marker-probe-validation.yml'
   workflow_dispatch:

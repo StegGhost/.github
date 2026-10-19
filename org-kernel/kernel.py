@@ -78,6 +78,7 @@ def hb_reference(now_ns:int|None=None, *, epoch:int|None=None)->dict[str,Any]:
 
 HB_EPOCH_NOT_SUPPLIED="HB_EPOCH_NOT_SUPPLIED"
 HB_EPOCH_INVALID="HB_EPOCH_INVALID"
+HB_EPOCH_PROVENANCE_UNMARKED="HB_EPOCH_PROVENANCE_UNMARKED"
 HB_EPOCH_PREDICATE="SUBMISSION_CARRIES_THE_SUPPLIED_HB_EPOCH"
 HB_EPOCH_OWNING_EXISTING_GOAL="INTERLOCK-INTR-RUNTIME-INDEPENDENT-PROTOCOL-001"
 
@@ -91,8 +92,9 @@ def supplied_epoch_failure(hb_epoch: Any, reference: Any = None) -> tuple[str, s
     integer value >= 32 (the HB32 anchor). `reference`, the carrier frame's
     heartbeat reference when there is one, must be an object, and a
     `derived_from_clock` it carries must be exactly false. Any failure is
-    HB_EPOCH_INVALID. Returns (failure_code, detail), or None when the epoch is
-    supplied. No clock is read.
+    HB_EPOCH_INVALID, except a reference that carries no `derived_from_clock`
+    and no CARRIED provenance, which is HB_EPOCH_PROVENANCE_UNMARKED. Returns
+    (failure_code, detail), or None when the epoch is supplied. No clock is read.
     """
     if reference is not None and not isinstance(reference, dict):
         return "HB_EPOCH_INVALID", "the carrier's heartbeat reference is not an object"
@@ -110,6 +112,8 @@ def supplied_epoch_failure(hb_epoch: Any, reference: Any = None) -> tuple[str, s
         return "HB_EPOCH_INVALID", "hb_epoch " + repr(hb_epoch) + " is not ASCII [0-9]+"
     if int(text) < 32:
         return "HB_EPOCH_INVALID", "hb_epoch " + text + " is below the HB32 anchor (32)"
+    if reference is not None and "derived_from_clock" not in reference and not str(reference.get("provenance", "")).startswith("CARRIED:"):
+        return "HB_EPOCH_PROVENANCE_UNMARKED", "the carrier's heartbeat reference states neither derived_from_clock nor a CARRIED provenance"
     if reference is not None and "derived_from_clock" in reference \
             and reference["derived_from_clock"] is not False:
         return "HB_EPOCH_INVALID", ("the carrier's derived_from_clock is not exactly false; "
@@ -128,14 +132,14 @@ class SuppliedEpochRefused(ValueError):
         self.failed_predicate=refusal["failed_predicate"]
         self.refusal=dict(refusal)
 
-def writer_epoch_refusal(hb_epoch:Any, *, retry_entrypoint:str)->dict[str,Any]|None:
+def writer_epoch_refusal(hb_epoch:Any, *, retry_entrypoint:str, reference:Any=None)->dict[str,Any]|None:
     """The six-field FAIL_CLOSED of a receipt writer's epoch, or None when it is supplied.
 
     A receipt references the heartbeat epoch its caller supplies, checked by
     `supplied_epoch_failure`; an absent one is HB_EPOCH_NOT_SUPPLIED and is
     never derived from a clock. Ported from StegVerse-Labs/.github@bc608a3 (WU-B13a).
     """
-    failure=supplied_epoch_failure(hb_epoch)
+    failure=supplied_epoch_failure(hb_epoch,reference)
     if failure is None:
         return None
     code,detail=failure
@@ -340,7 +344,7 @@ def ingest_frame(root:Path, frame:dict[str,Any], *, mesh_root:Path|None=None)->d
 
 __all__=["hb_reference","derive_channel","carrier_frame","recover_packet","dispatch","persist_outbox","ingest_frame",
          "capability_ingress","CAPABILITY_INGRESS_ROLE",
-         "supplied_epoch_failure","HB_EPOCH_NOT_SUPPLIED","HB_EPOCH_INVALID",
+         "supplied_epoch_failure","HB_EPOCH_NOT_SUPPLIED","HB_EPOCH_INVALID","HB_EPOCH_PROVENANCE_UNMARKED",
          "SuppliedEpochRefused","writer_epoch_refusal","supplied_hb_reference"]
 
 

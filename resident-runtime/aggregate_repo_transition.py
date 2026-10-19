@@ -241,11 +241,51 @@ def require_supplied_epoch(hb_epoch):
     return kernel.supplied_hb_reference(hb_epoch, retry_entrypoint=EPOCH_RETRY_ENTRYPOINT)
 
 
+#: A repository receipt whose heartbeat reference was read off a clock is not
+#: consumed as a source: the organization receipt would stand on an epoch no
+#: caller supplied. Refused before anything is written. Forward guard only --
+#: receipts already on either chain are never mutated, and an idempotent
+#: replay of an organization receipt already recorded still returns it.
+SOURCE_CLOCK_PROVENANCE = "SOURCE_RECEIPT_IS_CLOCK_PROVENANCE"
+SOURCE_CLOCK_REPAIR = ("a WU-B13 migration transition that rebinds the legacy repo receipt under a "
+                       "supplied epoch with provenance CARRIED:LEGACY_CLOCK_RECEIPT + source sha; "
+                       "existing receipts are never mutated")
+
+
+def source_clock_refusal(source_receipt):
+    """The six-field FAIL_CLOSED of a clock-provenance source receipt, or None."""
+    hb = source_receipt.get("hb_reference")
+    if not isinstance(hb, dict) or (hb.get("derived_from_clock") is not True and "sampled_unix_ns" not in hb):
+        return None
+    return {"disposition": "FAIL_CLOSED", "failure_code": SOURCE_CLOCK_PROVENANCE,
+            "failed_predicate": "SOURCE_RECEIPT_CARRIES_A_SUPPLIED_EPOCH",
+            "detail": "source receipt " + str(source_receipt.get("receipt_sha256")) + " has a clock-derived hb_reference",
+            "required_evidence_or_repair": SOURCE_CLOCK_REPAIR,
+            "retry_entrypoint": EPOCH_RETRY_ENTRYPOINT,
+            "owning_existing_goal": kernel.HB_EPOCH_OWNING_EXISTING_GOAL,
+            "next_attempt": "append the WU-B13 migration transition's receipt instead; nothing was written",
+            "derived_from_clock": False, "consequence_committed": False}
+
+
 def append(source_receipt, org_transition_class, predecessor_state, successor_state,
            boundary_evidence, authority_effect, hb_epoch=None, idempotent=False):
     # Admission is decided before the append lock is taken; an inadmissible
     # source receipt never contends for the organization ledger.
     source = verify_source(source_receipt)
+    clock_source = source_clock_refusal(source_receipt)
+    if clock_source is not None:
+        # Read-only: neither the store nor its lock is created for a refusal.
+        # Receipts are immutable, so an already-recorded one read without the
+        # lock is the one a locked replay would return.
+        if idempotent:
+            store = open_store(ledger_root())
+            prior = _recorded_for_source(store, _validate_existing_head(store),
+                                         source["source_transition_sha256"])
+            if prior is not None:
+                if prior.get("org_transition_class") != org_transition_class:
+                    raise ValueError("ledger_receipt_collision")
+                return prior
+        raise OrgLedgerEpochRefused(clock_source)
     require_state_digest("predecessor_org_state_sha256", predecessor_state)
     require_state_digest("successor_org_state_sha256", successor_state)
     # Ordering is a heartbeat count, not a clock reading. The caller supplies

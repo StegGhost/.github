@@ -247,13 +247,18 @@ def main() -> int:
     if refusal is not None:
         print(json.dumps(refusal, sort_keys=True))
         return 1
-    if args.repository:
-        result = propagate(args.repository, repository_root=args.repository_ledger_root,
-                           hb_epoch=args.hb_epoch)
-    else:
-        if args.repository_ledger_root is not None:
-            raise SystemExit("--repository-ledger-root names one repository's ledger; pass --repository")
-        result = propagate_all(hb_epoch=args.hb_epoch)
+    if args.repository_ledger_root is not None and not args.repository:
+        raise SystemExit("--repository-ledger-root names one repository's ledger; pass --repository")
+    try:
+        if args.repository:
+            result = propagate(args.repository, repository_root=args.repository_ledger_root,
+                               hb_epoch=args.hb_epoch)
+        else:
+            result = propagate_all(hb_epoch=args.hb_epoch)
+    except organization_ledger.OrgLedgerEpochRefused as exc:
+        # A clock-provenance repository receipt is refused six-field, not traced back.
+        print(json.dumps(exc.refusal, sort_keys=True))
+        return 1
     rendered = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)

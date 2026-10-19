@@ -982,14 +982,17 @@ class ReadBackEpochIsNeverForwardedTests(AddressedAndClosedTests):
         self.assertEqual(self.receipts("STEGVERSE_ORG_LEDGER_ROOT",
                                        "stegverse.organization-transition-receipt/v1"), [])
 
+        # B-P36h (O-1): the clock-provenance repository receipt is not consumed
+        # as a source, even under a supplied epoch. Refused six-field; nothing
+        # is written and the repository receipt is left as it was.
         replayed = ingress.receive(diagnostic("read-back"), registry=REGISTRY,
                                    packet_id="read-back", hb_epoch=self.SUPPLIED)
-        self.assertIs(replayed["transition_replayed"], True)
-        organization, = self.receipts("STEGVERSE_ORG_LEDGER_ROOT",
-                                      "stegverse.organization-transition-receipt/v1")
-        self.assertEqual(organization["repo_receipt_sha256"], stamped["receipt_sha256"])
-        self.assertEqual(organization["hb_reference"]["epoch"], self.SUPPLIED)
-        self.assertIs(organization["hb_reference"]["derived_from_clock"], False)
+        self.assertEqual(replayed["failure_code"], "SOURCE_RECEIPT_IS_CLOCK_PROVENANCE")
+        self.assertIn("CARRIED:LEGACY_CLOCK_RECEIPT", replayed["required_evidence_or_repair"])
+        self.assertEqual(self.receipts("STEGVERSE_ORG_LEDGER_ROOT",
+                                       "stegverse.organization-transition-receipt/v1"), [])
+        self.assertEqual(self.receipts("STEGVERSE_REPO_LEDGER_ROOT",
+                                       "stegverse.repo-transition-receipt/v1"), [stamped])
         self.assert_nothing_laundered(supplied=(self.SUPPLIED,))
 
     def test_the_intr_destination_ingress_with_no_epoch_writes_nothing(self):
@@ -1043,12 +1046,14 @@ class ReadBackEpochIsNeverForwardedTests(AddressedAndClosedTests):
             self.propagation.propagate(THIS + "/.github", repository_root=repository_root)
         self.assertEqual(self.receipts("STEGVERSE_ORG_LEDGER_ROOT",
                                        "stegverse.organization-transition-receipt/v1"), [])
-        self.propagation.propagate(THIS + "/.github", repository_root=repository_root,
-                                   hb_epoch=self.SUPPLIED)
-        organization, = self.receipts("STEGVERSE_ORG_LEDGER_ROOT",
-                                      "stegverse.organization-transition-receipt/v1")
-        self.assertEqual(organization["hb_reference"]["epoch"], self.SUPPLIED)
-        self.assertIs(organization["hb_reference"]["derived_from_clock"], False)
+        # B-P36h (O-1): a supplied epoch does not make a clock-provenance
+        # repository receipt consumable; it is refused and nothing is written.
+        with self.assertRaises(self.propagation.organization_ledger.OrgLedgerEpochRefused) as refused:
+            self.propagation.propagate(THIS + "/.github", repository_root=repository_root,
+                                       hb_epoch=self.SUPPLIED)
+        self.assertEqual(refused.exception.refusal["failure_code"], "SOURCE_RECEIPT_IS_CLOCK_PROVENANCE")
+        self.assertEqual(self.receipts("STEGVERSE_ORG_LEDGER_ROOT",
+                                       "stegverse.organization-transition-receipt/v1"), [])
         self.assert_nothing_laundered(supplied=(self.SUPPLIED,))
 
 
