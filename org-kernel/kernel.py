@@ -457,13 +457,20 @@ def frame_refusal(root:Path, frame:dict[str,Any])->dict[str,Any]|None:
         failure=supplied_epoch_failure(ref.get("epoch"))
         if failure is not None:
             code,detail=failure
-    # A reference the rule passes as supplied must also cohere: its generation,
-    # id, frequency and progression agree with its epoch (B-P36o).
-    if code is None and isinstance(ref,dict) and supplied_epoch_failure(ref.get("epoch"),ref) is None:
-        try:
-            validate_hb_reference(dict(ref))
-        except ValueError as incoherent:
-            code,detail=HB_REFERENCE_INVALID,str(incoherent)
+    # Any reference whose epoch passes must cohere with it: generation and
+    # heartbeat_id agree with the epoch whatever the flag (lead 08:35Z), and a
+    # supplied one also has the oscillator's frequency and progression (B-P36o).
+    if code is None and isinstance(ref,dict) and supplied_epoch_failure(ref.get("epoch")) is None:
+        epoch=int(str(ref["epoch"]))
+        if ref.get("generation")!=epoch:
+            code,detail=HB_REFERENCE_INVALID,"heartbeat_generation_mismatch"
+        elif ref.get("heartbeat_id")!="HB:"+str(epoch):
+            code,detail=HB_REFERENCE_INVALID,"heartbeat_id_mismatch"
+        elif supplied_epoch_failure(ref.get("epoch"),ref) is None:
+            try:
+                validate_hb_reference(dict(ref))
+            except ValueError as incoherent:
+                code,detail=HB_REFERENCE_INVALID,str(incoherent)
     if code is None:
         return None
     return ingest_refusal(code,detail)

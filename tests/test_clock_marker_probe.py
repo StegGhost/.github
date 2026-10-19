@@ -679,6 +679,31 @@ class InboundEpochIsSupplied(unittest.TestCase):
                         self.assertEqual(KERNEL.consume_and_respond(root, mesh_root=mesh), [])
                         self.assertEqual(CLOCK_CALLS, [])
 
+    def test_a_clock_frame_whose_generation_or_id_disagrees_is_refused(self):
+        # Lead 08:35Z: generation and heartbeat_id must agree with the epoch at
+        # ingest whatever the flag; a mismatch is refused HB_REFERENCE_INVALID and
+        # quarantined even though nothing raised.
+        RAISING.clear()
+        for field, value in (("generation", 1), ("heartbeat_id", "HB:1")):
+            with self.subTest(field=field):
+                packet = dict(self.request, packet_id="incoherent-clock:" + field)
+                frame = KERNEL.carrier_frame(packet)
+                body = {k: v for k, v in frame.items() if k != "frame_sha256"}
+                body["heartbeat_reference"] = {**frame["heartbeat_reference"], field: value}
+                frame = {**body, "frame_sha256": KERNEL.sha(body)}
+                self.assertEqual(KERNEL.frame_refusal(self.b, frame)["failure_code"], "HB_REFERENCE_INVALID")
+                KERNEL.publish_frame(frame, root=self.mesh)
+        CLOCK_CALLS.clear()
+        RAISING.append(True)
+        served = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh)
+        self.assertEqual(sorted(x["result"]["refusal"]["failure_code"] for x in served),
+                         ["HB_REFERENCE_INVALID", "HB_REFERENCE_INVALID"])
+        for item in served:
+            self.assertEqual(json.loads(Path(item["seen_marker"]).read_text())["failure_code"],
+                             "FRAME_REFUSED_QUARANTINED")
+        self.assertEqual(KERNEL.consume_and_respond(self.b, mesh_root=self.mesh), [])
+        self.assertEqual(CLOCK_CALLS, [])
+
     def test_monitor_request_status_takes_the_inbound_epoch(self):
         # R2: resident_status is stamped from the request frame's epoch.
         built = KERNEL.build_ecosystem_packets(
@@ -865,6 +890,27 @@ class ManifestEntrypointsBindTheirEpoch(unittest.TestCase):
                 self.assertIn(dispatcher["invocation"], workflow)
                 self.assertIn(path + " " + flag + " ", dispatcher["invocation"])
                 self.assertIn("writer_epoch_refusal", workflow)
+
+    def test_no_schedule_or_push_trigger_reaches_an_epoch_requiring_entrypoint(self):
+        # Lead 08:35Z: schedule and push are not admissible dispatchers. A
+        # workflow they trigger runs no epoch-requiring entrypoint (only tests).
+        import re
+        requiring = [path for path in TREE.rglob("*.py")
+                     if ".git" not in path.parts and "tests" not in path.parts
+                     and '"--hb-epoch"' in path.read_text()]
+        names = sorted({path.name for path in requiring})
+        self.assertIn("federation_cycle.py", names)
+        for workflow in sorted((TREE / ".github/workflows").glob("*.yml")):
+            text = workflow.read_text()
+            # The trigger keys sit two spaces in under the top-level `on:`.
+            on_block = re.search(r"^on:\n((?:[ \t]+.*\n|\n)*)", text, re.M)
+            triggers = set(re.findall(r"^  (\w+):", on_block.group(1), re.M)) if on_block else set()
+            if not triggers & {"schedule", "push"}:
+                continue
+            for line in text.splitlines():
+                for name in names:
+                    with self.subTest(workflow=workflow.name, entrypoint=name):
+                        self.assertIsNone(re.search(r"python3?\s+\S*/" + re.escape(name), line), line)
 
 
 if __name__ == "__main__":
