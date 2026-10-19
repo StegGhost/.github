@@ -625,6 +625,60 @@ class InboundEpochIsSupplied(unittest.TestCase):
         self.assertEqual(KERNEL.consume_and_respond(self.b, mesh_root=self.mesh), [])
         self.assertEqual(CLOCK_CALLS, [])
 
+    def test_a_malformed_carrier_epoch_is_refused_whatever_the_flag(self):
+        # Lead 08:27Z: every carrier epoch passes the shared digit/anchor check.
+        # A clock-flagged or bare-sampled frame whose epoch is "abc", 5 or
+        # missing is refused six-field and quarantined, never consumed
+        # silently; the valid frame is answered whether it sorts before or after.
+        import hashlib
+        RAISING.clear()
+        clock = KERNEL.carrier_frame(dict(self.request, packet_id="malformed-template"))
+
+        def frame_name(frame):
+            return hashlib.sha256((frame["packet_id"] + "|" + frame["frame_sha256"]).encode()).hexdigest()
+
+        def bad(kind, epoch, salt):
+            ref = dict(clock["heartbeat_reference"])
+            if kind == "bare":
+                ref.pop("derived_from_clock")
+            if epoch is None:
+                ref.pop("epoch")
+            else:
+                ref["epoch"] = epoch
+            packet = dict(self.request, packet_id="malformed:" + kind + ":" + repr(epoch) + ":" + str(salt))
+            body = {k: v for k, v in KERNEL.carrier_frame(packet, epoch=4096).items() if k != "frame_sha256"}
+            body["heartbeat_reference"] = ref
+            return {**body, "frame_sha256": KERNEL.sha(body)}
+
+        valid_name = frame_name(self.frame)
+        expected = {"abc": "HB_EPOCH_INVALID", 5: "HB_EPOCH_INVALID", None: "HB_EPOCH_NOT_SUPPLIED"}
+        for kind in ("clock", "bare"):
+            for epoch, code in expected.items():
+                for before in (True, False):
+                    with self.subTest(kind=kind, epoch=epoch, before=before):
+                        salt = 0
+                        while (frame_name(bad(kind, epoch, salt)) < valid_name) != before:
+                            salt += 1
+                        frame = bad(kind, epoch, salt)
+                        mesh = self.tmp / ("mesh-" + kind + "-" + repr(epoch) + "-" + str(before))
+                        root = self.tmp / ("b-" + kind + "-" + repr(epoch) + "-" + str(before))
+                        provision(root, "Org-B", "BOUNDARY_LOCAL_CONTROL", "org-b.org-control")
+                        KERNEL.publish_frame(frame, root=mesh)
+                        KERNEL.publish_frame(self.frame, root=mesh)
+                        CLOCK_CALLS.clear()
+                        RAISING.append(True)
+                        served = KERNEL.consume_and_respond(root, mesh_root=mesh)
+                        RAISING.clear()
+                        self.assertEqual(len(served), 2)
+                        refused, = [x for x in served if x["result"]["status"] == "REFUSED"]
+                        self.assertEqual(refused["result"]["refusal"]["failure_code"], code)
+                        marker = json.loads(Path(refused["seen_marker"]).read_text())
+                        self.assertEqual(marker["failure_code"], "FRAME_REFUSED_QUARANTINED")
+                        valid, = [x for x in served if x["result"]["status"] == "CONSUMED"]
+                        self.assertSupplied(valid["response_publication"]["frame"])
+                        self.assertEqual(KERNEL.consume_and_respond(root, mesh_root=mesh), [])
+                        self.assertEqual(CLOCK_CALLS, [])
+
     def test_monitor_request_status_takes_the_inbound_epoch(self):
         # R2: resident_status is stamped from the request frame's epoch.
         built = KERNEL.build_ecosystem_packets(
@@ -800,8 +854,17 @@ class ManifestEntrypointsBindTheirEpoch(unittest.TestCase):
                 self.assertIs(binding["hb_epoch"]["derived_from_clock"], False)
                 flag = binding["hb_epoch"]["cli_flag"]
                 self.assertIn('"' + flag + '"', (TREE / path).read_text())
-                self.assertIn(path + " " + flag + " ", binding["dispatcher"]["invocation"])
-                self.assertIs(binding["dispatcher"]["adds_dependency"], False)
+                dispatcher = binding["dispatcher"]
+                self.assertIs(dispatcher["adds_dependency"], False)
+                # The dispatcher is in the tree: a workflow that takes the epoch
+                # as a dispatch input and passes it to the entrypoint.
+                self.assertIs(dispatcher["in_tree"], True)
+                workflow = (TREE / dispatcher["workflow"]).read_text()
+                self.assertIn("workflow_dispatch:", workflow)
+                self.assertIn("      " + dispatcher["input"] + ":", workflow)
+                self.assertIn(dispatcher["invocation"], workflow)
+                self.assertIn(path + " " + flag + " ", dispatcher["invocation"])
+                self.assertIn("writer_epoch_refusal", workflow)
 
 
 if __name__ == "__main__":

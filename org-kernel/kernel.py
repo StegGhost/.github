@@ -450,6 +450,13 @@ def frame_refusal(root:Path, frame:dict[str,Any])->dict[str,Any]|None:
                 code,detail=CARRIED_PROVENANCE_UNVERIFIED,unverified
     elif marker is not None and marker[0]==HB_EPOCH_PROVENANCE_UNMARKED:
         code,detail=marker
+    else:
+        # Every carrier epoch, clock-flagged or bare-sampled included, passes the
+        # shared digit/anchor check; a malformed or missing one is refused, not
+        # consumed silently (lead 08:27Z).
+        failure=supplied_epoch_failure(ref.get("epoch"))
+        if failure is not None:
+            code,detail=failure
     # A reference the rule passes as supplied must also cohere: its generation,
     # id, frequency and progression agree with its epoch (B-P36o).
     if code is None and isinstance(ref,dict) and supplied_epoch_failure(ref.get("epoch"),ref) is None:
