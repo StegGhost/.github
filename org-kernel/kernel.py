@@ -92,8 +92,10 @@ def supplied_epoch_failure(hb_epoch: Any, reference: Any = None) -> tuple[str, s
     integer value >= 32 (the HB32 anchor). `reference`, the carrier frame's
     heartbeat reference when there is one, must be an object, and a
     `derived_from_clock` it carries must be exactly false. Any failure is
-    HB_EPOCH_INVALID, except a reference that carries no `derived_from_clock`
-    and no CARRIED provenance, which is HB_EPOCH_PROVENANCE_UNMARKED. Returns
+    HB_EPOCH_INVALID, except a reference that states no `derived_from_clock`
+    (SUPPLIED and CARRIED both state it false; a bare `sampled_unix_ns` is
+    legacy CLOCK), which is HB_EPOCH_PROVENANCE_UNMARKED. A `sampled_unix_ns`
+    beside a false flag is HB_EPOCH_INVALID. Returns
     (failure_code, detail), or None when the epoch is supplied. No clock is read.
     """
     if reference is not None and not isinstance(reference, dict):
@@ -112,12 +114,14 @@ def supplied_epoch_failure(hb_epoch: Any, reference: Any = None) -> tuple[str, s
         return "HB_EPOCH_INVALID", "hb_epoch " + repr(hb_epoch) + " is not ASCII [0-9]+"
     if int(text) < 32:
         return "HB_EPOCH_INVALID", "hb_epoch " + text + " is below the HB32 anchor (32)"
-    if reference is not None and "derived_from_clock" not in reference and not str(reference.get("provenance", "")).startswith("CARRIED:"):
-        return "HB_EPOCH_PROVENANCE_UNMARKED", "the carrier's heartbeat reference states neither derived_from_clock nor a CARRIED provenance"
+    if reference is not None and "derived_from_clock" not in reference:
+        return "HB_EPOCH_PROVENANCE_UNMARKED", "the carrier's heartbeat reference does not state derived_from_clock; a bare sampled_unix_ns is legacy CLOCK"
     if reference is not None and "derived_from_clock" in reference \
             and reference["derived_from_clock"] is not False:
         return "HB_EPOCH_INVALID", ("the carrier's derived_from_clock is not exactly false; "
                                     "a clock-derived epoch is not a supplied one")
+    if reference is not None and "sampled_unix_ns" in reference:
+        return "HB_EPOCH_INVALID", "the carrier's heartbeat reference carries a clock sample; it is not a supplied one"
     return None
 
 class SuppliedEpochRefused(ValueError):

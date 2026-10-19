@@ -273,7 +273,13 @@ class SharedRuleAndSourceProvenance(unittest.TestCase):
             self.assertIn(field, refusal)
         self.assertEqual(k.supplied_epoch_failure(4096, {"derived_from_clock": True})[0], "HB_EPOCH_INVALID")
         self.assertIsNone(k.supplied_epoch_failure(4096, {"derived_from_clock": False}))
-        self.assertIsNone(k.supplied_epoch_failure(4096, {"provenance": "CARRIED:LEGACY_CLOCK_RECEIPT"}))
+        # Marker vocabulary: CARRIED states false too; a bare sample is legacy CLOCK.
+        self.assertEqual(k.supplied_epoch_failure(4096, {"provenance": "CARRIED:LEGACY_CLOCK_RECEIPT"})[0],
+                         "HB_EPOCH_PROVENANCE_UNMARKED")
+        self.assertEqual(k.supplied_epoch_failure(4096, {"sampled_unix_ns": 1})[0], "HB_EPOCH_PROVENANCE_UNMARKED")
+        self.assertEqual(k.supplied_epoch_failure(4096, {"derived_from_clock": False, "sampled_unix_ns": 1})[0],
+                         "HB_EPOCH_INVALID")
+        self.assertIsNone(k.supplied_epoch_failure(4096, k.hb_reference(epoch=4096)))
         self.assertIsNone(k.supplied_epoch_failure(4096))
 
     def repo_receipt(self, transition_id, hb):
