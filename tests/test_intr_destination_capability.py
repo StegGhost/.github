@@ -1352,6 +1352,31 @@ class FailedHeadPublishDoesNotWedgeTests(AddressedAndClosedTests):
                 organization = [r for r in self.org_receipts() if r["source_transition_id"] == transition]
                 self.assertEqual((len(repository), len(organization)), (1, 1))
 
+    def test_egress_emit_returns_its_own_write_fault_six_field(self):
+        # F-WRITER-TRACE: egress.emit faulting on its own write (each of its
+        # five os.replace points) returns the non-terminal six-field record, not
+        # a raised OSError; the next call emits once.
+        for number in range(1, 6):
+            with self.subTest(replace=number):
+                work = Path(tempfile.mkdtemp(dir=self._work.name))
+                os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(work / "repo")
+                os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(work / "org")
+                mesh = work / "mesh"
+                restore = self.fail_replace_call(number)
+                try:
+                    faulted = egress.emit(PEER, diagnostic("writer-trace"), standing=STANDING,
+                                          capability=PROFILE_ID, mesh_root=mesh, hb_epoch=self.SUPPLIED)
+                finally:
+                    restore()
+                self.assertEqual(faulted["disposition"], "FAIL_CLOSED", faulted)
+                self.assertIs(faulted["terminal"], False)
+                for field in ("failure_code", "failed_predicate", "required_evidence_or_repair",
+                              "retry_entrypoint", "owning_existing_goal", "next_attempt"):
+                    self.assertIn(field, faulted)
+                done = egress.emit(PEER, diagnostic("writer-trace"), standing=STANDING,
+                                   capability=PROFILE_ID, mesh_root=mesh, hb_epoch=self.SUPPLIED)
+                self.assertEqual(done["disposition"], "ALLOW", done)
+
     def test_a_failed_org_head_publish_rolls_back_and_the_next_cycle_appends_once(self):
         self.run_case("head-publish-rollback", keep_residue=False)
 

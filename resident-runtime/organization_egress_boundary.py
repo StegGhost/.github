@@ -802,6 +802,30 @@ def main() -> int:
     return 0 if result["disposition"] in (ALLOW, PENDING) else 1
 
 
+def _writer_entry(function):
+    """A writer entry point that returns its own write fault as a six-field record.
+
+    An OSError or LedgerWriteFailed while this operation writes its own state is
+    returned as the non-terminal FAIL_CLOSED record (terminal false), never
+    raised as a traceback; the next call completes the write once
+    (F-WRITER-TRACE). Any other failure propagates unchanged.
+    """
+    def entry(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except (Exception, SystemExit) as error:
+            record = kernel.writer_fault_record(error, retry_entrypoint=EPOCH_RETRY_ENTRYPOINT)
+            if record is None:
+                raise
+            return record
+    entry.__name__, entry.__doc__, entry.__wrapped__ = function.__name__, function.__doc__, function
+    return entry
+
+
+emit = _writer_entry(emit)
+close = _writer_entry(close)
+
+
 if __name__ == "__main__":
     # A fault in this CLI's own writes prints six fields, not a traceback.
     sys.exit(kernel.run_writer_cli(main, retry_entrypoint=EPOCH_RETRY_ENTRYPOINT))
@@ -937,3 +961,8 @@ def observe_bilateral_match(claimed_origin: str, packet_id: str,
         "match_organization_receipt_sha256": appended["organization_receipt"]["receipt_sha256"],
         "authority_effect": "NONE_MATCH_RECORD_ONLY",
     }
+
+
+# Defined after main; wrapped the same way (F-WRITER-TRACE).
+request_bilateral_match = _writer_entry(request_bilateral_match)
+observe_bilateral_match = _writer_entry(observe_bilateral_match)
