@@ -27,12 +27,15 @@ FIXED = real_datetime.datetime(2030, 1, 1, tzinfo=real_datetime.timezone.utc)
 FIXED_NS = int(FIXED.timestamp() * 1_000_000_000)
 FIXED_ISO = "2030-01-01T00:00:00"
 CLOCK_CALLS = []
+RAISING = []
 
 
 class FixedDatetime(real_datetime.datetime):
     @classmethod
     def now(cls, tz=None):
         CLOCK_CALLS.append(tz)
+        if RAISING:
+            raise AssertionError("a clock was read on a route that carries a supplied epoch")
         return FIXED if tz is not None else FIXED.replace(tzinfo=None)
 
 
@@ -318,6 +321,84 @@ class SharedRuleAndSourceProvenance(unittest.TestCase):
         before = {p: p.read_bytes() for p in self.files()}
         self.assertEqual(self.append(clock, idempotent=True), recorded)
         self.assertEqual({p: p.read_bytes() for p in self.files()}, before)
+
+
+class InboundEpochIsSupplied(unittest.TestCase):
+    """B-P36g (1)/(2): a response to a frame carrying a validated epoch is
+    published at that epoch; no clock default is reached on the route."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        CLOCK_CALLS.clear()
+        RAISING.append(True)
+        self.addCleanup(RAISING.clear)
+        self.a, self.b, self.mesh = self.tmp / "a", self.tmp / "b", self.tmp / "mesh"
+        provision(self.a, "Org-A", "BOUNDARY_LOCAL_CONTROL", "org-a.org-control")
+        provision(self.b, "Org-B", "BOUNDARY_LOCAL_CONTROL", "org-b.org-control")
+        built = KERNEL.build_ecosystem_packets(
+            origin_org="Org-A", origin_service="org-a.org-control", organizations=["Org-B"],
+            standing=STANDING, message_class="ecosystem.communication", subject="inbound",
+            body={"probe": "inbound"}, communication_id="inbound-epoch-001")
+        self.request = built["packets"][0]
+        self.frame = KERNEL.carrier_frame(self.request, epoch=4096)
+
+    def assertSupplied(self, frame):
+        ref = frame["heartbeat_reference"]
+        self.assertEqual((ref["epoch"], ref["derived_from_clock"]), (4096, False))
+        self.assertNotIn("sampled_unix_ns", ref)
+
+    def test_consume_and_respond_publishes_at_the_inbound_epoch(self):
+        KERNEL.publish_frame(self.frame, root=self.mesh)
+        served = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh)
+        self.assertEqual(served[0]["result"]["status"], "CONSUMED")
+        self.assertSupplied(served[0]["response_publication"]["frame"])
+        self.assertEqual(CLOCK_CALLS, [])
+
+    def test_gateway_cycle_responds_at_the_inbound_epoch(self):
+        gateway = load("probe_gateway_cycle", "resident-runtime/federation_gateway_transport.py")
+        gateway.K = KERNEL
+        submitted = []
+        gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": self.frame}
+        gateway.submit_frame = lambda frame: submitted.append(frame) or {}
+        gateway.acknowledge_frame = lambda organization, frame, state: {"state": state}
+        out = gateway.resident_gateway_cycle(self.b)
+        self.assertEqual(out["responses_emitted"], 1)
+        self.assertSupplied(submitted[0])
+        self.assertEqual(CLOCK_CALLS, [])
+
+    def test_a_clock_or_unmarked_inbound_frame_lends_no_epoch(self):
+        RAISING.clear()
+        self.assertEqual(KERNEL.frame_supplied_epoch(self.frame), 4096)
+        clock = KERNEL.carrier_frame(self.request)
+        self.assertIsNone(KERNEL.frame_supplied_epoch(clock))
+        unmarked = dict(self.frame, heartbeat_reference={
+            k: v for k, v in self.frame["heartbeat_reference"].items() if k != "derived_from_clock"})
+        self.assertIsNone(KERNEL.frame_supplied_epoch(unmarked))
+        # B-P36i: a CARRIED provenance naming an invented head is not a
+        # supplied epoch; no route accepts it in place of one.
+        carried = dict(self.frame, heartbeat_reference={
+            **unmarked["heartbeat_reference"], "provenance": "CARRIED:ORGANIZATION_LEDGER_HEAD",
+            "head_receipt_sha": "sha256:" + "e" * 64})
+        self.assertIsNone(KERNEL.frame_supplied_epoch(carried))
+
+
+class NoWriterAcceptsAProvenanceArgument(unittest.TestCase):
+    """B-P36i: no receipt writer takes a caller-supplied provenance; each
+    takes only hb_epoch, so an invented CARRIED source cannot be passed in."""
+
+    def test_writers_refuse_a_provenance_argument(self):
+        import inspect
+        writers = [
+            load("probe_emit", ".stegverse/transition-ledger/emit.py").append,
+            load("probe_aggregate_writer", "resident-runtime/aggregate_repo_transition.py").append,
+        ]
+        for writer in writers:
+            parameters = inspect.signature(writer).parameters
+            self.assertIn("hb_epoch", parameters)
+            for name in parameters:
+                self.assertNotIn("provenance", name)
+                self.assertNotIn("head_receipt", name)
 
 
 if __name__ == "__main__":

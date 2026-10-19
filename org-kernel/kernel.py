@@ -152,6 +152,25 @@ def writer_epoch_refusal(hb_epoch:Any, *, retry_entrypoint:str, reference:Any=No
             "next_attempt":"call again with the supplied epoch; nothing was written",
             "derived_from_clock":False,"consequence_committed":False}
 
+def frame_supplied_epoch(frame:Any)->int|None:
+    """The validated epoch an inbound frame carries, or None when it has none.
+
+    A frame whose heartbeat reference is a supplied epoch (derived_from_clock
+    exactly false, passing the shared rule) lends that epoch to everything done
+    in response to it, so a response is never stamped from a clock. A
+    clock-derived, unmarked or CARRIED-only reference lends nothing.
+    """
+    ref=frame.get("heartbeat_reference") if isinstance(frame,dict) else None
+    if not isinstance(ref,dict) or ref.get("derived_from_clock") is not False:
+        return None
+    if supplied_epoch_failure(ref.get("epoch"),ref) is not None:
+        return None
+    try:
+        validate_hb_reference(dict(ref))
+    except ValueError:
+        return None
+    return int(str(ref["epoch"]))
+
 def supplied_hb_reference(hb_epoch:Any, *, retry_entrypoint:str)->dict[str,Any]:
     """The heartbeat reference of a supplied epoch, or SuppliedEpochRefused. No clock is read."""
     refusal=writer_epoch_refusal(hb_epoch,retry_entrypoint=retry_entrypoint)
@@ -273,7 +292,8 @@ def carried_standing(request_packet:dict[str,Any])->dict[str,Any]:
     if not isinstance(declared,dict): raise ValueError("response_requires_request_standing")
     return {**declared,"standing_carried_forward_from_request":True}
 
-def dispatch(root:Path, packet:dict[str,Any], *, mesh_root:Path|None=None)->dict[str,Any]:
+def dispatch(root:Path, packet:dict[str,Any], *, mesh_root:Path|None=None,
+             hb_epoch:int|None=None)->dict[str,Any]:
     registry=load_registry(root)
     if packet["destination"]["org"]!=registry["organization"]: raise ValueError("wrong_destination_org")
     service=next((s for s in registry["services"] if s["service_id"]==packet["destination"]["service"]),None)
@@ -314,7 +334,7 @@ def dispatch(root:Path, packet:dict[str,Any], *, mesh_root:Path|None=None)->dict
         # application result. Loaded only for this role.
         try:
             application_result=capability_ingress(root).receive(
-                root,service,packet,registry=registry,mesh_root=mesh_root)
+                root,service,packet,registry=registry,mesh_root=mesh_root,hb_epoch=hb_epoch)
         except SystemExit as refused:
             raise ValueError("capability_ingress_refused:"+str(refused)) from None
     else:
@@ -339,13 +359,15 @@ def ingest_frame(root:Path, frame:dict[str,Any], *, mesh_root:Path|None=None)->d
     registry=load_registry(root)
     if frame["destination_org"]!=registry["organization"]:
         return {"status":"IGNORED_NOT_ADDRESSED","packet_id":frame["packet_id"]}
-    result=dispatch(root,packet,mesh_root=mesh_root)
+    # The frame's validated epoch is the supplied one for this crossing, so
+    # the receiving operation records at it rather than refusing for want of one.
+    result=dispatch(root,packet,mesh_root=mesh_root,hb_epoch=frame_supplied_epoch(frame))
     return {"status":"CONSUMED","packet":packet,"execution_result":result}
 
 __all__=["hb_reference","derive_channel","carrier_frame","recover_packet","dispatch","persist_outbox","ingest_frame",
          "capability_ingress","CAPABILITY_INGRESS_ROLE",
          "supplied_epoch_failure","HB_EPOCH_NOT_SUPPLIED","HB_EPOCH_INVALID","HB_EPOCH_PROVENANCE_UNMARKED",
-         "SuppliedEpochRefused","writer_epoch_refusal","supplied_hb_reference"]
+         "SuppliedEpochRefused","writer_epoch_refusal","supplied_hb_reference","frame_supplied_epoch"]
 
 
 # --- Federation mesh v1.1 additions ---
@@ -741,7 +763,11 @@ def consume_and_respond(repo_root:Path, *, mesh_root:Path|None=None, seen:set[st
         # surface that is supposed to decide what is closable.
         if result.get("status")=="CONSUMED" and message_class in RESPONDED_REQUEST_CLASSES:
             response=build_control_response(packet,result["execution_result"])
-            response_publication=publish_packet(response,root=mesh_root,now_ns=now_ns)
+            # Published at the request frame's validated epoch when it carries
+            # one; the clock default is reached only for a clock-derived request.
+            epoch=frame_supplied_epoch(item["frame"])
+            response_publication=publish_packet(response,root=mesh_root,
+                                                now_ns=now_ns if epoch is None else None,epoch=epoch)
         marker=mark_federation_frame_seen(repo_root,item["path"],item["frame"],result)
         out.append({"path":item["path"],"result":result,"response_publication":response_publication,"seen_marker":str(marker)})
     return out

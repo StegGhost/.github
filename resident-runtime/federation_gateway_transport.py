@@ -213,7 +213,7 @@ def resident_gateway_cycle(repo_root: Path) -> dict[str, Any]:
         # declares answered.
         if message_class in K.RESPONDED_REQUEST_CLASSES:
             response = K.build_control_response(packet, execution)
-            response_frame = K.carrier_frame(response)
+            response_frame = K.carrier_frame(response, epoch=K.frame_supplied_epoch(frame))
             submit_frame(response_frame)
             response_emitted = 1
             response_ref = response_frame["frame_sha256"]

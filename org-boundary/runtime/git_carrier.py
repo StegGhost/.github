@@ -174,7 +174,7 @@ def consume(frame: dict[str, Any], *, root: Path | None = None,
     spec.loader.exec_module(transport)
 
     egress = transport.build_egress(result["packet"], result["execution_result"])
-    path = kernel.persist_outbox(base, kernel.carrier_frame(egress))
+    path = kernel.persist_outbox(base, kernel.carrier_frame(egress, epoch=kernel.frame_supplied_epoch(frame)))
     return {**result, "egress_persisted": str(path), "egress_packet_id": egress["packet_id"]}
 
 

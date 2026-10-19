@@ -1021,6 +1021,25 @@ class ReadBackEpochIsNeverForwardedTests(AddressedAndClosedTests):
         self.assertEqual(operation["failure_code"], "HB_EPOCH_NOT_SUPPLIED")
         self.assertEqual(self.all_receipts(), [])
 
+    def test_the_capability_ingress_records_at_the_inbound_frames_validated_epoch(self):
+        # B-P36g (1): a validated epoch on the inbound frame is the supplied one
+        # for the crossing, so the bound operation records at it.
+        packet = kernel.build_packet(
+            origin_org=PEER, origin_service=kernel.organization_slug(PEER) + "." + PROFILE_ID,
+            destination_org=THIS, destination_service=ADDRESS, payload=diagnostic("addressed-supplied"),
+            standing=STANDING, transition_reference="intr:transition:addressed-supplied",
+            authority_effect="NONE", packet_id="addressed-supplied")
+        kernel.publish_packet(packet, root=self.mesh, epoch=self.SUPPLIED)
+        result, = self.consume()
+        operation = result["result"]["execution_result"]["application_result"][
+            "receiving_operation_result"]
+        self.assertEqual(operation["disposition"], "ALLOW", operation)
+        repository, = self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")
+        organization, = self.receipts("STEGVERSE_ORG_LEDGER_ROOT",
+                                      "stegverse.organization-transition-receipt/v1")
+        self.assert_supplied_pair(repository, organization)
+        self.assert_nothing_laundered(supplied=(self.SUPPLIED,))
+
     def test_the_egress_and_release_records_refuse_or_carry_the_supplied_epoch(self):
         record = {"intended_action": "PROBE", "disposition": "ALLOW",
                   "crossed_an_organization_boundary": False}
