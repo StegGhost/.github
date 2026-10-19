@@ -424,26 +424,32 @@ def carried_claim_failure(root:Path, ref:dict[str,Any])->str|None:
 def frame_refusal(root:Path, frame:dict[str,Any])->dict[str,Any]|None:
     """The six-field FAIL_CLOSED refusal of an inbound frame's heartbeat reference, or None.
 
-    Applied at ingest, before dispatch, for every role. The reference is held
-    to the shared rule (supplied_epoch_failure), and a CARRIED claim the rule
-    passes must then verify (CARRIED_PROVENANCE_UNVERIFIED). A reference
-    flagged derived_from_clock true with no CARRIED claim is CLOCK: it is
-    consumed as a frame-only crossing pending WU-B13 and lends no epoch
-    (CLOCK_FLAGGED_FRAMES_CONSUMED_PENDING_WU_B13). No clock is read.
+    Applied at ingest, before dispatch, for every role, from the shared rule's
+    own classification (supplied_epoch_failure). Refused: an UNMARKED reference
+    (no flag, no sample), a reference that is not an object, and a CARRIED claim
+    the rule does not pass or that does not verify against the current verified
+    ledger head (CARRIED_PROVENANCE_UNVERIFIED). Anything else the rule fails is
+    CLOCK (flag true, or a legacy bare sample): consumed as a frame-only crossing
+    pending WU-B13, lending no epoch (CLOCK_FLAGGED_FRAMES_CONSUMED_PENDING_WU_B13).
+    No clock is read.
     """
     ref=frame.get("heartbeat_reference")
-    carried=isinstance(ref,dict) and any(field in ref for field in CARRIED_CLAIM_FIELDS)
-    if isinstance(ref,dict) and ref.get("derived_from_clock") is True and not carried:
-        return None
     code=detail=None
-    failure=supplied_epoch_failure(ref.get("epoch") if isinstance(ref,dict) else None,
-                                   ref if ref is not None else "absent")
-    if failure is not None:
-        code,detail=failure
-    elif carried:
-        unverified=carried_claim_failure(root,ref)
-        if unverified is not None:
-            code,detail=CARRIED_PROVENANCE_UNVERIFIED,unverified
+    # The marker is classified by the rule itself, at the anchor epoch, so an
+    # unmarked reference is UNMARKED whatever epoch it carries.
+    marker=supplied_epoch_failure(HB_ANCHOR_EPOCH,ref if ref is not None else "absent")
+    if not isinstance(ref,dict):
+        code,detail=marker
+    elif any(field in ref for field in CARRIED_CLAIM_FIELDS):
+        failure=supplied_epoch_failure(ref.get("epoch"),ref)
+        if failure is not None:
+            code,detail=failure
+        else:
+            unverified=carried_claim_failure(root,ref)
+            if unverified is not None:
+                code,detail=CARRIED_PROVENANCE_UNVERIFIED,unverified
+    elif marker is not None and marker[0]==HB_EPOCH_PROVENANCE_UNMARKED:
+        code,detail=marker
     if code is None:
         return None
     return ingest_refusal(code,detail)

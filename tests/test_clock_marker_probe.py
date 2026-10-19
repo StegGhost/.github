@@ -530,6 +530,29 @@ class InboundEpochIsSupplied(unittest.TestCase):
         self.assertSupplied(status)
         self.assertEqual(CLOCK_CALLS, [])
 
+    def test_a_legacy_bare_sampled_frame_is_consumed_as_clock(self):
+        # Lead 08:10Z: no flag plus a sample is legacy CLOCK, not UNMARKED. It
+        # is consumed, lends no epoch, and its response refuses NOT_SUPPLIED.
+        packet = dict(self.request, packet_id=self.request["packet_id"] + ":bare")
+        frame = KERNEL.carrier_frame(packet, epoch=4096)
+        body = {k: v for k, v in frame.items() if k != "frame_sha256"}
+        ref = {k: v for k, v in frame["heartbeat_reference"].items() if k != "derived_from_clock"}
+        body["heartbeat_reference"] = {**ref, "sampled_unix_ns": FIXED_NS}
+        bare = {**body, "frame_sha256": KERNEL.sha(body)}
+        self.assertIsNone(KERNEL.frame_supplied_epoch(bare))
+        KERNEL.publish_frame(bare, root=self.mesh)
+        served, = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh)
+        self.assertEqual(served["result"]["status"], "CONSUMED")
+        self.assertIsNone(served["response_publication"])
+        self.assertEqual(served["response_refusal"]["failure_code"], "HB_EPOCH_NOT_SUPPLIED")
+        # No flag and no sample stays UNMARKED, whatever epoch it carries.
+        for epoch in (None, "+33", 4096):
+            unmarked = {**body, "heartbeat_reference": {**{k: v for k, v in ref.items() if k != "epoch"},
+                                                         **({} if epoch is None else {"epoch": epoch})}}
+            unmarked = {**unmarked, "frame_sha256": KERNEL.sha(unmarked)}
+            self.assertEqual(KERNEL.frame_refusal(self.b, unmarked)["failure_code"], "HB_EPOCH_PROVENANCE_UNMARKED")
+        self.assertEqual(CLOCK_CALLS, [])
+
     def test_monitor_request_status_takes_the_inbound_epoch(self):
         # R2: resident_status is stamped from the request frame's epoch.
         built = KERNEL.build_ecosystem_packets(
