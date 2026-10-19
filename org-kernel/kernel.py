@@ -328,7 +328,7 @@ def dispatch(root:Path, packet:dict[str,Any], *, mesh_root:Path|None=None,
         r=receipt(kind,packet["packet_id"],service["service_id"],prev,{"payload_hash":sha(packet["payload"])})
         receipts.append(r); prev=r["receipt_id"]
     if role=="BOUNDARY_LOCAL_CONTROL":
-        application_result=handle_control_message(root,packet,registry)
+        application_result=handle_control_message(root,packet,registry,hb_epoch=hb_epoch)
     elif role==CAPABILITY_INGRESS_ROLE:
         # The address resolves to the receiving operation the overlay binds.
         # That operation records both ledger levels itself. This kernel's
@@ -358,14 +358,17 @@ def persist_outbox(root:Path, frame:dict[str,Any])->Path:
     path.write_text(json.dumps(frame,indent=2,sort_keys=True)+"\n")
     return path
 
-def ingest_frame(root:Path, frame:dict[str,Any], *, mesh_root:Path|None=None)->dict[str,Any]:
+def ingest_frame(root:Path, frame:dict[str,Any], *, mesh_root:Path|None=None,
+                 hb_epoch:int|None=None)->dict[str,Any]:
     packet=recover_packet(frame)
     registry=load_registry(root)
     if frame["destination_org"]!=registry["organization"]:
         return {"status":"IGNORED_NOT_ADDRESSED","packet_id":frame["packet_id"]}
     # The frame's validated epoch is the supplied one for this crossing, so
     # the receiving operation records at it rather than refusing for want of one.
-    result=dispatch(root,packet,mesh_root=mesh_root,hb_epoch=frame_supplied_epoch(frame))
+    # A frame without one takes the epoch supplied to this ingestion, if any.
+    epoch=frame_supplied_epoch(frame)
+    result=dispatch(root,packet,mesh_root=mesh_root,hb_epoch=hb_epoch if epoch is None else epoch)
     return {"status":"CONSUMED","packet":packet,"execution_result":result}
 
 __all__=["hb_reference","derive_channel","carrier_frame","recover_packet","dispatch","persist_outbox","ingest_frame",
@@ -563,7 +566,7 @@ def load_federation_directory(root:Path)->dict[str,Any]:
         raise ValueError("federation_directory_denominator_mismatch")
     return value
 
-def resident_status(root:Path, registry:dict[str,Any]|None=None)->dict[str,Any]:
+def resident_status(root:Path, registry:dict[str,Any]|None=None, *, hb_epoch:int|None=None)->dict[str,Any]:
     reg=registry or load_registry(root)
     activation_path=root/"resident-runtime/activation-manifest.json"
     activation=json.loads(activation_path.read_text()) if activation_path.exists() else {}
@@ -575,7 +578,9 @@ def resident_status(root:Path, registry:dict[str,Any]|None=None)->dict[str,Any]:
       "registered_service_count":len(reg.get("services") or []),
       "registered_services":[s.get("service_id") for s in reg.get("services") or []],
       "org_control_service":organization_slug(reg["organization"])+".org-control",
-      "heartbeat_reference":hb_reference(),
+      # The supplied epoch when the request carried one; the clock default,
+      # marked derived_from_clock true, only for a request that did not.
+      "heartbeat_reference":hb_reference() if hb_epoch is None else hb_reference(epoch=hb_epoch),
       "runtime_observation_claimed":False
     }
 
@@ -608,7 +613,8 @@ def persist_work_request(root:Path, packet:dict[str,Any])->dict[str,Any]:
         path.write_text(json.dumps(record,indent=2,sort_keys=True)+"\n")
     return {"state":record["state"],"intake_ref":str(path),"execution_authority_inferred":False}
 
-def handle_control_message(root:Path, packet:dict[str,Any], registry:dict[str,Any])->dict[str,Any]:
+def handle_control_message(root:Path, packet:dict[str,Any], registry:dict[str,Any], *,
+                           hb_epoch:int|None=None)->dict[str,Any]:
     payload=packet.get("payload") or {}
     message_class=payload.get("message_class")
     result={
@@ -620,7 +626,7 @@ def handle_control_message(root:Path, packet:dict[str,Any], registry:dict[str,An
       "execution_authority_effect":packet["transition"]["authority_effect"]
     }
     if message_class=="ecosystem.monitor.request":
-        result["monitor_status"]=resident_status(root,registry)
+        result["monitor_status"]=resident_status(root,registry,hb_epoch=hb_epoch)
     elif message_class=="ecosystem.work.request":
         result["work_intake"]=persist_work_request(root,packet)
     elif message_class=="ecosystem.communication":
@@ -747,7 +753,7 @@ def build_control_response(request_packet:dict[str,Any], execution_result:dict[s
     )
 
 def consume_and_respond(repo_root:Path, *, mesh_root:Path|None=None, seen:set[str]|None=None,
-                        now_ns:int|None=None)->list[dict[str,Any]]:
+                        now_ns:int|None=None, hb_epoch:int|None=None)->list[dict[str,Any]]:
     registry=load_registry(repo_root)
     organization=registry["organization"]
     durable_seen=federation_seen_frame_names(repo_root)
@@ -757,7 +763,7 @@ def consume_and_respond(repo_root:Path, *, mesh_root:Path|None=None, seen:set[st
         packet=recover_packet(item["frame"])
         payload=packet.get("payload") or {}
         message_class=payload.get("message_class")
-        result=ingest_frame(repo_root,item["frame"],mesh_root=mesh_root)
+        result=ingest_frame(repo_root,item["frame"],mesh_root=mesh_root,hb_epoch=hb_epoch)
         response_publication=None
         # Read from RESPONDED_REQUEST_CLASSES, not a second copy of it. A
         # literal set here disagreed with the map the moment the map gained a
@@ -770,6 +776,7 @@ def consume_and_respond(repo_root:Path, *, mesh_root:Path|None=None, seen:set[st
             # Published at the request frame's validated epoch when it carries
             # one; the clock default is reached only for a clock-derived request.
             epoch=frame_supplied_epoch(item["frame"])
+            epoch=hb_epoch if epoch is None else epoch
             response_publication=publish_packet(response,root=mesh_root,
                                                 now_ns=now_ns if epoch is None else None,epoch=epoch)
         marker=mark_federation_frame_seen(repo_root,item["path"],item["frame"],result)

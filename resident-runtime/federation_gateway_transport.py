@@ -185,7 +185,7 @@ def _persist_response(repo_root: Path, packet: dict[str, Any], execution_result:
     return path
 
 
-def resident_gateway_cycle(repo_root: Path) -> dict[str, Any]:
+def resident_gateway_cycle(repo_root: Path, hb_epoch: int | None = None) -> dict[str, Any]:
     registry = K.load_registry(repo_root)
     organization = registry["organization"]
     fetched = fetch_frame(organization)
@@ -202,7 +202,9 @@ def resident_gateway_cycle(repo_root: Path) -> dict[str, Any]:
         raise FederationGatewayTransportError("unexpected gateway fetch state")
     frame = fetched["frame"]
     packet = K.recover_packet(frame)
-    result = K.ingest_frame(repo_root, frame)
+    result = K.ingest_frame(repo_root, frame, hb_epoch=hb_epoch)
+    epoch = K.frame_supplied_epoch(frame)
+    epoch = hb_epoch if epoch is None else epoch
     response_emitted = 0
     response_ref = None
     if result.get("status") == "CONSUMED":
@@ -213,7 +215,7 @@ def resident_gateway_cycle(repo_root: Path) -> dict[str, Any]:
         # declares answered.
         if message_class in K.RESPONDED_REQUEST_CLASSES:
             response = K.build_control_response(packet, execution)
-            response_frame = K.carrier_frame(response, epoch=K.frame_supplied_epoch(frame))
+            response_frame = K.carrier_frame(response, epoch=epoch)
             submit_frame(response_frame)
             response_emitted = 1
             response_ref = response_frame["frame_sha256"]

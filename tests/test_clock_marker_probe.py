@@ -203,13 +203,16 @@ class ClockMarkerProbe(unittest.TestCase):
         cycle.K = KERNEL
         import os
         previous = os.environ.pop("STEGVERSE_ORG_FEDERATION_GATEWAY_URL", None)
+        previous_epoch = os.environ.pop("HB_EPOCH", None)
         os.environ["STEGVERSE_ORG_FEDERATION_ROOT"] = str(self.tmp / "mesh")
         try:
-            cycle.main()
+            self.assertEqual(cycle.main([]), 0)
         finally:
             os.environ.pop("STEGVERSE_ORG_FEDERATION_ROOT", None)
             if previous is not None:
                 os.environ["STEGVERSE_ORG_FEDERATION_GATEWAY_URL"] = previous
+            if previous_epoch is not None:
+                os.environ["HB_EPOCH"] = previous_epoch
         latest = json.loads((root / "resident-runtime/federation/latest-cycle.json").read_text())
         self.assertIs(latest["heartbeat_reference"]["derived_from_clock"], True)
         self.assertEqual(latest["heartbeat_reference"]["sampled_unix_ns"], FIXED_NS)
@@ -371,6 +374,63 @@ class InboundEpochIsSupplied(unittest.TestCase):
         out = gateway.resident_gateway_cycle(self.b)
         self.assertEqual(out["responses_emitted"], 1)
         self.assertSupplied(submitted[0])
+        self.assertEqual(CLOCK_CALLS, [])
+
+    def test_monitor_request_status_takes_the_inbound_epoch(self):
+        # R2: resident_status is stamped from the request frame's epoch.
+        built = KERNEL.build_ecosystem_packets(
+            origin_org="Org-A", origin_service="org-a.org-control", organizations=["Org-B"],
+            standing=STANDING, message_class="ecosystem.monitor.request", subject="monitor",
+            body={}, communication_id="monitor-epoch-001")
+        frame = KERNEL.carrier_frame(built["packets"][0], epoch=4096)
+        result = KERNEL.ingest_frame(self.b, frame)
+        status = result["execution_result"]["application_result"]["monitor_status"]
+        self.assertSupplied(status)
+        self.assertEqual(CLOCK_CALLS, [])
+
+    def test_federation_cycle_stamps_the_supplied_epoch(self):
+        # R4: --hb-epoch / HB_EPOCH is checked by the shared rule and stamps the
+        # cycle record and the responses it publishes, even to a clock request.
+        import contextlib, io, os
+        RAISING.clear()
+        KERNEL.publish_frame(KERNEL.carrier_frame(self.request), root=self.mesh)
+        cycle = load("probe_federation_cycle_epoch", "resident-runtime/federation_cycle.py")
+        cycle.ROOT, cycle.K = self.b, KERNEL
+        latest = self.b / "resident-runtime/federation/latest-cycle.json"
+        saved = {key: os.environ.pop(key, None) for key in
+                 ("STEGVERSE_ORG_FEDERATION_GATEWAY_URL", "HB_EPOCH", "STEGVERSE_ORG_FEDERATION_ROOT")}
+        os.environ["STEGVERSE_ORG_FEDERATION_ROOT"] = str(self.mesh)
+
+        def restore():
+            for key, value in saved.items():
+                os.environ.pop(key, None)
+                if value is not None:
+                    os.environ[key] = value
+        self.addCleanup(restore)
+        for argv, env in ((["--hb-epoch", "+33"], None), ([], "+33"), ([], "")):
+            if env is not None:
+                os.environ["HB_EPOCH"] = env
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(cycle.main(argv), 1)
+            os.environ.pop("HB_EPOCH", None)
+            refusal = json.loads(out.getvalue())
+            self.assertEqual((refusal["disposition"], refusal["failure_code"]), ("FAIL_CLOSED", "HB_EPOCH_INVALID"))
+            self.assertEqual(refusal["retry_entrypoint"], cycle.EPOCH_RETRY_ENTRYPOINT)
+            self.assertFalse(latest.exists())
+        CLOCK_CALLS.clear()
+        RAISING.append(True)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(cycle.main(["--hb-epoch", "4096"]), 0)
+        self.assertSupplied(json.loads(latest.read_text()))
+        responses = [json.loads(path.read_text()) for path in (self.mesh / "frames.d").glob("*.json")]
+        responses = [frame for frame in responses if frame["destination_org"] == "Org-A"]
+        self.assertEqual(len(responses), 1)
+        self.assertSupplied(responses[0])
+        os.environ["HB_EPOCH"] = "4096"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(cycle.main([]), 0)
+        self.assertSupplied(json.loads(latest.read_text()))
         self.assertEqual(CLOCK_CALLS, [])
 
     def test_a_clock_or_unmarked_inbound_frame_lends_no_epoch(self):
