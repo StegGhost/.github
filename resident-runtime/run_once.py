@@ -71,8 +71,8 @@ def run(ingress_path,egress_path,quarantine=QUARANTINE):
             return EXIT_INPUT_FAULT,refusal
         # The child said success: reading its result is this process's own
         # state (an OSError is non-terminal 75), but a result that is not
-        # valid JSON, or that builds no valid egress, is a success with no
-        # valid result -- refused terminal and quarantined, never a traceback.
+        # valid JSON, or an envelope or result that builds no valid egress, is
+        # FRAME_INGEST_FAILED -- terminal and quarantined, never a traceback.
         try:
             raw=result_path.read_text()
         except OSError as error:
@@ -86,7 +86,7 @@ def run(ingress_path,egress_path,quarantine=QUARANTINE):
             summary={"status":"PASS","packet_id":ingress["packet_id"],"egress_packet_id":egress["packet_id"],
                      "consumed":result["consumed"],"reconstruction":result["reconstruction"]["status"]}
         except (ValueError,KeyError,TypeError,AttributeError) as error:
-            refusal=record("PROCESS_BOUNDARY_RESULT_INVALID","EXIT_0_CARRIES_A_VALID_EXECUTION_RESULT",
+            refusal=record("FRAME_INGEST_FAILED","EXIT_0_CARRIES_A_VALID_EXECUTION_RESULT_AND_EGRESS",
                            type(error).__name__+": "+str(error),True)
             quarantine_envelope(packet_id,refusal,quarantine)
             return EXIT_INPUT_FAULT,refusal

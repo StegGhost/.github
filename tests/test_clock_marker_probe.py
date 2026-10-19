@@ -1586,9 +1586,45 @@ class ProcessBoundaryExitSplit(unittest.TestCase):
                 finally:
                     self.run_once.PROCESS_BOUNDARY = genuine
                 self.assertEqual((status, printed["failure_code"], printed["terminal"]),
-                                 (65, "PROCESS_BOUNDARY_RESULT_INVALID", True), printed)
+                                 (65, "FRAME_INGEST_FAILED", True), printed)
                 self.assertEqual(len(list(quarantine.glob("*.json"))), 1)
                 self.assertFalse((self.tmp / "egress.json").exists())
+
+    def test_a_wrong_typed_envelope_field_is_refused_65_never_a_traceback(self):
+        # V-P11 @6ebdcbd RUN_ONCE_POST_CHILD_INPUT_TRACEBACK: envelopes that used
+        # to pass the boundary and crash run_once's egress build. Through the
+        # real boundary each is now 65 there; through a child that exits 0 with
+        # a valid result, run_once's own guard refuses it. Both are six-field
+        # FRAME_INGEST_FAILED, terminal, with a marker, never a traceback.
+        import sys
+        good = self.tmp / "good.json"
+        good.write_text(json.dumps(self.envelope))
+        result = self.tmp / "result.json"
+        self.assertEqual(self.boundary(good, result).returncode, 0)
+        cases = {
+            "packet_id_7": {**self.envelope, "packet_id": 7},
+            "carrier_string": {**self.envelope, "carrier": "HB"},
+            "carrier_empty": {**self.envelope, "carrier": {}},
+            "transition_without_reference": {**self.envelope, "transition": {"authority_effect": "NONE"}},
+        }
+        genuine = self.run_once.PROCESS_BOUNDARY
+        copy_result = ("import shutil, sys; shutil.copy(%r, sys.argv[sys.argv.index('--out')+1])" % str(result))
+        for name, envelope in cases.items():
+            path = self.tmp / (name + ".json")
+            path.write_text(json.dumps(envelope))
+            for child in ("real_boundary", "child_exits_0"):
+                with self.subTest(envelope=name, child=child):
+                    quarantine = self.tmp / ("q-" + name + "-" + child)
+                    if child == "child_exits_0":
+                        self.run_once.PROCESS_BOUNDARY = [sys.executable, "-c", copy_result]
+                    try:
+                        status, printed = self.run_once.run(path, self.tmp / "egress.json", quarantine)
+                    finally:
+                        self.run_once.PROCESS_BOUNDARY = genuine
+                    self.assertEqual((status, printed["failure_code"], printed["terminal"]),
+                                     (65, "FRAME_INGEST_FAILED", True), printed)
+                    self.assertEqual(len(list(quarantine.glob("*.json"))), 1)
+                    self.assertFalse((self.tmp / "egress.json").exists())
 
     def test_its_own_result_read_or_egress_write_fault_is_non_terminal(self):
         # run_once's own OSError: the result unreadable (no file written) or the

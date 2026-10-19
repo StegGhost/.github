@@ -64,6 +64,14 @@ def process(env,reg):
  req=["schema_version","packet_id","direction","origin","destination","carrier","intr_profile","transition","payload","evidence"]
  miss=[k for k in req if k not in env]
  if miss: raise SystemExit("missing:"+",".join(miss))
+ # The fields the receipts and the egress are built from are checked here, so a
+ # wrong-typed one is refused 65 at the boundary rather than crashing a caller
+ # after an exit 0.
+ if not isinstance(env["packet_id"],str) or not env["packet_id"]: raise SystemExit("invalid-field:packet_id")
+ for side in ("origin","destination"):
+  if not isinstance(env[side],dict) or not all(isinstance(env[side].get(k),str) for k in ("org","service")): raise SystemExit("invalid-field:"+side)
+ if not isinstance(env["carrier"],dict) or not all(isinstance(env["carrier"].get(k),str) for k in ("kind","reference")): raise SystemExit("invalid-field:carrier")
+ if not isinstance(env["transition"],dict) or not all(isinstance(env["transition"].get(k),str) for k in ("reference","authority_effect")): raise SystemExit("invalid-field:transition")
  if env["destination"]["org"]!=reg["organization"]: raise SystemExit("wrong-destination-org")
  svc=next((s for s in reg["services"] if s["service_id"]==env["destination"]["service"]),None)
  if not svc: raise SystemExit("unknown-service")
