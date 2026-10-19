@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 def _canon(v):
     return json.dumps(v,sort_keys=True,separators=(",",":")).encode()
 
+# `observed_at` is a host clock reading, so the carrier that holds it says so
+# in `derived_from_clock` rather than reading as an observed heartbeat tick.
 def _now():
     return datetime.now(timezone.utc).isoformat().replace("+00:00","Z")
 
@@ -22,7 +24,7 @@ def build_ingress(origin,destination,payload,carrier_reference,transition_refere
       "direction":"INGRESS",
       "origin":origin,
       "destination":destination,
-      "carrier":{"kind":"HB_DERIVED","reference":carrier_reference,"observed_at":_now()},
+      "carrier":{"kind":"HB_DERIVED","reference":carrier_reference,"observed_at":_now(),"derived_from_clock":True},
       "intr_profile":"stegverse.intr.org-boundary.v1",
       "transition":{"reference":transition_reference,"authority_effect":authority_effect,"conditions":[]},
       "payload":payload,
@@ -47,7 +49,7 @@ def build_egress(ingress, execution_result):
       "direction":"EGRESS",
       "origin":ingress["destination"],
       "destination":ingress["origin"],
-      "carrier":{"kind":ingress["carrier"]["kind"],"reference":ingress["carrier"]["reference"],"observed_at":_now()},
+      "carrier":{"kind":ingress["carrier"]["kind"],"reference":ingress["carrier"]["reference"],"observed_at":_now(),"derived_from_clock":True},
       "intr_profile":ingress["intr_profile"],
       "transition":{"reference":ingress["transition"]["reference"],"authority_effect":ingress["transition"]["authority_effect"],"conditions":ingress["transition"].get("conditions",[])},
       "payload":payload,

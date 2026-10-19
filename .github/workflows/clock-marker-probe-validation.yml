@@ -1,0 +1,44 @@
+name: Validate Clock Marker Probe
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'org-kernel/kernel.py'
+      - 'org-boundary/runtime/intr_transport.py'
+      - 'org-boundary/runtime/git_carrier.py'
+      - 'org-boundary/schemas/intr-envelope.schema.json'
+      - 'resident-runtime/federation_cycle.py'
+      - 'resident-runtime/federation_gateway_transport.py'
+      - 'runtime/organization_runtime.py'
+      - 'tests/test_clock_marker_probe.py'
+      - '.github/workflows/clock-marker-probe-validation.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'org-kernel/kernel.py'
+      - 'org-boundary/runtime/intr_transport.py'
+      - 'org-boundary/runtime/git_carrier.py'
+      - 'org-boundary/schemas/intr-envelope.schema.json'
+      - 'resident-runtime/federation_cycle.py'
+      - 'resident-runtime/federation_gateway_transport.py'
+      - 'runtime/organization_runtime.py'
+      - 'tests/test_clock_marker_probe.py'
+      - '.github/workflows/clock-marker-probe-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # The clock is pinned and every route is run in temporary roots. Each
+      # clock value written must be marked, and each receipt writer must refuse
+      # an absent epoch or stamp the supplied one.
+      - name: Fixed-clock probe of every route
+        run: python -m unittest tests.test_clock_marker_probe -v

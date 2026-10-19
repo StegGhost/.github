@@ -91,6 +91,8 @@ def acknowledge_frame(organization: str, frame: dict[str, Any], state: str) -> d
         "frame_sha256": frame["frame_sha256"],
         "state": state,
         "observed_at": datetime.now(timezone.utc).isoformat(),
+        # A host clock reading, marked as one rather than read as a heartbeat tick.
+        "derived_from_clock": True,
         "gateway_execution_authority": "NONE",
         "authority_effect": "NONE_OBSERVATION_ONLY",
     }

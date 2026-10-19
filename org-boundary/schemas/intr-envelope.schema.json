@@ -62,6 +62,9 @@
             "null"
           ],
           "format": "date-time"
+        },
+        "derived_from_clock": {
+          "type": "boolean"
         }
       }
     },
