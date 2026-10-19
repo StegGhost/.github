@@ -207,7 +207,8 @@ class LedgerWriteFailed(RuntimeError):
                       "failed_predicate":type(error).__name__,"detail":str(error),
                       "required_evidence_or_repair":"this repository's ledger store accepts the write",
                       "retry_entrypoint":retry_entrypoint,"owning_existing_goal":HB_EPOCH_OWNING_EXISTING_GOAL,
-                      "next_attempt":"retry; nothing partial was published and the write is consumed once",
+                      "next_attempt":("retry; the write is resumable: a step it already committed (a replaced HEAD, "
+                                       "a published frame) is replayed, never repeated, and the write is consumed once"),
                       "terminal":False,"derived_from_clock":False,"consequence_committed":False}
 
 @contextlib.contextmanager
@@ -245,17 +246,62 @@ def writer_fault_record(error:BaseException, *, retry_entrypoint:str)->dict[str,
         return dict(fault.refusal)
     return dict(LedgerWriteFailed(fault,retry_entrypoint=retry_entrypoint).refusal)
 
+class InputRefused(Exception):
+    """A CLI input the caller supplied is not readable as the JSON it must be.
+
+    The caller's defect, never this repository's: the record is TERMINAL
+    (terminal true), the read happens before anything is written, and it is
+    raised with no chained OSError so the own-state fault classifier never sees
+    it as a *_WRITE_FAILED (F-INPUT-TRACE). `refusal` is six-field.
+    """
+    input_refused=True
+    def __init__(self, refusal:dict[str,Any])->None:
+        super().__init__(refusal["detail"])
+        self.refusal=refusal
+
+def read_input_json(source:Any, *, argument:str, retry_entrypoint:str, inline:bool=False,
+                    expect:type=dict)->Any:
+    """The JSON value of a CLI input (a file path, or with `inline` the text), or InputRefused.
+
+    A missing path, a directory, undecodable bytes, malformed JSON and a value
+    of the wrong top-level type are each refused terminal, naming the argument.
+    """
+    try:
+        text=source if inline else Path(source).read_text(encoding="utf-8")
+        value=json.loads(text)
+    except (OSError,ValueError) as error:  # UnicodeDecodeError and JSONDecodeError are ValueErrors
+        failed,detail=type(error).__name__,str(error)
+    else:
+        if isinstance(value,expect):
+            return value
+        failed,detail=("WRONG_TOP_LEVEL_TYPE",
+                       argument+" must be a JSON "+expect.__name__+", not "+type(value).__name__)
+    raise InputRefused({"disposition":"FAIL_CLOSED","failure_code":"CLI_INPUT_UNREADABLE",
+                        "failed_predicate":"CLI_INPUT_IS_READABLE_JSON_OF_THE_DECLARED_TYPE",
+                        "argument":argument,"input_error":failed,"detail":argument+": "+detail,
+                        "required_evidence_or_repair":argument+" names a readable UTF-8 JSON "+expect.__name__,
+                        "retry_entrypoint":retry_entrypoint,"owning_existing_goal":HB_EPOCH_OWNING_EXISTING_GOAL,
+                        "next_attempt":"correct "+argument+" and re-run; nothing was written",
+                        "terminal":True,"derived_from_clock":False,"consequence_committed":False})
+
 def run_writer_cli(main:Any, *, retry_entrypoint:str)->Any:
     """Run a writer CLI's main; a fault in its own writes prints six fields, never a traceback.
 
     Every epoch-taking writer entry point is run through this (F-WRITER-TRACE):
     an OSError or LedgerWriteFailed anywhere in the failure's chain becomes the
     non-terminal six-field record on stdout and exit status 1, so the next run
-    completes the write once. Any other failure is re-raised unchanged.
+    completes the write once. An unreadable input (InputRefused) is the terminal
+    six-field record and exit status 2. Any other failure is re-raised unchanged.
     """
     try:
         return main()
     except (Exception,SystemExit) as error:
+        # The caller's input, refused terminal before the own-state classifier.
+        # Recognised by its marker, so a refusal raised through another loaded
+        # copy of this module is recognised too.
+        if getattr(error,"input_refused",False) and isinstance(getattr(error,"refusal",None),dict):
+            print(json.dumps(error.refusal,sort_keys=True))
+            return 2
         # A CLI that already reported and exited (SystemExit with its own status)
         # is not reported a second time: its status is returned as it gave it.
         if isinstance(error,SystemExit):
@@ -741,6 +787,28 @@ def publish_frame(frame:dict[str,Any], *, root:Path|None=None)->Path:
         return path
     write_atomic(path,json.dumps(frame,indent=2,sort_keys=True)+"\n")
     return path
+
+def published_frame(packet_id:str, *, root:Path|None=None)->dict[str,Any]|None:
+    """The frame frames.d already holds for this packet id, or None.
+
+    A published frame binds its packet id whether or not its emission was
+    recorded: a fault between publishing and recording leaves the frame, and a
+    re-emit must find it rather than publish a second one. Unreadable files are
+    not this packet's frame and are skipped.
+    """
+    frames=(root or federation_root()).resolve()/"frames.d"
+    if not frames.is_dir():
+        return None
+    for path in sorted(frames.glob("*.json")):
+        try:
+            if path.stat().st_size>FRAME_FILE_MAX_BYTES:
+                continue
+            frame=json.loads(path.read_text(encoding="utf-8"))
+        except (OSError,ValueError):
+            continue
+        if isinstance(frame,dict) and frame.get("packet_id")==packet_id:
+            return frame
+    return None
 
 #: The largest frames.d file the scan reads. A carrier frame is a few KiB; a
 #: larger file is refused unread rather than loaded (B-P36p).

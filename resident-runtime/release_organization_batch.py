@@ -669,8 +669,9 @@ def main() -> int:
             if args.standing is None:
                 raise SystemExit(
                     "--standing is required to submit; standing is declared, never derived")
-            standing = json.loads(args.standing.read_text(encoding="utf-8"))
-            if not isinstance(standing, dict) or "predecessor" not in standing:
+            standing = organization_ledger.kernel.read_input_json(
+                args.standing, argument="--standing", retry_entrypoint=EPOCH_RETRY_ENTRYPOINT)
+            if "predecessor" not in standing:
                 raise SystemExit(
                     "standing must declare the predecessor key; null is explicit genesis")
             result = release_and_submit(standing=standing, hb_epoch=args.hb_epoch)

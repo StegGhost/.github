@@ -74,14 +74,14 @@ def append(transition_id,transition_class,predecessor_state_sha256,successor_sta
       raise ValueError("ledger_receipt_collision")
      return prior
    b={"schema":"stegverse.repo-transition-receipt/v1","repository":C["repository"],"transition_id":transition_id,"transition_class":transition_class,"predecessor_state_sha256":predecessor_state_sha256,"successor_state_sha256":successor_state_sha256,"evidence":evidence if evidence is not None else {},"authority_effect":authority_effect,"hb_reference":hb,"previous_receipt_sha256":prev};dg=sha(b);r={**b,"receipt_sha256":dg};key=ledger_store.receipt_key(dg)
-   existing=store.get(key)
-   if existing is not None and existing!=r:raise SystemExit("receipt collision")
-   if existing is None:store.put(key,r)
-   store.put(ledger_store.HEAD_KEY,{"repository":C["repository"],"receipt_sha256":dg,"receipt_path":store.locator(key)})
+   # One substrate transaction: a fault before HEAD names the receipt rolls the
+   # receipt back, so a failed append leaves no orphan for a retry to duplicate.
+   if not store.append_transaction(key,r,head,{"repository":C["repository"],"receipt_sha256":dg,"receipt_path":store.locator(key)}):raise SystemExit("REPO_LEDGER_APPEND_CONTENTION_EXHAUSTED")
   return r
 def main():
  p=argparse.ArgumentParser();p.add_argument("--transition-id",required=True);p.add_argument("--transition-class",required=True);p.add_argument("--predecessor-state-sha256",required=True);p.add_argument("--successor-state-sha256",required=True);p.add_argument("--evidence-json",default="{}");p.add_argument("--authority-effect",default="NONE");p.add_argument("--hb-epoch",default=None,help="supplied heartbeat epoch (ASCII digits, >= 32); refused FAIL_CLOSED when absent, never read from a clock");a=p.parse_args()
- try:r=append(a.transition_id,a.transition_class,a.predecessor_state_sha256,a.successor_state_sha256,json.loads(a.evidence_json),a.authority_effect,a.hb_epoch)
+ evidence=kernel.read_input_json(a.evidence_json,argument="--evidence-json",retry_entrypoint=EPOCH_RETRY_ENTRYPOINT,inline=True)
+ try:r=append(a.transition_id,a.transition_class,a.predecessor_state_sha256,a.successor_state_sha256,evidence,a.authority_effect,a.hb_epoch)
  except (RepoLedgerEpochRefused,kernel.LedgerWriteFailed) as exc:
   print(json.dumps(exc.refusal,sort_keys=True));raise SystemExit(1)
  print(json.dumps(r,sort_keys=True))

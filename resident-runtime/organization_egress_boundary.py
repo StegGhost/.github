@@ -554,7 +554,11 @@ def emit(destination_organization: Any, payload: Mapping[str, Any], *,
         # replayed instead, which returns the recorded pair or completes it
         # after a fault part-way (B-P36q), and never publishes then raises.
         prior = recorded_emission(packet["packet_id"])
-        if prior is None:
+        # A frame already on the mesh binds the packet id too: a fault between
+        # publishing it and recording it leaves the frame, and the re-emit
+        # completes that record rather than publishing a second frame.
+        on_mesh = None if prior is not None else kernel.published_frame(packet["packet_id"], root=mesh_root)
+        if prior is None and on_mesh is None:
             published = kernel.publish_packet(packet, root=mesh_root, epoch=heartbeat["epoch"])
     except EgressRefused as exc:
         record = emit_refusal_record(exc.failed_predicate, exc.reason,
@@ -569,17 +573,21 @@ def emit(destination_organization: Any, payload: Mapping[str, Any], *,
                            record["payload_sha256"], sha(record), record, hb_epoch)
         return _refusal_result(record, appended)
 
+    replayed = prior is not None or on_mesh is not None
     record = prior if prior is not None else emission_record(
-        resolved, origin, packet, published["frame"], payload, standing_disposition, attested)
+        resolved, origin, packet, on_mesh if on_mesh is not None else published["frame"],
+        payload, standing_disposition, attested)
     appended = _record(EMITTED_CLASS + ":" + packet["packet_id"], EMITTED_CLASS,
                        record["payload_sha256"], sha(record), record, hb_epoch)
-    if prior is not None:
+    if replayed:
         would_publish = kernel.carrier_frame(packet, epoch=heartbeat["epoch"])
-        if would_publish["frame_sha256"] != prior.get("frame_sha256"):
-            # A re-emit with different content (another epoch) under a recorded
-            # packet id: refused six-field, nothing published. A byte-identical
-            # one falls through as an idempotent no-op returning the record.
-            return _emission_replay_collision(packet["packet_id"], prior, would_publish, appended, payload)
+        if would_publish["frame_sha256"] != record.get("frame_sha256"):
+            # A re-emit with different content (another epoch) under a packet id
+            # already recorded or already on the mesh: the frame that was
+            # published is recorded, and the re-emit is refused six-field with
+            # nothing published. A byte-identical one falls through as an
+            # idempotent no-op returning the record.
+            return _emission_replay_collision(packet["packet_id"], record, would_publish, appended, payload)
     result = {
         "schema": RESULT_SCHEMA,
         "operation": OPERATION_ID,
@@ -595,7 +603,7 @@ def emit(destination_organization: Any, payload: Mapping[str, Any], *,
                                   "origin_is_attested_by_the_credential_authority",
                                   "signer_supplied")},
         "emission_record": record,
-        "emission_replayed": prior is not None,
+        "emission_replayed": replayed,
         "emission_transition_class": EMITTED_CLASS,
         "emission_repository_receipt_sha256": appended["repository_receipt"]["receipt_sha256"],
         "emission_organization_receipt_sha256": appended["organization_receipt"]["receipt_sha256"],
@@ -834,10 +842,12 @@ def main() -> int:
     else:
         if not args.payload or not args.standing:
             raise SystemExit("emitting requires --payload and --standing")
-        standing = json.loads(Path(args.standing).read_text(encoding="utf-8"))
-        if not isinstance(standing, dict) or "predecessor" not in standing:
+        standing = kernel.read_input_json(args.standing, argument="--standing",
+                                          retry_entrypoint=EPOCH_RETRY_ENTRYPOINT)
+        if "predecessor" not in standing:
             raise SystemExit("standing must declare the predecessor key; null is explicit genesis")
-        payload = json.loads(Path(args.payload).read_text(encoding="utf-8"))
+        payload = kernel.read_input_json(args.payload, argument="--payload",
+                                         retry_entrypoint=EPOCH_RETRY_ENTRYPOINT)
         result = emit(args.destination_organization, payload, standing=standing,
                       capability=args.capability,
                       transition_reference=args.transition_reference, hb_epoch=args.hb_epoch)

@@ -65,7 +65,7 @@ def main()->int:
     try:
         if x.cmd=="activate": r=activate(x.activation_id,x.node_ref,x.hb_epoch)
         elif x.cmd=="egress": r=egress(x.message_id,x.operation_id,{"boundary":x.destination_boundary,"subsystem":x.destination_subsystem},x.payload.encode(),x.hb_reference)
-        else:r=ingress(json.loads(x.file.read_text()),x.hb_epoch)
+        else:r=ingress(kernel.read_input_json(x.file,argument="--file",retry_entrypoint=EPOCH_RETRY_ENTRYPOINT),x.hb_epoch)
     except kernel.SuppliedEpochRefused as exc:
         print(json.dumps(exc.refusal,sort_keys=True)); return 1
     print(json.dumps(r,sort_keys=True)); return 0

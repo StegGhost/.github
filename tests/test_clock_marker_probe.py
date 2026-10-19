@@ -1369,5 +1369,98 @@ class WriterEntryPointsReportFaultsSixField(unittest.TestCase):
         self.assertEqual(latest["heartbeat_reference"]["epoch"], 4096)
 
 
+
+class CliInputsAreRefusedTerminal(WriterEntryPointsReportFaultsSixField):
+    """F-INPUT-TRACE: a missing or unreadable CLI input (FileNotFoundError,
+    IsADirectoryError, UnicodeDecodeError, JSONDecodeError, a wrong top-level
+    type) is the caller's defect: a TERMINAL six-field record, exit 2, nothing
+    written, no traceback -- never a non-terminal *_WRITE_FAILED."""
+
+    SIX = ("disposition", "failure_code", "failed_predicate", "required_evidence_or_repair",
+           "retry_entrypoint", "owning_existing_goal", "next_attempt")
+
+    def bad_inputs(self):
+        directory = self.tmp / "a-directory"
+        directory.mkdir(exist_ok=True)
+        (self.tmp / "not.json").write_text("this is not json")
+        (self.tmp / "latin1.json").write_bytes(b"{\"k\": \"\xff\"}")
+        (self.tmp / "list.json").write_text("[1, 2]")
+        return {"FileNotFoundError": str(self.tmp / "missing.json"), "IsADirectoryError": str(directory),
+                "JSONDecodeError": str(self.tmp / "not.json"), "UnicodeDecodeError": str(self.tmp / "latin1.json"),
+                "WRONG_TOP_LEVEL_TYPE": str(self.tmp / "list.json")}
+
+    def written(self):
+        return sorted(str(p) for p in self.tmp.rglob("*.json")
+                      if any(part in ("org", "repo", "mesh", "ingress") for part in p.relative_to(self.tmp).parts))
+
+    def assert_refused(self, module, argv, argument, expected_error):
+        before = self.written()
+        code, out, err = self.run_cli(module, argv, fault=False)
+        self.assertNotIn("Traceback", out + err)
+        self.assertEqual(code, 2, out + err)
+        record = json.loads(out.strip().splitlines()[-1])
+        self.assertIs(record["terminal"], True)
+        self.assertEqual((record["failure_code"], record["argument"], record["input_error"]),
+                         ("CLI_INPUT_UNREADABLE", argument, expected_error))
+        for field in self.SIX:
+            self.assertIn(field, record)
+        self.assertEqual(self.written(), before)
+
+    def valid(self, name, value):
+        path = self.tmp / name
+        path.write_text(json.dumps(value))
+        return str(path)
+
+    def test_every_file_input_of_every_cli_is_refused_terminal(self):
+        epoch = ["--hb-epoch", "4096"]
+        zero, one = "sha256:" + "0" * 64, "sha256:" + "1" * 64
+        aggregate = load("input_aggregate_cli", "resident-runtime/aggregate_repo_transition.py")
+        ingress = load("input_ingress_cli", "resident-runtime/intr_destination_ingress.py")
+        egress = load("input_egress_cli", "resident-runtime/organization_egress_boundary.py")
+        release = load("input_release_cli", "resident-runtime/release_organization_batch.py")
+        runtime = load("input_runtime_cli", "runtime/organization_runtime.py")
+        runtime.INGRESS = self.tmp / "ingress"
+        standing = self.valid("standing.json", {"mode": "ESTABLISH_GENESIS", "node_ref": "n", "predecessor": None})
+        payload = self.valid("payload.json", {"message_class": "ecosystem.communication"})
+        cases = (
+            (aggregate, "--repo-receipt", lambda bad: ["--repo-receipt", bad, "--predecessor-org-state-sha256", zero,
+                                                       "--successor-org-state-sha256", one] + epoch),
+            (aggregate, "--transition-receipt", lambda bad: ["--transition-receipt", bad,
+                                                             "--predecessor-org-state-sha256", zero,
+                                                             "--successor-org-state-sha256", one] + epoch),
+            (ingress, "--payload", lambda bad: ["--payload", bad] + epoch),
+            (ingress, "--registry", lambda bad: ["--registry", bad, "--payload", payload] + epoch),
+            (egress, "--standing", lambda bad: ["--destination-organization", "Peer", "--standing", bad,
+                                                "--payload", payload] + epoch),
+            (egress, "--payload", lambda bad: ["--destination-organization", "Peer", "--standing", standing,
+                                               "--payload", bad] + epoch),
+            (release, "--standing", lambda bad: ["--standing", bad] + epoch),
+            (runtime, "--file", lambda bad: ["ingress", "--file", bad] + epoch),
+        )
+        for module, argument, argv in cases:
+            for error, bad in self.bad_inputs().items():
+                with self.subTest(cli=module.__name__, argument=argument, input=error):
+                    self.assert_refused(module, argv(bad), argument, error)
+
+    def test_inline_json_inputs_are_refused_terminal(self):
+        emit = load("input_emit_cli", ".stegverse/transition-ledger/emit.py")
+        aggregate = load("input_aggregate_inline_cli", "resident-runtime/aggregate_repo_transition.py")
+        body = {"schema": "stegverse.repo-transition-receipt/v1", "repository": aggregate.C["organization"] + "/cli",
+                "transition_id": "cli", "transition_class": "CLI", "predecessor_state_sha256": "sha256:" + "1" * 64,
+                "successor_state_sha256": "sha256:" + "2" * 64, "evidence": {}, "authority_effect": "NONE",
+                "hb_reference": KERNEL.hb_reference(epoch=4096), "previous_receipt_sha256": None}
+        source = self.valid("source.json", {**body, "receipt_sha256": aggregate.sha(body)})
+        for text, error in (("not json", "JSONDecodeError"), ("[1]", "WRONG_TOP_LEVEL_TYPE")):
+            with self.subTest(cli="emit", input=error):
+                self.assert_refused(emit, ["--transition-id", "t:in", "--transition-class", "T",
+                                           "--predecessor-state-sha256", "sha256:" + "0" * 64,
+                                           "--successor-state-sha256", "sha256:" + "1" * 64,
+                                           "--evidence-json", text, "--hb-epoch", "4096"], "--evidence-json", error)
+            with self.subTest(cli="aggregate", input=error):
+                self.assert_refused(aggregate, ["--repo-receipt", source, "--predecessor-org-state-sha256",
+                                                "sha256:" + "1" * 64, "--successor-org-state-sha256",
+                                                "sha256:" + "2" * 64, "--boundary-evidence-json", text,
+                                                "--hb-epoch", "4096"], "--boundary-evidence-json", error)
+
 if __name__ == "__main__":
     unittest.main()

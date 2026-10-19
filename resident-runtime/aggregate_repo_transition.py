@@ -404,14 +404,19 @@ def main():
     source_path = args.transition_receipt or args.repo_receipt
     if not source_path:
         raise SystemExit("transition receipt required")
-    receipt = load(source_path)
+    # Inputs are read before anything is written; unreadable ones are refused terminal.
+    receipt = kernel.read_input_json(
+        source_path, argument="--transition-receipt" if args.transition_receipt else "--repo-receipt",
+        retry_entrypoint=EPOCH_RETRY_ENTRYPOINT)
+    evidence = kernel.read_input_json(args.boundary_evidence_json, argument="--boundary-evidence-json",
+                                      retry_entrypoint=EPOCH_RETRY_ENTRYPOINT, inline=True)
     default_class = ("REPO_STATE_PROPAGATION"
                      if receipt.get("schema") == "stegverse.repo-transition-receipt/v1"
                      else "ORGANIZATION_STATE_TRANSITION")
     try:
         result = append(receipt, args.org_transition_class or default_class,
                         args.predecessor_org_state_sha256, args.successor_org_state_sha256,
-                        json.loads(args.boundary_evidence_json), args.authority_effect,
+                        evidence, args.authority_effect,
                         hb_epoch=args.hb_epoch)
     except (OrgLedgerEpochRefused, kernel.LedgerWriteFailed) as exc:
         print(json.dumps(exc.refusal, sort_keys=True))

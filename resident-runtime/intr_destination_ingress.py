@@ -341,7 +341,8 @@ def main() -> int:
         print(json.dumps(refusal, sort_keys=True))
         return 1
     registry_path = args.registry or (ROOT / "org-boundary/registry/services.json")
-    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    read = repository_ledger.kernel.read_input_json
+    registry = read(registry_path, argument="--registry", retry_entrypoint=EPOCH_RETRY_ENTRYPOINT)
     if args.self_close:
         if not isinstance(args.communication_id, str) or not args.communication_id.strip():
             raise SystemExit("communication_id is required for a self-closure")
@@ -353,7 +354,7 @@ def main() -> int:
         if args.payload is None:
             raise SystemExit("payload is required")
         result = receive(
-            json.loads(args.payload.read_text(encoding="utf-8")),
+            read(args.payload, argument="--payload", retry_entrypoint=EPOCH_RETRY_ENTRYPOINT),
             registry=registry,
             packet_id=args.packet_id or "organization-intr-destination",
             hb_epoch=args.hb_epoch)

@@ -1510,6 +1510,48 @@ class FailedHeadPublishDoesNotWedgeTests(AddressedAndClosedTests):
                             self.assertIn(code, (0, None))
                         self.assertEqual(len(list((ledger / "receipts").glob("*.json"))), 1)
 
+    def test_a_re_emit_after_a_faulted_record_publishes_no_second_frame(self):
+        # V-P11 @7f3012b row 2: the frame is published, then the emission
+        # record faults (each replace and fsync of emit and of
+        # request_bilateral_match). A re-emit at another epoch finds the frame
+        # on the mesh: exactly 1 frame and 1 EMITTED receipt, and the re-emit is
+        # the six-field EMISSION_REPLAY_COLLISION. A byte-identical re-emit
+        # completes the record instead.
+        calls = {
+            "emit": lambda epoch, mesh: egress.emit(PEER, diagnostic("faulted-record"), standing=STANDING,
+                                                    capability=PROFILE_ID, mesh_root=mesh, hb_epoch=epoch),
+            "bilateral": lambda epoch, mesh: egress.request_bilateral_match(PEER, "faulted-packet", standing=STANDING,
+                                                                            mesh_root=mesh, hb_epoch=epoch),
+        }
+        for name, call in calls.items():
+            for function, count in (("replace", 6), ("fsync", 12)):
+                for number in range(1, count + 1):
+                    for second in (5000, self.SUPPLIED):
+                        with self.subTest(call=name, fault=function + "#" + str(number), re_emit=second):
+                            work = self.fresh_ledgers()
+                            mesh = work / "mesh"
+                            restore = self.faulting(function, number)
+                            try:
+                                first = call(self.SUPPLIED, mesh)
+                            finally:
+                                restore()
+                            frames_d = mesh / "frames.d"
+                            published = frames_d.exists() and any(frames_d.glob("*.json"))
+                            again = call(second, mesh)
+                            frames = list((mesh / "frames.d").glob("*.json")) if (mesh / "frames.d").exists() else []
+                            emitted = [r for r in self.receipts("STEGVERSE_REPO_LEDGER_ROOT",
+                                                                "stegverse.repo-transition-receipt/v1")
+                                       if r["transition_class"] == egress.EMITTED_CLASS]
+                            self.assertEqual(len(frames), 1, (first, again))
+                            self.assertEqual(len(emitted), 1, (first, again))
+                            if second == self.SUPPLIED or not published:
+                                # Byte-identical: the record is completed. Or the
+                                # fault came before the frame: a fresh emit.
+                                self.assertEqual(again["disposition"], "ALLOW", again)
+                            else:
+                                self.assertEqual(again.get("failure_code"), "EMISSION_REPLAY_COLLISION", again)
+                                self.assertIs(again["emitted"], False)
+
     def test_a_failed_org_head_publish_rolls_back_and_the_next_cycle_appends_once(self):
         self.run_case("head-publish-rollback", keep_residue=False)
 
