@@ -189,6 +189,11 @@ def _append(transition_class: str, packet_id: str, evidence: Mapping[str, Any],
                      "communication_id": evidence.get("communication_id"),
                      "payload_sha256": evidence["payload_sha256"]})
     transition_id = transition_class + ":" + packet_id
+    # An absent or invalid epoch is refused before either store is opened.
+    refusal = repository_ledger.kernel.writer_epoch_refusal(
+        hb_epoch, retry_entrypoint=repository_ledger.EPOCH_RETRY_ENTRYPOINT)
+    if refusal is not None:
+        raise repository_ledger.RepoLedgerEpochRefused(refusal)
     store = repository_ledger.ledger_store.open_store(repository_ledger.lr())
     store.initialize()
     head = store.get(repository_ledger.ledger_store.HEAD_KEY)

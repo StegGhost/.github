@@ -352,13 +352,27 @@ class RepositoryReceiptNeverReadsAClockTests(RedirectedLedgers):
         self.assertEqual(self.all_receipts(), [])
 
     def test_an_invalid_epoch_is_refused_and_writes_nothing(self):
-        for epoch in (31, 0, -1, True, 33.0, "+33", " 33", "3_3", "x"):
+        for epoch in (31, 0, -1, True, 33.0, "33.0", "+33", " 33", "3_3", "x"):
             with self.subTest(epoch=epoch):
                 with self.assertRaises(self.emit.RepoLedgerEpochRefused) as refused:
                     self.emit.append("t:invalid", "T", "sha256:" + "0" * 64,
                                      "sha256:" + "1" * 64, hb_epoch=epoch)
                 self.assertEqual(refused.exception.refusal["failure_code"], "HB_EPOCH_INVALID")
         self.assertEqual(self.all_receipts(), [])
+
+    def test_the_ingress_refuses_an_absent_or_invalid_epoch_before_opening_a_store(self):
+        cases = ((None, "HB_EPOCH_NOT_SUPPLIED"), ("33.0", "HB_EPOCH_INVALID"),
+                 (True, "HB_EPOCH_INVALID"), (31, "HB_EPOCH_INVALID"),
+                 ("+33", "HB_EPOCH_INVALID"))
+        for epoch, code in cases:
+            with self.subTest(epoch=epoch):
+                result = ingress.receive(diagnostic(), registry=REGISTRY,
+                                         packet_id="refused-epoch", hb_epoch=epoch)
+                self.assertEqual(result["failure_code"], code)
+                self.assertEqual(result["failed_predicate"],
+                                 "SUBMISSION_CARRIES_THE_SUPPLIED_HB_EPOCH")
+                for variable in self.LEDGER_ROOTS:
+                    self.assertFalse(Path(os.environ[variable]).exists(), variable)
 
     def test_a_supplied_epoch_is_carried_and_derived_from_clock_is_false(self):
         receipt = self.emit.append("t:supplied", "T", "sha256:" + "0" * 64,
