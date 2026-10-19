@@ -1156,6 +1156,65 @@ class CarriedClaimIsVerifiedTests(AddressedAndClosedTests):
             self.assertNotIn("sampled_unix_ns", reference)
 
 
+class LedgerWriteFaultIsNonTerminalTests(AddressedAndClosedTests):
+    """F-TRANSIENT-RT: a lost compare-and-swap (or any store fault) on either
+    append is this repository's fault, not the frame's. It surfaces as the
+    dedicated writer exception with a six-field, terminal-false refusal; nothing
+    partial is published at that level, and a retry records the transition once."""
+
+    SUPPLIED = 4096
+
+    def inject(self, store_class, method):
+        original = getattr(store_class, method)
+        calls = []
+
+        def lost(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("ledger_append_lost_comparison")
+            return original(*args, **kwargs)
+        setattr(store_class, method, lost)
+        self.addCleanup(setattr, store_class, method, original)
+
+    def assert_pair(self, repo_count, org_count):
+        self.assertEqual(len(self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")),
+                         repo_count)
+        self.assertEqual(len(self.receipts("STEGVERSE_ORG_LEDGER_ROOT",
+                                           "stegverse.organization-transition-receipt/v1")), org_count)
+
+    def test_a_lost_comparison_on_either_append_is_non_terminal_and_retried_once(self):
+        import sys
+        org_store = sys.modules[ingress.organization_ledger.open_store.__module__].PosixLedgerStore
+        repo_store = ingress.repository_ledger.ledger_store.PosixLedgerStore
+        for name, (store_class, method), after_fault in (
+                ("repository", (repo_store, "put"), (0, 0)),
+                ("organization", (org_store, "append_transaction"), (1, 0))):
+            with self.subTest(append=name):
+                packet_id = "lost-comparison-" + name
+                self.inject(store_class, method)
+                with self.assertRaises(RuntimeError) as raised:
+                    ingress.receive(diagnostic(packet_id), registry=REGISTRY, packet_id=packet_id,
+                                    hb_epoch=self.SUPPLIED)
+                fault = kernel.write_failure(raised.exception)
+                self.assertIsNotNone(fault)
+                self.assertIs(fault.refusal["terminal"], False)
+                self.assertEqual(fault.refusal["failed_predicate"], "RuntimeError")
+                for field in ("disposition", "failure_code", "required_evidence_or_repair",
+                              "retry_entrypoint", "owning_existing_goal", "next_attempt"):
+                    self.assertIn(field, fault.refusal)
+                before = (len(self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")),
+                          len(self.receipts("STEGVERSE_ORG_LEDGER_ROOT", "stegverse.organization-transition-receipt/v1")))
+                retried = ingress.receive(diagnostic(packet_id), registry=REGISTRY, packet_id=packet_id,
+                                          hb_epoch=self.SUPPLIED)
+                self.assertEqual(retried["disposition"], "ALLOW", retried)
+                again = ingress.receive(diagnostic(packet_id), registry=REGISTRY, packet_id=packet_id,
+                                        hb_epoch=self.SUPPLIED)
+                self.assertIs(again["transition_replayed"], True)
+                after = (len(self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")),
+                         len(self.receipts("STEGVERSE_ORG_LEDGER_ROOT", "stegverse.organization-transition-receipt/v1")))
+                self.assertEqual((after[0] - before[0] + after_fault[0], after[1] - before[1] + after_fault[1]), (1, 1))
+
+
 def subprocess_git(args):
     import subprocess
     completed = subprocess.run(["git", *args], capture_output=True, text=True)

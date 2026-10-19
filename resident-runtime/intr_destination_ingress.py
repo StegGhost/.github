@@ -200,10 +200,11 @@ def _append(transition_class: str, packet_id: str, evidence: Mapping[str, Any],
         repository_ledger.kernel.supplied_hb_reference(
             hb_epoch, retry_entrypoint=repository_ledger.EPOCH_RETRY_ENTRYPOINT,
             carried=dict(hb_carried), root=ROOT)
-    store = repository_ledger.ledger_store.open_store(repository_ledger.lr())
-    store.initialize()
-    head = store.get(repository_ledger.ledger_store.HEAD_KEY)
-    prior = repository_ledger.recorded(store, head, transition_id, transition_class)
+    with repository_ledger.kernel.ledger_write(repository_ledger.EPOCH_RETRY_ENTRYPOINT):
+        store = repository_ledger.ledger_store.open_store(repository_ledger.lr())
+        store.initialize()
+        head = store.get(repository_ledger.ledger_store.HEAD_KEY)
+        prior = repository_ledger.recorded(store, head, transition_id, transition_class)
     repository_receipt = repository_ledger.append(
         transition_id, transition_class, predecessor, successor, dict(evidence),
         "NONE", hb_epoch=hb_epoch,

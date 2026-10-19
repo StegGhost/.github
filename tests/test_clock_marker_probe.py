@@ -813,21 +813,26 @@ class InboundEpochIsSupplied(unittest.TestCase):
         # the next cycle consumes the frame exactly once.
         KERNEL.publish_frame(self.frame, root=self.mesh)
         original = KERNEL.dispatch
-
-        def failing(*args, **kwargs):
-            raise OSError(28, "No space left on device")
-        KERNEL.dispatch = failing
-        try:
-            first, = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh)
-        finally:
-            KERNEL.dispatch = original
-        refusal = first["result"]["refusal"]
-        self.assertEqual((refusal["failure_code"], refusal["failed_predicate"]), ("FRAME_DISPATCH_IO_FAILED", "OSError"))
-        for field in ("disposition", "required_evidence_or_repair", "retry_entrypoint",
-                      "owning_existing_goal", "next_attempt"):
-            self.assertIn(field, refusal)
-        self.assertIsNone(first["seen_marker"])
-        self.assertFalse((self.b / "resident-runtime/federation/seen.d").exists())
+        # F-TRANSIENT-RT: an OSError, and a lost CAS surfacing as the writers'
+        # LedgerWriteFailed, are both non-terminal.
+        faults = (OSError(28, "No space left on device"),
+                  KERNEL.LedgerWriteFailed(RuntimeError("ledger_append_lost_comparison"), retry_entrypoint="probe"))
+        for fault, predicate in zip(faults, ("OSError", "LedgerWriteFailed")):
+            def failing(*args, **kwargs):
+                raise fault
+            KERNEL.dispatch = failing
+            try:
+                first, = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh)
+            finally:
+                KERNEL.dispatch = original
+            refusal = first["result"]["refusal"]
+            self.assertEqual((refusal["failure_code"], refusal["failed_predicate"], refusal["terminal"]),
+                             ("FRAME_DISPATCH_IO_FAILED", predicate, False))
+            for field in ("disposition", "required_evidence_or_repair", "retry_entrypoint",
+                          "owning_existing_goal", "next_attempt"):
+                self.assertIn(field, refusal)
+            self.assertIsNone(first["seen_marker"])
+            self.assertFalse((self.b / "resident-runtime/federation/seen.d").exists())
         again = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh)
         self.assertEqual([x["result"]["status"] for x in again], ["CONSUMED"])
         self.assertSupplied(again[0]["response_publication"]["frame"])

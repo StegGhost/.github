@@ -5,7 +5,7 @@ Organization-neutral runtime behavior extracted from StegVerse-Labs/.github.
 Authority and time are constraint variables. A disposition is transition evidence only.
 """
 from __future__ import annotations
-import base64, hashlib, importlib.util, json, os
+import base64, contextlib, hashlib, importlib.util, json, os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -175,6 +175,50 @@ def frame_supplied_epoch(frame:Any)->int|None:
     except ValueError:
         return None
     return int(str(ref["epoch"]))
+
+class LedgerWriteFailed(RuntimeError):
+    """A fault writing this repository's own ledger state, never the frame's defect.
+
+    Raised by the writers around their store phase for an OSError, a lost
+    compare-and-swap, contention or a store collision. It is non-terminal: the
+    frame that caused the write is not quarantined, so it stays pending and the
+    next cycle consumes it exactly once (F-TRANSIENT-RT). `refusal` is six-field.
+    """
+    ledger_write_failure=True
+    def __init__(self, error:BaseException, *, retry_entrypoint:str)->None:
+        super().__init__(type(error).__name__+": "+str(error))
+        self.refusal={"disposition":"FAIL_CLOSED","failure_code":"LEDGER_WRITE_FAILED",
+                      "failed_predicate":type(error).__name__,"detail":str(error),
+                      "required_evidence_or_repair":"this repository's ledger store accepts the write",
+                      "retry_entrypoint":retry_entrypoint,"owning_existing_goal":HB_EPOCH_OWNING_EXISTING_GOAL,
+                      "next_attempt":"retry; nothing partial was published and the write is consumed once",
+                      "terminal":False,"derived_from_clock":False,"consequence_committed":False}
+
+@contextlib.contextmanager
+def ledger_write(retry_entrypoint:str):
+    """Re-raise a fault in a writer's store phase as LedgerWriteFailed.
+
+    A ValueError passes through: `ledger_receipt_collision` is a content
+    conflict its callers decide, not a fault of the store.
+    """
+    try:
+        yield
+    except ValueError:
+        raise
+    except (OSError,RuntimeError,SystemExit) as error:
+        if isinstance(error,LedgerWriteFailed) or getattr(error,"ledger_write_failure",False):
+            raise
+        raise LedgerWriteFailed(error,retry_entrypoint=retry_entrypoint) from error
+
+def write_failure(error:BaseException)->BaseException|None:
+    """The fault in this repository's own writes behind `error`, or None."""
+    seen=set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        if isinstance(error,OSError) or getattr(error,"ledger_write_failure",False):
+            return error
+        error=error.__cause__ or error.__context__
+    return None
 
 def supplied_hb_reference(hb_epoch:Any, *, retry_entrypoint:str, carried:Any=None,
                           root:Path|None=None)->dict[str,Any]:
@@ -958,18 +1002,20 @@ def consume_and_respond(repo_root:Path, *, mesh_root:Path|None=None, seen:set[st
         try:
             result,response_publication,response_refusal=_consume_one(
                 repo_root,item,mesh_root=mesh_root,hb_epoch=hb_epoch)
-        except Exception as error:
+        except (Exception,SystemExit) as error:
             # Total: one frame's failure is that frame's refusal, not the cycle's,
             # so it never starves the valid frames behind it (B-P36o, F-TYPE). A
-            # defect of the frame itself is quarantined. An OSError is this
-            # repository's own I/O failing, not the frame: it is refused
-            # FRAME_DISPATCH_IO_FAILED with no marker, so the frame stays pending
-            # and is consumed once when the I/O recovers. No clock is read.
+            # defect of the frame itself is quarantined. A fault in this
+            # repository's own writes (an OSError, a lost CAS, contention, a store
+            # collision; LedgerWriteFailed) is checked first and is not the frame:
+            # FRAME_DISPATCH_IO_FAILED, terminal false, no marker, so the frame
+            # stays pending and is consumed once (F-TRANSIENT-RT). No clock is read.
             frame=item["frame"] if isinstance(item["frame"],dict) else {}
-            if isinstance(error,OSError):
+            fault=write_failure(error)
+            if fault is not None:
                 result={"status":"REFUSED","packet_id":frame.get("packet_id"),"quarantine":False,
-                        "refusal":{**ingest_refusal(FRAME_DISPATCH_IO_FAILED,type(error).__name__+": "+str(error)),
-                                   "failed_predicate":type(error).__name__,
+                        "refusal":{**ingest_refusal(FRAME_DISPATCH_IO_FAILED,type(fault).__name__+": "+str(fault)),
+                                   "failed_predicate":type(fault).__name__,"terminal":False,
                                    "next_attempt":"the frame stays pending and is consumed by the next cycle"}}
             else:
                 result={"status":"REFUSED","packet_id":frame.get("packet_id"),"refusal":frame_error_refusal(error)}

@@ -283,9 +283,10 @@ def append(source_receipt, org_transition_class, predecessor_state, successor_st
         # Receipts are immutable, so an already-recorded one read without the
         # lock is the one a locked replay would return.
         if idempotent:
-            store = open_store(ledger_root())
-            prior = _recorded_for_source(store, _validate_existing_head(store),
-                                         source["source_transition_sha256"])
+            with kernel.ledger_write(EPOCH_RETRY_ENTRYPOINT):
+                store = open_store(ledger_root())
+                prior = _recorded_for_source(store, _validate_existing_head(store),
+                                             source["source_transition_sha256"])
             if prior is not None:
                 if prior.get("org_transition_class") != org_transition_class:
                     raise ValueError("ledger_receipt_collision")
@@ -298,50 +299,53 @@ def append(source_receipt, org_transition_class, predecessor_state, successor_st
     # before the store is opened, so a refusal writes nothing.
     heartbeat = require_supplied_epoch(hb_epoch, hb_carried)
     retained = {source_key(source["source_transition_sha256"]): source_receipt}
-    store = open_store(ledger_root())
-    store.initialize()
-    # All writers using this emitter serialize the HEAD read, receipt creation,
-    # and HEAD publication. The substrate transaction publishes the retained
-    # source, the organization receipt, and HEAD together.
-    with store.exclusive():
-        expected_head = store.get(HEAD_KEY)
-        previous = _validate_existing_head(store)
-        # A source receipt is consumed once. With `idempotent` a receipt already
-        # consuming this exact source is returned instead of a second one minted.
-        if idempotent:
-            prior = _recorded_for_source(store, previous, source["source_transition_sha256"])
-            if prior is not None:
-                if prior.get("org_transition_class") != org_transition_class:
-                    raise ValueError("ledger_receipt_collision")
-                return prior
-        body = {
-            "schema": "stegverse.organization-transition-receipt/v1",
-            "organization": C["organization"],
-            **source,
-            "org_transition_class": org_transition_class,
-            "predecessor_org_state_sha256": predecessor_state,
-            "successor_org_state_sha256": successor_state,
-            "boundary_evidence": boundary_evidence,
-            "authority_effect": authority_effect,
-            "hb_reference": heartbeat,
-            "previous_receipt_sha256": previous,
-        }
-        digest = sha(body)
-        receipt = {**body, "receipt_sha256": digest}
-        key = receipt_key(digest)
-        existing = store.get(key)
-        if existing is not None:
-            if existing != receipt:
-                raise SystemExit("org receipt collision")
-            raise SystemExit("ORG_LEDGER_DUPLICATE_RECEIPT_RECOVERY_REQUIRED")
-        new_head = {
-            "organization": C["organization"],
-            "receipt_sha256": digest,
-            "receipt_path": store.locator(key),
-        }
-        if not store.append_transaction(key, receipt, expected_head, new_head, immutable=retained):
-            raise SystemExit("ORG_LEDGER_APPEND_CONTENTION_EXHAUSTED")
-        return receipt
+    # A fault in the store phase is this repository's, never the source's:
+    # raised as kernel.LedgerWriteFailed so a caller keeps the frame pending.
+    with kernel.ledger_write(EPOCH_RETRY_ENTRYPOINT):
+        store = open_store(ledger_root())
+        store.initialize()
+        # All writers using this emitter serialize the HEAD read, receipt creation,
+        # and HEAD publication. The substrate transaction publishes the retained
+        # source, the organization receipt, and HEAD together.
+        with store.exclusive():
+            expected_head = store.get(HEAD_KEY)
+            previous = _validate_existing_head(store)
+            # A source receipt is consumed once. With `idempotent` a receipt already
+            # consuming this exact source is returned instead of a second one minted.
+            if idempotent:
+                prior = _recorded_for_source(store, previous, source["source_transition_sha256"])
+                if prior is not None:
+                    if prior.get("org_transition_class") != org_transition_class:
+                        raise ValueError("ledger_receipt_collision")
+                    return prior
+            body = {
+                "schema": "stegverse.organization-transition-receipt/v1",
+                "organization": C["organization"],
+                **source,
+                "org_transition_class": org_transition_class,
+                "predecessor_org_state_sha256": predecessor_state,
+                "successor_org_state_sha256": successor_state,
+                "boundary_evidence": boundary_evidence,
+                "authority_effect": authority_effect,
+                "hb_reference": heartbeat,
+                "previous_receipt_sha256": previous,
+            }
+            digest = sha(body)
+            receipt = {**body, "receipt_sha256": digest}
+            key = receipt_key(digest)
+            existing = store.get(key)
+            if existing is not None:
+                if existing != receipt:
+                    raise SystemExit("org receipt collision")
+                raise SystemExit("ORG_LEDGER_DUPLICATE_RECEIPT_RECOVERY_REQUIRED")
+            new_head = {
+                "organization": C["organization"],
+                "receipt_sha256": digest,
+                "receipt_path": store.locator(key),
+            }
+            if not store.append_transaction(key, receipt, expected_head, new_head, immutable=retained):
+                raise SystemExit("ORG_LEDGER_APPEND_CONTENTION_EXHAUSTED")
+            return receipt
 
 
 def main():
@@ -369,7 +373,7 @@ def main():
                         args.predecessor_org_state_sha256, args.successor_org_state_sha256,
                         json.loads(args.boundary_evidence_json), args.authority_effect,
                         hb_epoch=args.hb_epoch)
-    except OrgLedgerEpochRefused as exc:
+    except (OrgLedgerEpochRefused, kernel.LedgerWriteFailed) as exc:
         print(json.dumps(exc.refusal, sort_keys=True))
         raise SystemExit(1)
     print(json.dumps(result, sort_keys=True))

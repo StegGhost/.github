@@ -58,29 +58,31 @@ def append(transition_id,transition_class,predecessor_state_sha256,successor_sta
  the organization's current ledger head or refused CARRIED_PROVENANCE_UNVERIFIED.
  """
  hb=kernel.supplied_hb_reference(hb_epoch,retry_entrypoint=EPOCH_RETRY_ENTRYPOINT,carried=hb_carried,root=ROOT)
- store=ledger_store.open_store(lr());store.initialize()
- with store.exclusive():
-  head=store.get(ledger_store.HEAD_KEY);prev=(head or {}).get("receipt_sha256")
-  if idempotent_on is not None:
-   prior=recorded(store,head,transition_id,transition_class)
-   if prior is not None:
-    mine=evidence if isinstance(evidence,dict) else {}; theirs=prior.get("evidence") if isinstance(prior.get("evidence"),dict) else {}
-    if (prior.get("predecessor_state_sha256")!=predecessor_state_sha256
-        or prior.get("successor_state_sha256")!=successor_state_sha256
-        or prior.get("authority_effect")!=authority_effect
-        or any(theirs.get(k,_ABSENT)!=mine.get(k,_ABSENT) for k in idempotent_on)):
-     raise ValueError("ledger_receipt_collision")
-    return prior
-  b={"schema":"stegverse.repo-transition-receipt/v1","repository":C["repository"],"transition_id":transition_id,"transition_class":transition_class,"predecessor_state_sha256":predecessor_state_sha256,"successor_state_sha256":successor_state_sha256,"evidence":evidence if evidence is not None else {},"authority_effect":authority_effect,"hb_reference":hb,"previous_receipt_sha256":prev};dg=sha(b);r={**b,"receipt_sha256":dg};key=ledger_store.receipt_key(dg)
-  existing=store.get(key)
-  if existing is not None and existing!=r:raise SystemExit("receipt collision")
-  if existing is None:store.put(key,r)
-  store.put(ledger_store.HEAD_KEY,{"repository":C["repository"],"receipt_sha256":dg,"receipt_path":store.locator(key)})
- return r
+ # A store-phase fault is this repository's, never the transition's (F-TRANSIENT-RT).
+ with kernel.ledger_write(EPOCH_RETRY_ENTRYPOINT):
+  store=ledger_store.open_store(lr());store.initialize()
+  with store.exclusive():
+   head=store.get(ledger_store.HEAD_KEY);prev=(head or {}).get("receipt_sha256")
+   if idempotent_on is not None:
+    prior=recorded(store,head,transition_id,transition_class)
+    if prior is not None:
+     mine=evidence if isinstance(evidence,dict) else {}; theirs=prior.get("evidence") if isinstance(prior.get("evidence"),dict) else {}
+     if (prior.get("predecessor_state_sha256")!=predecessor_state_sha256
+         or prior.get("successor_state_sha256")!=successor_state_sha256
+         or prior.get("authority_effect")!=authority_effect
+         or any(theirs.get(k,_ABSENT)!=mine.get(k,_ABSENT) for k in idempotent_on)):
+      raise ValueError("ledger_receipt_collision")
+     return prior
+   b={"schema":"stegverse.repo-transition-receipt/v1","repository":C["repository"],"transition_id":transition_id,"transition_class":transition_class,"predecessor_state_sha256":predecessor_state_sha256,"successor_state_sha256":successor_state_sha256,"evidence":evidence if evidence is not None else {},"authority_effect":authority_effect,"hb_reference":hb,"previous_receipt_sha256":prev};dg=sha(b);r={**b,"receipt_sha256":dg};key=ledger_store.receipt_key(dg)
+   existing=store.get(key)
+   if existing is not None and existing!=r:raise SystemExit("receipt collision")
+   if existing is None:store.put(key,r)
+   store.put(ledger_store.HEAD_KEY,{"repository":C["repository"],"receipt_sha256":dg,"receipt_path":store.locator(key)})
+  return r
 def main():
  p=argparse.ArgumentParser();p.add_argument("--transition-id",required=True);p.add_argument("--transition-class",required=True);p.add_argument("--predecessor-state-sha256",required=True);p.add_argument("--successor-state-sha256",required=True);p.add_argument("--evidence-json",default="{}");p.add_argument("--authority-effect",default="NONE");p.add_argument("--hb-epoch",default=None,help="supplied heartbeat epoch (ASCII digits, >= 32); refused FAIL_CLOSED when absent, never read from a clock");a=p.parse_args()
  try:r=append(a.transition_id,a.transition_class,a.predecessor_state_sha256,a.successor_state_sha256,json.loads(a.evidence_json),a.authority_effect,a.hb_epoch)
- except RepoLedgerEpochRefused as exc:
+ except (RepoLedgerEpochRefused,kernel.LedgerWriteFailed) as exc:
   print(json.dumps(exc.refusal,sort_keys=True));raise SystemExit(1)
  print(json.dumps(r,sort_keys=True))
 if __name__=="__main__":main()
