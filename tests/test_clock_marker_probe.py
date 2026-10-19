@@ -712,10 +712,22 @@ class InboundEpochIsSupplied(unittest.TestCase):
         frames.mkdir(parents=True, exist_ok=True)
         (frames / "0000-not-json.json").write_text("{not json")
         (frames / "0001-a-list.json").write_text("[1,2,3]")
+        # B-P36p: non-UTF-8 bytes, an oversized file, and an unreadable path.
+        (frames / "0002-not-utf8.json").write_bytes(b'{"x": "\xff\xfe"}')
+        (frames / "0003-oversized.json").write_text('{"pad": "' + "x" * KERNEL.FRAME_FILE_MAX_BYTES + '"}')
+        (frames / "0004-a-directory.json").mkdir()
         KERNEL.publish_frame(self.frame, root=self.mesh)
         served = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh)
         refused = [x for x in served if x["result"]["status"] == "REFUSED"]
-        self.assertEqual(sorted(Path(x["path"]).name for x in refused), ["0000-not-json.json", "0001-a-list.json"])
+        self.assertEqual(sorted(Path(x["path"]).name for x in refused),
+                         ["0000-not-json.json", "0001-a-list.json", "0002-not-utf8.json",
+                          "0003-oversized.json", "0004-a-directory.json"])
+        predicates = {Path(x["path"]).name: x["result"]["refusal"]["failed_predicate"] for x in refused}
+        self.assertEqual(predicates["0002-not-utf8.json"], "UnicodeDecodeError")
+        self.assertEqual(predicates["0003-oversized.json"], "ValueError")
+        self.assertIn("frame_file_oversized", next(x for x in refused if x["path"].endswith("0003-oversized.json"))[
+            "result"]["refusal"]["detail"])
+        self.assertEqual(predicates["0004-a-directory.json"], "IsADirectoryError")
         for item in refused:
             refusal = item["result"]["refusal"]
             self.assertEqual(refusal["failure_code"], "FRAME_INGEST_FAILED")

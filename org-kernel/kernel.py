@@ -557,6 +557,10 @@ def publish_frame(frame:dict[str,Any], *, root:Path|None=None)->Path:
     path.write_text(json.dumps(frame,indent=2,sort_keys=True)+"\n")
     return path
 
+#: The largest frames.d file the scan reads. A carrier frame is a few KiB; a
+#: larger file is refused unread rather than loaded (B-P36p).
+FRAME_FILE_MAX_BYTES=1_048_576
+
 def scan_addressed_frames(organization:str, *, root:Path|None=None, seen:set[str]|None=None,
                           include_malformed:bool=False)->list[dict[str,Any]]:
     mesh=(root or federation_root()).resolve()
@@ -569,10 +573,14 @@ def scan_addressed_frames(organization:str, *, root:Path|None=None, seen:set[str
         if path.name in consumed:
             continue
         # Parsed per file: one unreadable file is that file's outcome, not the
-        # scan's, so it never stalls the frames behind it (F-SCAN). It names no
-        # destination, so it is offered only to a caller that quarantines it.
+        # scan's, so it never stalls the frames behind it (F-SCAN, B-P36p): a
+        # read error, non-UTF-8 bytes, non-JSON, a non-object, or an oversized
+        # file. It names no destination, so it is offered only to a caller that
+        # quarantines it.
         try:
-            frame=json.loads(path.read_text())
+            if path.stat().st_size>FRAME_FILE_MAX_BYTES:
+                raise ValueError("frame_file_oversized:"+str(path.stat().st_size)+">"+str(FRAME_FILE_MAX_BYTES))
+            frame=json.loads(path.read_bytes().decode("utf-8"))
             if not isinstance(frame,dict):
                 raise ValueError("frame_is_not_an_object:"+type(frame).__name__)
         except Exception as error:
