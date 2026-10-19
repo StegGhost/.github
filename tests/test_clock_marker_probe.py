@@ -764,6 +764,76 @@ class InboundEpochIsSupplied(unittest.TestCase):
                 frame = {**body, "frame_sha256": KERNEL.sha(body)}
                 self.assertEqual(KERNEL.frame_refusal(self.b, frame)["failure_code"], code)
 
+    def test_a_wrong_typed_frame_field_is_quarantined_before_or_after_a_valid_frame(self):
+        # F-TYPE: the per-frame guard is total. packet_base64 of the wrong type
+        # (123, null, a list, a dict) raises from recover_packet; the frame is
+        # quarantined FRAME_INGEST_FAILED with the exception class, the valid
+        # frame is answered, and the next cycle offers neither.
+        import hashlib
+        RAISING.clear()
+
+        def frame_name(frame):
+            return hashlib.sha256((frame["packet_id"] + "|" + frame["frame_sha256"]).encode()).hexdigest()
+
+        def wrong(value, salt):
+            packet = dict(self.request, packet_id="wrong-type:" + repr(value) + ":" + str(salt))
+            body = {k: v for k, v in KERNEL.carrier_frame(packet, epoch=4096).items() if k != "frame_sha256"}
+            body["packet_base64"] = value
+            return {**body, "frame_sha256": KERNEL.sha(body)}
+
+        for value in (123, None, [1], {"a": 1}):
+            for before in (True, False):
+                with self.subTest(value=value, before=before):
+                    salt = 0
+                    while (frame_name(wrong(value, salt)) < frame_name(self.frame)) != before:
+                        salt += 1
+                    tag = repr(value).replace(" ", "") + str(before)
+                    mesh, root = self.tmp / ("mesh-t" + tag), self.tmp / ("b-t" + tag)
+                    provision(root, "Org-B", "BOUNDARY_LOCAL_CONTROL", "org-b.org-control")
+                    KERNEL.publish_frame(wrong(value, salt), root=mesh)
+                    KERNEL.publish_frame(self.frame, root=mesh)
+                    CLOCK_CALLS.clear()
+                    RAISING.append(True)
+                    served = KERNEL.consume_and_respond(root, mesh_root=mesh)
+                    RAISING.clear()
+                    refused, = [x for x in served if x["result"]["status"] == "REFUSED"]
+                    refusal = refused["result"]["refusal"]
+                    self.assertIn(refusal["failure_code"], ("FRAME_INGEST_FAILED", "FRAME_INTEGRITY_INVALID"))
+                    self.assertTrue(refusal["failed_predicate"])
+                    self.assertEqual(json.loads(Path(refused["seen_marker"]).read_text())["failure_code"],
+                                     "FRAME_REFUSED_QUARANTINED")
+                    valid, = [x for x in served if x["result"]["status"] == "CONSUMED"]
+                    self.assertSupplied(valid["response_publication"]["frame"])
+                    self.assertEqual(KERNEL.consume_and_respond(root, mesh_root=mesh), [])
+                    self.assertEqual(CLOCK_CALLS, [])
+
+    def test_an_io_failure_leaves_the_frame_pending_and_consumes_it_once(self):
+        # F-TYPE addendum: an OSError in this repository's own I/O is not the
+        # frame's defect. FRAME_DISPATCH_IO_FAILED, no marker, nothing partial;
+        # the next cycle consumes the frame exactly once.
+        KERNEL.publish_frame(self.frame, root=self.mesh)
+        original = KERNEL.dispatch
+
+        def failing(*args, **kwargs):
+            raise OSError(28, "No space left on device")
+        KERNEL.dispatch = failing
+        try:
+            first, = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh)
+        finally:
+            KERNEL.dispatch = original
+        refusal = first["result"]["refusal"]
+        self.assertEqual((refusal["failure_code"], refusal["failed_predicate"]), ("FRAME_DISPATCH_IO_FAILED", "OSError"))
+        for field in ("disposition", "required_evidence_or_repair", "retry_entrypoint",
+                      "owning_existing_goal", "next_attempt"):
+            self.assertIn(field, refusal)
+        self.assertIsNone(first["seen_marker"])
+        self.assertFalse((self.b / "resident-runtime/federation/seen.d").exists())
+        again = KERNEL.consume_and_respond(self.b, mesh_root=self.mesh)
+        self.assertEqual([x["result"]["status"] for x in again], ["CONSUMED"])
+        self.assertSupplied(again[0]["response_publication"]["frame"])
+        self.assertEqual(KERNEL.consume_and_respond(self.b, mesh_root=self.mesh), [])
+        self.assertEqual(CLOCK_CALLS, [])
+
     def test_monitor_request_status_takes_the_inbound_epoch(self):
         # R2: resident_status is stamped from the request frame's epoch.
         built = KERNEL.build_ecosystem_packets(

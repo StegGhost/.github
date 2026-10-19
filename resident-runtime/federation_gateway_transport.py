@@ -205,6 +205,20 @@ def resident_gateway_cycle(repo_root: Path, hb_epoch: int | None = None) -> dict
     try:
         packet = K.recover_packet(frame)
         result = K.ingest_frame(repo_root, frame, hb_epoch=hb_epoch)
+    except OSError as error:
+        # This repository's own I/O failed, not the frame: it is not
+        # acknowledged, so the gateway redelivers it once the I/O recovers.
+        return {
+            "schema_version": "stegverse.org-federation-gateway-cycle.v1",
+            "organization": organization,
+            "state": "PENDING",
+            "packet_id": frame.get("packet_id") if isinstance(frame, dict) else None,
+            "frames_consumed": 0,
+            "responses_emitted": 0,
+            "refusal": {**K.ingest_refusal(K.FRAME_DISPATCH_IO_FAILED, type(error).__name__ + ": " + str(error)),
+                        "failed_predicate": type(error).__name__},
+            "gateway_execution_authority": "NONE",
+        }
     except Exception as error:
         # A malformed frame is refused six-field and acknowledged BLOCKED, so
         # the gateway does not redeliver it to stall every later cycle (B-P36o).

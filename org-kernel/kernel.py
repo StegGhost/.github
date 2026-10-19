@@ -959,12 +959,20 @@ def consume_and_respond(repo_root:Path, *, mesh_root:Path|None=None, seen:set[st
             result,response_publication,response_refusal=_consume_one(
                 repo_root,item,mesh_root=mesh_root,hb_epoch=hb_epoch)
         except Exception as error:
-            # One frame's failure is that frame's refusal, not the cycle's: it is
-            # quarantined six-field and the loop continues, so a malformed frame
-            # never starves the valid frames behind it (B-P36o). Nothing was
-            # dispatched for it and no clock is read.
+            # Total: one frame's failure is that frame's refusal, not the cycle's,
+            # so it never starves the valid frames behind it (B-P36o, F-TYPE). A
+            # defect of the frame itself is quarantined. An OSError is this
+            # repository's own I/O failing, not the frame: it is refused
+            # FRAME_DISPATCH_IO_FAILED with no marker, so the frame stays pending
+            # and is consumed once when the I/O recovers. No clock is read.
             frame=item["frame"] if isinstance(item["frame"],dict) else {}
-            result={"status":"REFUSED","packet_id":frame.get("packet_id"),"refusal":frame_error_refusal(error)}
+            if isinstance(error,OSError):
+                result={"status":"REFUSED","packet_id":frame.get("packet_id"),"quarantine":False,
+                        "refusal":{**ingest_refusal(FRAME_DISPATCH_IO_FAILED,type(error).__name__+": "+str(error)),
+                                   "failed_predicate":type(error).__name__,
+                                   "next_attempt":"the frame stays pending and is consumed by the next cycle"}}
+            else:
+                result={"status":"REFUSED","packet_id":frame.get("packet_id"),"refusal":frame_error_refusal(error)}
             response_publication=response_refusal=None
         # A refusal of the caller's epoch is not the frame's: nothing is written
         # for it, so the frame is processed when a valid epoch is supplied.
@@ -981,6 +989,7 @@ FRAME_INTEGRITY_ERRORS=("carrier_frame_hash_mismatch","packet_hash_mismatch","pa
 HB_REFERENCE_INVALID="HB_REFERENCE_INVALID"
 FRAME_INTEGRITY_INVALID="FRAME_INTEGRITY_INVALID"
 FRAME_INGEST_FAILED="FRAME_INGEST_FAILED"
+FRAME_DISPATCH_IO_FAILED="FRAME_DISPATCH_IO_FAILED"
 
 def frame_error_refusal(error:BaseException)->dict[str,Any]:
     """The six-field refusal of an error raised while ingesting one frame."""
