@@ -17,6 +17,7 @@ import importlib.util
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -307,6 +308,254 @@ class OperationReceiptTests(RedirectedLedgers):
             "STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1", OPERATION_ID), [])
 
 
+class RepositoryReceiptNeverReadsAClockTests(RedirectedLedgers):
+    """B-P29: a repository receipt carried `derived_from_clock: true` while the
+    organization receipt for the same transition carried `false`.
+
+    The repository writer took the host clock when no epoch was supplied and the
+    organization writer was handed that epoch as if supplied. The repository
+    writer now takes the supplied epoch or refuses, and no clock is read.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.emit = _module("repo_transition_emit_b_p29", ".stegverse/transition-ledger/emit.py")
+
+        def clock(*_args, **_kwargs):
+            raise AssertionError("a clock was read")
+
+        class NoClock:
+            @staticmethod
+            def now(*_args, **_kwargs):
+                clock()
+
+        for module in (self.emit.kernel, ingress.repository_ledger.kernel,
+                       ingress.organization_ledger.kernel):
+            previous = module.datetime
+            module.datetime = NoClock
+            self.addCleanup(setattr, module, "datetime", previous)
+
+    def all_receipts(self):
+        return (self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")
+                + self.receipts("STEGVERSE_ORG_LEDGER_ROOT",
+                                "stegverse.organization-transition-receipt/v1"))
+
+    def test_an_absent_epoch_is_refused_with_the_six_fields_and_writes_nothing(self):
+        with self.assertRaises(self.emit.RepoLedgerEpochRefused) as refused:
+            self.emit.append("t:absent", "T", "sha256:" + "0" * 64, "sha256:" + "1" * 64)
+        refusal = refused.exception.refusal
+        self.assertEqual(refusal["disposition"], "FAIL_CLOSED")
+        self.assertEqual(refusal["failure_code"], "HB_EPOCH_NOT_SUPPLIED")
+        for field in ("failure_code", "failed_predicate", "required_evidence_or_repair",
+                      "retry_entrypoint", "owning_existing_goal", "next_attempt"):
+            self.assertTrue(refusal[field], field)
+        self.assertIs(refusal["derived_from_clock"], False)
+        self.assertEqual(self.all_receipts(), [])
+
+    def test_an_invalid_epoch_is_refused_and_writes_nothing(self):
+        for epoch in (31, 0, -1, True, 33.0, "33.0", "+33", " 33", "3_3", "x"):
+            with self.subTest(epoch=epoch):
+                with self.assertRaises(self.emit.RepoLedgerEpochRefused) as refused:
+                    self.emit.append("t:invalid", "T", "sha256:" + "0" * 64,
+                                     "sha256:" + "1" * 64, hb_epoch=epoch)
+                self.assertEqual(refused.exception.refusal["failure_code"], "HB_EPOCH_INVALID")
+        self.assertEqual(self.all_receipts(), [])
+
+    def test_the_ingress_refuses_an_absent_or_invalid_epoch_before_opening_a_store(self):
+        cases = ((None, "HB_EPOCH_NOT_SUPPLIED"), ("33.0", "HB_EPOCH_INVALID"),
+                 (True, "HB_EPOCH_INVALID"), (31, "HB_EPOCH_INVALID"),
+                 ("+33", "HB_EPOCH_INVALID"))
+        for epoch, code in cases:
+            with self.subTest(epoch=epoch):
+                result = ingress.receive(diagnostic(), registry=REGISTRY,
+                                         packet_id="refused-epoch", hb_epoch=epoch)
+                self.assertEqual(result["failure_code"], code)
+                self.assertEqual(result["failed_predicate"],
+                                 "SUBMISSION_CARRIES_THE_SUPPLIED_HB_EPOCH")
+                for variable in self.LEDGER_ROOTS:
+                    self.assertFalse(Path(os.environ[variable]).exists(), variable)
+
+    def test_a_supplied_epoch_is_carried_and_derived_from_clock_is_false(self):
+        receipt = self.emit.append("t:supplied", "T", "sha256:" + "0" * 64,
+                                   "sha256:" + "1" * 64, hb_epoch=469436465)
+        self.assertEqual(receipt["hb_reference"]["epoch"], 469436465)
+        self.assertIs(receipt["hb_reference"]["derived_from_clock"], False)
+        self.assertNotIn("sampled_unix_ns", receipt["hb_reference"])
+
+    def test_derived_from_clock_is_never_true_at_either_ledger_level(self):
+        ingress.receive(diagnostic(), registry=REGISTRY, packet_id="clock-free", hb_epoch=32)
+        ingress.receive(diagnostic(), registry=REGISTRY, packet_id="clock-free", hb_epoch=40)
+        ingress.receive(diagnostic(), registry=REGISTRY, packet_id="no-epoch")
+        ingress.self_close("clock-free-closure", registry=REGISTRY, hb_epoch=33)
+        ingress.self_close("no-epoch-closure", registry=REGISTRY, packet_id="no-epoch-closure")
+        found = self.all_receipts()
+        self.assertTrue(found)
+        for record in found:
+            reference = record["hb_reference"]
+            self.assertIs(reference["derived_from_clock"], False, record["receipt_sha256"])
+            self.assertNotIn("sampled_unix_ns", reference)
+        repository = {record["receipt_sha256"]: record for record in self.receipts(
+            "STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")}
+        for record in self.receipts("STEGVERSE_ORG_LEDGER_ROOT",
+                                    "stegverse.organization-transition-receipt/v1"):
+            source = repository[record["repo_receipt_sha256"]]
+            self.assertEqual(record["hb_reference"], source["hb_reference"])
+
+    def test_the_cli_refuses_an_absent_epoch_with_the_six_fields(self):
+        import subprocess
+        import sys
+        run = subprocess.run(
+            [sys.executable, str(ROOT / ".stegverse/transition-ledger/emit.py"),
+             "--transition-id", "t:cli", "--transition-class", "T",
+             "--predecessor-state-sha256", "sha256:" + "0" * 64,
+             "--successor-state-sha256", "sha256:" + "1" * 64],
+            capture_output=True, text=True, env=dict(os.environ))
+        self.assertEqual(run.returncode, 1, run.stderr)
+        refusal = json.loads(run.stdout)
+        self.assertEqual(refusal["failure_code"], "HB_EPOCH_NOT_SUPPLIED")
+        self.assertEqual(refusal["retry_entrypoint"], self.emit.EPOCH_RETRY_ENTRYPOINT)
+        self.assertEqual(self.all_receipts(), [])
+
+
+REFUSED_EPOCHS = ((None, "HB_EPOCH_NOT_SUPPLIED"), ("33.0", "HB_EPOCH_INVALID"),
+                  (True, "HB_EPOCH_INVALID"), (31, "HB_EPOCH_INVALID"),
+                  ("+33", "HB_EPOCH_INVALID"))
+SIX_FIELDS = ("failure_code", "failed_predicate", "required_evidence_or_repair",
+              "retry_entrypoint", "owning_existing_goal", "next_attempt")
+
+
+class RefusalPrecedesAnyWriteTests(RedirectedLedgers):
+    """B-P36b: the organization ledger and the egress refuse an epoch first.
+
+    `aggregate_repo_transition.append` fell back to the clock when no epoch was
+    supplied, and `egress.emit` published its mesh frame before the epoch was
+    refused, with a clock-derived frame epoch. Both now refuse an absent or
+    invalid epoch before a store is opened or a frame is published.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.aggregate = ingress.organization_ledger
+        self.repository = _module("repo_transition_emit_b_p36b",
+                                  ".stegverse/transition-ledger/emit.py")
+
+        class NoClock:
+            @staticmethod
+            def now(*_args, **_kwargs):
+                raise AssertionError("a clock was read")
+
+        for module in (kernel, egress.kernel, egress.organization_ledger.kernel,
+                       self.aggregate.kernel, self.repository.kernel):
+            previous = module.datetime
+            module.datetime = NoClock
+            self.addCleanup(setattr, module, "datetime", previous)
+
+    def source_receipt(self):
+        return self.repository.append("t:b-p36b", "T", "sha256:" + "0" * 64,
+                                      "sha256:" + "1" * 64, hb_epoch=32)
+
+    def org_ledger_files(self):
+        root = Path(os.environ["STEGVERSE_ORG_LEDGER_ROOT"])
+        return sorted(str(path) for path in root.rglob("*")) if root.exists() else None
+
+    def test_the_organization_ledger_refuses_before_opening_its_store(self):
+        source = self.source_receipt()
+
+        def opened(*_args, **_kwargs):
+            raise AssertionError("the store was opened")
+
+        for epoch, code in REFUSED_EPOCHS:
+            with self.subTest(epoch=epoch):
+                previous = self.aggregate.open_store
+                self.aggregate.open_store = opened
+                try:
+                    with self.assertRaises(self.aggregate.OrgLedgerEpochRefused) as refused:
+                        self.aggregate.append(source, "REPO_STATE_PROPAGATION",
+                                              "sha256:" + "0" * 64, "sha256:" + "1" * 64,
+                                              {}, "NONE", hb_epoch=epoch)
+                finally:
+                    self.aggregate.open_store = previous
+                refusal = refused.exception.refusal
+                self.assertEqual(refusal["disposition"], "FAIL_CLOSED")
+                self.assertEqual(refusal["failure_code"], code)
+                self.assertEqual(refusal["failed_predicate"],
+                                 "SUBMISSION_CARRIES_THE_SUPPLIED_HB_EPOCH")
+                self.assertEqual(refusal["retry_entrypoint"], self.aggregate.EPOCH_RETRY_ENTRYPOINT)
+                for field in SIX_FIELDS:
+                    self.assertTrue(refusal[field], field)
+                self.assertIsNone(self.org_ledger_files())
+
+    def test_a_refusal_leaves_an_existing_organization_ledger_untouched(self):
+        source = self.source_receipt()
+        self.aggregate.append(source, "REPO_STATE_PROPAGATION", "sha256:" + "0" * 64,
+                              "sha256:" + "1" * 64, {}, "NONE", hb_epoch=32)
+        before = {path: Path(path).read_bytes() for path in self.org_ledger_files()
+                  if Path(path).is_file()}
+        for epoch, _code in REFUSED_EPOCHS:
+            with self.subTest(epoch=epoch):
+                with self.assertRaises(self.aggregate.OrgLedgerEpochRefused):
+                    self.aggregate.append(source, "REPO_STATE_PROPAGATION",
+                                          "sha256:" + "0" * 64, "sha256:" + "1" * 64,
+                                          {}, "NONE", hb_epoch=epoch)
+                after = {path: Path(path).read_bytes() for path in self.org_ledger_files()
+                         if Path(path).is_file()}
+                self.assertEqual(after, before)
+
+    def test_the_organization_ledger_cli_refuses_an_absent_epoch(self):
+        import subprocess
+        import sys
+        source = Path(self._work.name) / "source.json"
+        source.write_text(json.dumps(self.source_receipt()), encoding="utf-8")
+        for extra, code in (([], "HB_EPOCH_NOT_SUPPLIED"), (["--hb-epoch", "+33"], "HB_EPOCH_INVALID")):
+            with self.subTest(extra=extra):
+                run = subprocess.run(
+                    [sys.executable, str(ROOT / "resident-runtime/aggregate_repo_transition.py"),
+                     "--repo-receipt", str(source),
+                     "--predecessor-org-state-sha256", "sha256:" + "0" * 64,
+                     "--successor-org-state-sha256", "sha256:" + "1" * 64, *extra],
+                    capture_output=True, text=True, env=dict(os.environ))
+                self.assertEqual(run.returncode, 1, run.stderr)
+                self.assertEqual(json.loads(run.stdout)["failure_code"], code)
+                self.assertIsNone(self.org_ledger_files())
+
+    def test_the_egress_refuses_before_publishing_a_frame(self):
+        published = []
+        previous = egress.kernel.publish_packet
+
+        def publish(*args, **kwargs):
+            published.append((args, kwargs))
+            return previous(*args, **kwargs)
+
+        egress.kernel.publish_packet = publish
+        self.addCleanup(setattr, egress.kernel, "publish_packet", previous)
+        for epoch, code in REFUSED_EPOCHS:
+            with self.subTest(epoch=epoch):
+                result = egress.emit(PEER, diagnostic("refused-epoch-egress"), standing=STANDING,
+                                     capability=PROFILE_ID, mesh_root=self.mesh, hb_epoch=epoch)
+                self.assertEqual(result["disposition"], "FAIL_CLOSED")
+                self.assertEqual(result["failure_code"], code)
+                self.assertEqual(result["failed_predicate"],
+                                 "SUBMISSION_CARRIES_THE_SUPPLIED_HB_EPOCH")
+                for field in SIX_FIELDS:
+                    self.assertTrue(result[field], field)
+                self.assertIs(result["emitted"], False)
+                self.assertIs(result["refusal_recorded"], False)
+                self.assertEqual(published, [])
+                self.assertEqual(list(self.mesh.glob("frames.d/*.json")), [])
+                for variable in self.LEDGER_ROOTS:
+                    self.assertFalse(Path(os.environ[variable]).exists(), variable)
+
+    def test_the_egress_frame_carries_the_supplied_epoch(self):
+        result = egress.emit(PEER, diagnostic("supplied-epoch-egress"), standing=STANDING,
+                             capability=PROFILE_ID, mesh_root=self.mesh, hb_epoch="469436465")
+        self.assertEqual(result["disposition"], "ALLOW", result.get("detail"))
+        frame, = self.mesh.glob("frames.d/*.json")
+        reference = json.loads(frame.read_text(encoding="utf-8"))["heartbeat_reference"]
+        self.assertEqual(reference["epoch"], 469436465)
+        self.assertIs(reference["derived_from_clock"], False)
+        self.assertNotIn("sampled_unix_ns", reference)
+
+
 class AddressedAndClosedTests(RedirectedLedgers):
     def publish(self, payload, service, packet_id, origin=PEER):
         packet = kernel.build_packet(
@@ -333,7 +582,11 @@ class AddressedAndClosedTests(RedirectedLedgers):
                 frames.append(frame)
         return frames
 
-    def test_a_peer_frame_at_the_address_is_received_and_receipted(self):
+    def test_a_peer_frame_at_the_address_without_a_supplied_epoch_fails_closed(self):
+        # The capability ingress hands the operation no hb_epoch, and the
+        # carrier's reference is derived from a clock. The repository receipt
+        # used to be stamped from that clock; it is now refused, and neither
+        # ledger level is written.
         self.publish(diagnostic("addressed-diagnostic"), ADDRESS, "addressed-diagnostic")
         results = self.consume()
         self.assertEqual(len(results), 1)
@@ -348,17 +601,19 @@ class AddressedAndClosedTests(RedirectedLedgers):
         self.assertEqual(application["receiving_operation_id"], OPERATION_ID)
         self.assertIs(application["declared_capability_processed_at_this_address"], False)
         operation = application["receiving_operation_result"]
-        self.assertEqual(operation["disposition"], "ALLOW", operation.get("detail"))
-        self.assertIs(operation["communication_acknowledged"], True)
-        self.assertEqual(operation["authority_effect"], "NONE_DIAGNOSTIC_ACK_ONLY")
-        assert_constraints(self, operation)
-        self.assertIs(operation["organization_receipt_preserves_repository_receipt"], True)
-        repository, = self.receipts("STEGVERSE_REPO_LEDGER_ROOT",
-                                    "stegverse.repo-transition-receipt/v1", OPERATION_ID)
-        matched = [record for record in self.receipts(
-            "STEGVERSE_ORG_LEDGER_ROOT", "stegverse.organization-transition-receipt/v1")
-            if record.get("repo_receipt_sha256") == repository["receipt_sha256"]]
-        self.assertEqual(len(matched), 1)
+        self.assertEqual(operation["disposition"], "FAIL_CLOSED")
+        self.assertEqual(operation["failure_code"], "HB_EPOCH_NOT_SUPPLIED")
+        self.assertEqual(operation["failed_predicate"], "SUBMISSION_CARRIES_THE_SUPPLIED_HB_EPOCH")
+        for field in ("required_evidence_or_repair", "retry_entrypoint",
+                      "owning_existing_goal", "next_attempt"):
+            self.assertTrue(operation[field], field)
+        self.assertIs(operation["communication_acknowledged"], False)
+        self.assertIs(operation["repository_receipt_observed"], False)
+        self.assertIs(operation["organization_receipt_observed"], False)
+        self.assertEqual(self.receipts("STEGVERSE_REPO_LEDGER_ROOT",
+                                       "stegverse.repo-transition-receipt/v1"), [])
+        self.assertEqual(self.receipts("STEGVERSE_ORG_LEDGER_ROOT",
+                                       "stegverse.organization-transition-receipt/v1"), [])
 
     def test_a_manifest_addressed_to_this_capability_is_not_a_diagnostic(self):
         self.publish({"manifest": {"probe": True}}, ADDRESS, "not-a-diagnostic")
@@ -492,6 +747,75 @@ class DesignatedLedgerRefTests(unittest.TestCase):
         self.assertNotIn("federation.json", text)
 
 
+class DispatchEpochGateTests(unittest.TestCase):
+    """The workflow's own inline epoch gate emits the kernel's six-field refusal.
+
+    The step's run block is read from the workflow and executed as-is; only
+    DISPATCH_INPUTS (the toJSON of the dispatch inputs) varies per case.
+    """
+
+    STEP = "      - name: Refuse an absent or invalid dispatch epoch before any append\n"
+    SIX_FIELDS = ("failure_code", "failed_predicate", "required_evidence_or_repair",
+                  "retry_entrypoint", "owning_existing_goal", "next_attempt")
+
+    @classmethod
+    def setUpClass(cls):
+        lines = (ROOT / ".github/workflows/organization-ledger-transition.yml").read_text(
+            encoding="utf-8").splitlines(keepends=True)
+        start = lines.index(cls.STEP)
+        run = next(i for i in range(start, len(lines)) if lines[i] == "        run: |\n")
+        body = []
+        for line in lines[run + 1:]:
+            if line.strip() and not line.startswith("          "):
+                break
+            body.append(line[10:] if line.strip() else "\n")
+        cls.script = "".join(body)
+
+    def run_gate(self, inputs):
+        env = {k: v for k, v in os.environ.items() if k != "DISPATCH_INPUTS"}
+        if inputs is not None:
+            env["DISPATCH_INPUTS"] = json.dumps(inputs)
+        return subprocess.run(["bash", "-e", "-c", self.script], cwd=ROOT, env=env,
+                              capture_output=True, text=True, check=False)
+
+    def assert_refused(self, inputs, code):
+        result = self.run_gate(inputs)
+        self.assertEqual(result.returncode, 1, (inputs, result.stdout, result.stderr))
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertNotIn("Traceback", result.stdout)
+        refusal = json.loads(result.stdout)
+        self.assertEqual(refusal["disposition"], "FAIL_CLOSED")
+        for field in self.SIX_FIELDS:
+            self.assertTrue(refusal.get(field), (field, refusal))
+        self.assertEqual(refusal["failure_code"], code, refusal)
+        self.assertEqual(refusal["retry_entrypoint"],
+                         ".github/workflows/organization-ledger-transition.yml")
+        self.assertIs(refusal["consequence_committed"], False)
+
+    def test_an_absent_or_empty_epoch_is_not_supplied(self):
+        # A dispatch string input cannot tell "" from absent; both are NOT_SUPPLIED here.
+        self.assert_refused({"communication_id": "c-1"}, "HB_EPOCH_NOT_SUPPLIED")
+        self.assert_refused({"hb_epoch": ""}, "HB_EPOCH_NOT_SUPPLIED")
+        self.assert_refused(None, "HB_EPOCH_NOT_SUPPLIED")
+
+    def test_an_invalid_epoch_is_refused(self):
+        for value in ("\u0663\u0663", "\uff13\uff13", "+33", " 33", "33.0", "31", "abc"):
+            with self.subTest(value=value):
+                self.assert_refused({"hb_epoch": value}, "HB_EPOCH_INVALID")
+
+    def test_a_supplied_epoch_passes(self):
+        result = self.run_gate({"hb_epoch": "4096", "communication_id": "c-1"})
+        self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
+        self.assertEqual(result.stdout, "")
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_the_legacy_inline_refusal_is_gone(self):
+        text = (ROOT / ".github/workflows/organization-ledger-transition.yml").read_text(
+            encoding="utf-8")
+        self.assertNotIn("DISPATCH_HB_EPOCH_INVALID", text)
+        self.assertIn("kernel.writer_epoch_refusal(hb_epoch", text)
+
+
 class DiagnosticSelfClosureOnAGitRefTests(unittest.TestCase):
     """A scratch git ref receives a diagnostic self-closure and reads it back.
 
@@ -563,6 +887,884 @@ class DiagnosticSelfClosureOnAGitRefTests(unittest.TestCase):
         self.assertIs(repository_ledger["replay_read_organization_receipts"], False)
         self.assertEqual(repository_ledger["consumed_by_organization_receipt_sha256"],
                          closed["organization_receipt_sha256"])
+
+
+class ReadBackEpochIsNeverForwardedTests(AddressedAndClosedTests):
+    """B-P36f: an ingress forwarded an epoch read back from its own receipt.
+
+    `intr_destination_ingress._append` handed the organization writer the
+    epoch on the repository receipt it had just appended. On a replay that
+    receipt is the recorded one, which an earlier writer may have stamped from
+    a clock, so the organization receipt claimed a clock epoch with
+    `derived_from_clock: false`. Each ingress now forwards only the epoch
+    supplied to it, or refuses before the first write. Here the clock is not
+    forbidden but fixed, so a laundered clock epoch would be recognisable.
+    """
+
+    SUPPLIED = 4096
+
+    def setUp(self):
+        super().setUp()
+        import datetime as datetime_module
+        real = datetime_module.datetime
+        self.fixed_ns = kernel.HB_ANCHOR_UNIX_NS + 1_000_000 * kernel.HB_PERIOD_NS
+        fixed_ns = self.fixed_ns
+
+        class FixedClock(real):
+            @classmethod
+            def now(cls, tz=None):
+                return real.fromtimestamp(fixed_ns / 1_000_000_000, tz)
+
+        self.clock_epoch = kernel.hb_reference(now_ns=fixed_ns)["epoch"]
+        self.assertNotEqual(self.clock_epoch, self.SUPPLIED)
+        # Modules loaded during the test (the capability resolver loads the
+        # operation afresh) read the fixed clock too.
+        datetime_module.datetime = FixedClock
+        self.addCleanup(setattr, datetime_module, "datetime", real)
+        self.release = _module("release_organization_batch_b_p36f",
+                               "resident-runtime/release_organization_batch.py")
+        self.propagation = _module("propagate_repository_receipts_b_p36f",
+                                   "resident-runtime/propagate_repository_receipts.py")
+        for module in (kernel, ingress.repository_ledger.kernel, ingress.organization_ledger.kernel,
+                       egress.kernel, egress.repository_ledger.kernel,
+                       egress.organization_ledger.kernel):
+            previous = module.datetime
+            module.datetime = FixedClock
+            self.addCleanup(setattr, module, "datetime", previous)
+
+    def all_receipts(self):
+        return (self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")
+                + self.receipts("STEGVERSE_ORG_LEDGER_ROOT",
+                                "stegverse.organization-transition-receipt/v1"))
+
+    def assert_nothing_laundered(self, supplied=()):
+        for record in self.all_receipts():
+            reference = record["hb_reference"]
+            if reference["derived_from_clock"] is False:
+                self.assertIn(reference["epoch"], supplied, record["receipt_sha256"])
+                self.assertNotIn("sampled_unix_ns", reference)
+
+    def assert_supplied_pair(self, repository, organization):
+        for record in (repository, organization):
+            self.assertEqual(record["hb_reference"]["epoch"], self.SUPPLIED)
+            self.assertIs(record["hb_reference"]["derived_from_clock"], False)
+        self.assertEqual(organization["repo_receipt_sha256"], repository["receipt_sha256"])
+
+    def clock_stamped(self, writer):
+        """Have `writer` stamp its receipts from the clock, as writers did before B-P29."""
+        original = writer.kernel.supplied_hb_reference
+        writer.kernel.supplied_hb_reference = lambda *_args, **_kwargs: writer.kernel.hb_reference()
+        self.addCleanup(setattr, writer.kernel, "supplied_hb_reference", original)
+        return lambda: setattr(writer.kernel, "supplied_hb_reference", original)
+
+    def test_a_replayed_clock_stamped_repository_receipt_does_not_lend_its_epoch(self):
+        # A repository receipt stamped from the clock, whose organization
+        # receipt was never written (an earlier writer, or a crash between the
+        # two appends).
+        restore = self.clock_stamped(ingress.repository_ledger)
+        original_append = ingress.organization_ledger.append
+
+        def crash(*_args, **_kwargs):
+            raise RuntimeError("stopped between the two appends")
+        ingress.organization_ledger.append = crash
+        try:
+            with self.assertRaises(RuntimeError):
+                ingress.receive(diagnostic("read-back"), registry=REGISTRY,
+                                packet_id="read-back", hb_epoch=self.SUPPLIED)
+        finally:
+            ingress.organization_ledger.append = original_append
+            restore()
+        stamped, = self.receipts("STEGVERSE_REPO_LEDGER_ROOT",
+                                 "stegverse.repo-transition-receipt/v1")
+        self.assertIs(stamped["hb_reference"]["derived_from_clock"], True)
+        self.assertEqual(stamped["hb_reference"]["epoch"], self.clock_epoch)
+
+        absent = ingress.receive(diagnostic("read-back"), registry=REGISTRY, packet_id="read-back")
+        self.assertEqual(absent["failure_code"], "HB_EPOCH_NOT_SUPPLIED")
+        self.assertEqual(self.receipts("STEGVERSE_ORG_LEDGER_ROOT",
+                                       "stegverse.organization-transition-receipt/v1"), [])
+
+        # B-P36h (O-1): the clock-provenance repository receipt is not consumed
+        # as a source, even under a supplied epoch. Refused six-field; nothing
+        # is written and the repository receipt is left as it was.
+        replayed = ingress.receive(diagnostic("read-back"), registry=REGISTRY,
+                                   packet_id="read-back", hb_epoch=self.SUPPLIED)
+        self.assertEqual(replayed["failure_code"], "SOURCE_RECEIPT_IS_CLOCK_PROVENANCE")
+        self.assertIn("CARRIED:LEGACY_CLOCK_RECEIPT", replayed["required_evidence_or_repair"])
+        self.assertEqual(self.receipts("STEGVERSE_ORG_LEDGER_ROOT",
+                                       "stegverse.organization-transition-receipt/v1"), [])
+        self.assertEqual(self.receipts("STEGVERSE_REPO_LEDGER_ROOT",
+                                       "stegverse.repo-transition-receipt/v1"), [stamped])
+        self.assert_nothing_laundered(supplied=(self.SUPPLIED,))
+
+    def test_the_intr_destination_ingress_with_no_epoch_writes_nothing(self):
+        for call in (lambda: ingress.receive(diagnostic("no-epoch"), registry=REGISTRY,
+                                             packet_id="no-epoch"),
+                     lambda: ingress.self_close("no-epoch-closure", registry=REGISTRY)):
+            self.assertEqual(call()["failure_code"], "HB_EPOCH_NOT_SUPPLIED")
+        self.assertEqual(self.all_receipts(), [])
+
+    def test_the_intr_destination_ingress_carries_the_supplied_epoch_to_both_levels(self):
+        ingress.receive(diagnostic("supplied"), registry=REGISTRY, packet_id="supplied",
+                        hb_epoch=str(self.SUPPLIED))
+        ingress.receive(diagnostic("supplied"), registry=REGISTRY, packet_id="supplied",
+                        hb_epoch=self.SUPPLIED + 1)
+        repository, = self.receipts("STEGVERSE_REPO_LEDGER_ROOT",
+                                    "stegverse.repo-transition-receipt/v1")
+        organization, = self.receipts("STEGVERSE_ORG_LEDGER_ROOT",
+                                      "stegverse.organization-transition-receipt/v1")
+        self.assert_supplied_pair(repository, organization)
+
+    def test_the_capability_ingress_with_a_clock_carrier_writes_nothing(self):
+        self.publish(diagnostic("addressed-no-epoch"), ADDRESS, "addressed-no-epoch")
+        result, = self.consume()
+        operation = result["result"]["execution_result"]["application_result"][
+            "receiving_operation_result"]
+        self.assertEqual(operation["failure_code"], "HB_EPOCH_NOT_SUPPLIED")
+        self.assertEqual(self.all_receipts(), [])
+
+    def test_the_capability_ingress_records_at_the_inbound_frames_validated_epoch(self):
+        # B-P36g (1): a validated epoch on the inbound frame is the supplied one
+        # for the crossing, so the bound operation records at it.
+        packet = kernel.build_packet(
+            origin_org=PEER, origin_service=kernel.organization_slug(PEER) + "." + PROFILE_ID,
+            destination_org=THIS, destination_service=ADDRESS, payload=diagnostic("addressed-supplied"),
+            standing=STANDING, transition_reference="intr:transition:addressed-supplied",
+            authority_effect="NONE", packet_id="addressed-supplied")
+        kernel.publish_packet(packet, root=self.mesh, epoch=self.SUPPLIED)
+        result, = self.consume()
+        operation = result["result"]["execution_result"]["application_result"][
+            "receiving_operation_result"]
+        self.assertEqual(operation["disposition"], "ALLOW", operation)
+        repository, = self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")
+        organization, = self.receipts("STEGVERSE_ORG_LEDGER_ROOT",
+                                      "stegverse.organization-transition-receipt/v1")
+        self.assert_supplied_pair(repository, organization)
+        self.assert_nothing_laundered(supplied=(self.SUPPLIED,))
+
+    def test_the_egress_and_release_records_refuse_or_carry_the_supplied_epoch(self):
+        record = {"intended_action": "PROBE", "disposition": "ALLOW",
+                  "crossed_an_organization_boundary": False}
+        for name, writer in (("egress", egress), ("release", self.release)):
+            with self.subTest(writer=name):
+                with self.assertRaises(writer.repository_ledger.RepoLedgerEpochRefused):
+                    writer._record("t:" + name, "T", "sha256:" + "0" * 64,
+                                   "sha256:" + "1" * 64, record, None)
+                self.assertEqual(self.all_receipts(), [])
+        appended = egress._record("t:egress", "T", "sha256:" + "0" * 64, "sha256:" + "1" * 64,
+                                  record, self.SUPPLIED)
+        self.assert_supplied_pair(appended["repository_receipt"], appended["organization_receipt"])
+        self.assert_nothing_laundered(supplied=(self.SUPPLIED,))
+
+    def test_propagation_stamps_only_the_epoch_supplied_to_it(self):
+        writer = _module("repo_transition_emit_b_p36f", ".stegverse/transition-ledger/emit.py")
+        self.clock_stamped(writer)
+        stamped = writer.append("t:propagated", "T", "sha256:" + "0" * 64, "sha256:" + "1" * 64,
+                                hb_epoch=self.SUPPLIED)
+        self.assertIs(stamped["hb_reference"]["derived_from_clock"], True)
+        repository_root = Path(os.environ["STEGVERSE_REPO_LEDGER_ROOT"])
+        with self.assertRaises(self.propagation.organization_ledger.OrgLedgerEpochRefused):
+            self.propagation.propagate(THIS + "/.github", repository_root=repository_root)
+        self.assertEqual(self.receipts("STEGVERSE_ORG_LEDGER_ROOT",
+                                       "stegverse.organization-transition-receipt/v1"), [])
+        # B-P36h (O-1): a supplied epoch does not make a clock-provenance
+        # repository receipt consumable; it is refused and nothing is written.
+        with self.assertRaises(self.propagation.organization_ledger.OrgLedgerEpochRefused) as refused:
+            self.propagation.propagate(THIS + "/.github", repository_root=repository_root,
+                                       hb_epoch=self.SUPPLIED)
+        self.assertEqual(refused.exception.refusal["failure_code"], "SOURCE_RECEIPT_IS_CLOCK_PROVENANCE")
+        self.assertEqual(self.receipts("STEGVERSE_ORG_LEDGER_ROOT",
+                                       "stegverse.organization-transition-receipt/v1"), [])
+        self.assert_nothing_laundered(supplied=(self.SUPPLIED,))
+
+
+class CarriedClaimIsVerifiedTests(AddressedAndClosedTests):
+    """B-P36k: a carrier cannot self-assert CARRIED. A claim naming a head
+    that is not this organization's current verified ledger head is refused
+    six-field before dispatch, on every role, and nothing is written."""
+
+    SUPPLIED = 4096
+    CONTROL = "stegghost.org-control"
+    DIAGNOSTIC = "stegghost.boundary-diagnostic"
+
+    def carried(self, service, packet_id, head_sha, payload=None):
+        packet = kernel.build_packet(
+            origin_org=PEER, origin_service=kernel.organization_slug(PEER) + "." + PROFILE_ID,
+            destination_org=THIS, destination_service=service,
+            payload=payload or diagnostic(packet_id), standing=STANDING,
+            transition_reference="intr:transition:" + packet_id, authority_effect="NONE", packet_id=packet_id)
+        frame = kernel.carrier_frame(packet, epoch=self.SUPPLIED)
+        body = {key: value for key, value in frame.items() if key != "frame_sha256"}
+        body["heartbeat_reference"] = {**frame["heartbeat_reference"], "source": kernel.CARRIED_SOURCE,
+                                       "head_receipt_sha": head_sha}
+        frame = {**body, "frame_sha256": kernel.sha(body)}
+        kernel.publish_frame(frame, root=self.mesh)
+        return frame
+
+    def written(self):
+        found = set()
+        for variable in self.LEDGER_ROOTS:
+            root = Path(os.environ[variable])
+            if root.exists():
+                found |= {path for path in root.rglob("*") if path.is_file()}
+        inbox = ROOT / "resident-runtime/control/inbox"
+        if inbox.exists():
+            found |= {path for path in inbox.rglob("*") if path.is_file()}
+        return found
+
+    def test_a_forged_head_is_refused_on_every_route_and_writes_nothing(self):
+        forged = "sha256:" + "f" * 64
+        before = self.written()
+        for service in (ADDRESS, self.CONTROL, self.DIAGNOSTIC):
+            self.carried(service, "forged-" + service.split(".")[1], forged,
+                         payload={"message_class": "ecosystem.work.request", "communication_id": "forged-work"}
+                         if service == self.CONTROL else None)
+        results = self.consume()
+        self.assertEqual(len(results), 3)
+        for item in results:
+            result = item["result"]
+            self.assertEqual(result["status"], "REFUSED", result)
+            refusal = result["refusal"]
+            self.assertEqual(refusal["failure_code"], "CARRIED_PROVENANCE_UNVERIFIED")
+            for field in ("disposition", "failed_predicate", "required_evidence_or_repair",
+                          "retry_entrypoint", "owning_existing_goal", "next_attempt"):
+                self.assertIn(field, refusal)
+        self.assertEqual(self.written(), before)
+        self.assertEqual(self.frames_to(PEER), [])
+
+    def test_a_claim_naming_the_current_verified_head_is_admitted(self):
+        ingress.receive(diagnostic("seed-head"), registry=REGISTRY, packet_id="seed-head",
+                        hb_epoch=self.SUPPLIED)
+        head = json.loads((Path(os.environ["STEGVERSE_ORG_LEDGER_ROOT"]) / "HEAD.json").read_text())
+        self.carried(ADDRESS, "carried-verified", head["receipt_sha256"])
+        result, = self.consume()
+        self.assertEqual(result["result"]["status"], "CONSUMED", result["result"])
+        operation = result["result"]["execution_result"]["application_result"]["receiving_operation_result"]
+        self.assertEqual(operation["disposition"], "ALLOW", operation)
+        # B-P36m: both receipts for the crossing read CARRIED, never a bare
+        # supplied stamp: source and head_receipt_sha travel with the epoch.
+        repository = [r for r in self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")
+                      if r["transition_id"].endswith(":carried-verified")]
+        organization = [r for r in self.receipts("STEGVERSE_ORG_LEDGER_ROOT",
+                                                 "stegverse.organization-transition-receipt/v1")
+                        if r["source_transition_id"].endswith(":carried-verified")]
+        self.assertEqual((len(repository), len(organization)), (1, 1))
+        for record in repository + organization:
+            reference = record["hb_reference"]
+            self.assertEqual(reference["epoch"], self.SUPPLIED)
+            self.assertIs(reference["derived_from_clock"], False)
+            self.assertEqual(reference["source"], "ORGANIZATION_LEDGER_HEAD")
+            self.assertEqual(reference["head_receipt_sha"], head["receipt_sha256"])
+            self.assertNotIn("sampled_unix_ns", reference)
+
+
+class LedgerWriteFaultIsNonTerminalTests(AddressedAndClosedTests):
+    """F-TRANSIENT-RT: a lost compare-and-swap (or any store fault) on either
+    append is this repository's fault, not the frame's. It surfaces as the
+    dedicated writer exception with a six-field, terminal-false refusal; nothing
+    partial is published at that level, and a retry records the transition once."""
+
+    SUPPLIED = 4096
+
+    def inject(self, store_class, method):
+        original = getattr(store_class, method)
+        calls = []
+
+        def lost(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("ledger_append_lost_comparison")
+            return original(*args, **kwargs)
+        setattr(store_class, method, lost)
+        self.addCleanup(setattr, store_class, method, original)
+
+    def assert_pair(self, repo_count, org_count):
+        self.assertEqual(len(self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")),
+                         repo_count)
+        self.assertEqual(len(self.receipts("STEGVERSE_ORG_LEDGER_ROOT",
+                                           "stegverse.organization-transition-receipt/v1")), org_count)
+
+    def test_a_lost_comparison_on_either_append_is_non_terminal_and_retried_once(self):
+        import sys
+        org_store = sys.modules[ingress.organization_ledger.open_store.__module__].PosixLedgerStore
+        repo_store = ingress.repository_ledger.ledger_store.PosixLedgerStore
+        for name, (store_class, method), after_fault in (
+                ("repository", (repo_store, "put"), (0, 0)),
+                ("organization", (org_store, "append_transaction"), (1, 0))):
+            with self.subTest(append=name):
+                packet_id = "lost-comparison-" + name
+                self.inject(store_class, method)
+                with self.assertRaises(RuntimeError) as raised:
+                    ingress.receive(diagnostic(packet_id), registry=REGISTRY, packet_id=packet_id,
+                                    hb_epoch=self.SUPPLIED)
+                fault = kernel.write_failure(raised.exception)
+                self.assertIsNotNone(fault)
+                self.assertIs(fault.refusal["terminal"], False)
+                self.assertEqual(fault.refusal["failed_predicate"], "RuntimeError")
+                for field in ("disposition", "failure_code", "required_evidence_or_repair",
+                              "retry_entrypoint", "owning_existing_goal", "next_attempt"):
+                    self.assertIn(field, fault.refusal)
+                before = (len(self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")),
+                          len(self.receipts("STEGVERSE_ORG_LEDGER_ROOT", "stegverse.organization-transition-receipt/v1")))
+                retried = ingress.receive(diagnostic(packet_id), registry=REGISTRY, packet_id=packet_id,
+                                          hb_epoch=self.SUPPLIED)
+                self.assertEqual(retried["disposition"], "ALLOW", retried)
+                again = ingress.receive(diagnostic(packet_id), registry=REGISTRY, packet_id=packet_id,
+                                        hb_epoch=self.SUPPLIED)
+                self.assertIs(again["transition_replayed"], True)
+                after = (len(self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")),
+                         len(self.receipts("STEGVERSE_ORG_LEDGER_ROOT", "stegverse.organization-transition-receipt/v1")))
+                self.assertEqual((after[0] - before[0] + after_fault[0], after[1] - before[1] + after_fault[1]), (1, 1))
+
+
+class FailedHeadPublishDoesNotWedgeTests(AddressedAndClosedTests):
+    """VALIDATOR @7a12ee6 row 1: an OSError at the org HEAD publish (os.replace
+    call #5 of one intr-destination append) must not wedge the ledger. The
+    transaction rolls back what it wrote; if residue survives, the next append
+    adopts a complete, recomputing receipt that chains to HEAD."""
+
+    SUPPLIED = 4096
+
+    def fail_replace_call(self, number):
+        original = os.replace
+        calls = []
+
+        def replace(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == number:
+                raise OSError(5, "Input/output error")
+            return original(*args, **kwargs)
+        os.replace = replace
+        return lambda: setattr(os, "replace", original)
+
+    def org_receipts(self):
+        return self.receipts("STEGVERSE_ORG_LEDGER_ROOT", "stegverse.organization-transition-receipt/v1")
+
+    def test_a_packet_id_collision_is_refused_six_field_and_writes_nothing(self):
+        ingress.receive(diagnostic("collision-a"), registry=REGISTRY, packet_id="collision", hb_epoch=self.SUPPLIED)
+        before = (self.org_receipts(), self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1"))
+        collided = ingress.receive(diagnostic("collision-b"), registry=REGISTRY, packet_id="collision",
+                                   hb_epoch=self.SUPPLIED)
+        self.assertEqual((collided["disposition"], collided["failure_code"]), ("FAIL_CLOSED", "LEDGER_RECEIPT_COLLISION"))
+        for field in ("failed_predicate", "required_evidence_or_repair", "retry_entrypoint",
+                      "owning_existing_goal", "next_attempt"):
+            self.assertIn(field, collided)
+        self.assertEqual((self.org_receipts(),
+                          self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")), before)
+
+    def run_case(self, packet_id, keep_residue):
+        import sys
+        store_class = sys.modules[ingress.organization_ledger.open_store.__module__].PosixLedgerStore
+        if keep_residue:
+            original_discard = store_class.discard_unpublished
+            store_class.discard_unpublished = lambda self, key: None
+        restore = self.fail_replace_call(5)
+        try:
+            with self.assertRaises(RuntimeError) as raised:
+                ingress.receive(diagnostic(packet_id), registry=REGISTRY, packet_id=packet_id,
+                                hb_epoch=self.SUPPLIED)
+        finally:
+            restore()
+            if keep_residue:
+                store_class.discard_unpublished = original_discard
+        self.assertIsNotNone(kernel.write_failure(raised.exception))
+        for _cycle in range(2):
+            result = ingress.receive(diagnostic(packet_id), registry=REGISTRY, packet_id=packet_id,
+                                     hb_epoch=self.SUPPLIED)
+            self.assertEqual(result["disposition"], "ALLOW", result)
+        organization = [r for r in self.org_receipts() if r["source_transition_id"].endswith(":" + packet_id)]
+        self.assertEqual(len(organization), 1)
+        head = json.loads((Path(os.environ["STEGVERSE_ORG_LEDGER_ROOT"]) / "HEAD.json").read_text())
+        self.assertEqual(head["receipt_sha256"], organization[0]["receipt_sha256"])
+
+    def test_an_io_fault_at_every_write_step_completes_exactly_once(self):
+        # B-P36q / torn writes: an OSError at each os.replace (5) and fsync (10)
+        # of one intr-destination append, repository and organization levels.
+        # The attempt is a non-terminal writer fault; the next cycle records
+        # exactly one receipt per level with both HEADs consistent; a later
+        # frame is unaffected.
+        for function, count in (("replace", 5), ("fsync", 10)):
+            for number in range(1, count + 1):
+                with self.subTest(fault=function + "#" + str(number)):
+                    work = Path(tempfile.mkdtemp(dir=self._work.name))
+                    os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(work / "repo")
+                    os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(work / "org")
+                    original = getattr(os, function)
+                    calls = []
+
+                    def faulty(*args, _original=original, _calls=calls, _number=number, **kwargs):
+                        _calls.append(1)
+                        if len(_calls) == _number:
+                            raise OSError(5, "Input/output error")
+                        return _original(*args, **kwargs)
+                    setattr(os, function, faulty)
+                    try:
+                        try:
+                            ingress.receive(diagnostic("torn"), registry=REGISTRY, packet_id="torn",
+                                            hb_epoch=self.SUPPLIED)
+                        except RuntimeError as error:
+                            self.assertIsNotNone(kernel.write_failure(error))
+                    finally:
+                        setattr(os, function, original)
+                    for _cycle in range(2):
+                        result = ingress.receive(diagnostic("torn"), registry=REGISTRY, packet_id="torn",
+                                                 hb_epoch=self.SUPPLIED)
+                        self.assertEqual(result["disposition"], "ALLOW", result)
+                    later = ingress.receive(diagnostic("later"), registry=REGISTRY, packet_id="later",
+                                            hb_epoch=self.SUPPLIED)
+                    self.assertEqual(later["disposition"], "ALLOW", later)
+                    repository = self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")
+                    organization = self.org_receipts()
+                    for packet in ("torn", "later"):
+                        self.assertEqual(len([r for r in repository if r["transition_id"].endswith(":" + packet)]), 1)
+                        self.assertEqual(len([r for r in organization
+                                              if r["source_transition_id"].endswith(":" + packet)]), 1)
+                    org_head = json.loads((work / "org" / "HEAD.json").read_text())["receipt_sha256"]
+                    repo_head = json.loads((work / "repo" / "HEAD.json").read_text())["receipt_sha256"]
+                    later_org, = [r for r in organization if r["source_transition_id"].endswith(":later")]
+                    later_repo, = [r for r in repository if r["transition_id"].endswith(":later")]
+                    self.assertEqual((org_head, repo_head), (later_org["receipt_sha256"], later_repo["receipt_sha256"]))
+
+    def test_the_egress_and_release_records_resume_after_a_torn_write(self):
+        # B-P36q: egress._record and release._record append repository then
+        # organization. A fault at the org HEAD publish (os.replace #5) leaves
+        # the repository receipt; the retry returns it and completes the pair
+        # once, with no second repository receipt.
+        release = _module("release_organization_batch_b_p36q", "resident-runtime/release_organization_batch.py")
+        record = {"intended_action": "PROBE", "disposition": "ALLOW", "crossed_an_organization_boundary": False}
+        for name, writer in (("egress", egress), ("release", release)):
+            with self.subTest(writer=name):
+                transition = "t:torn-" + name
+                restore = self.fail_replace_call(5)
+                try:
+                    with self.assertRaises(RuntimeError) as raised:
+                        writer._record(transition, "T", "sha256:" + "0" * 64, "sha256:" + "1" * 64,
+                                       record, self.SUPPLIED)
+                finally:
+                    restore()
+                self.assertIsNotNone(kernel.write_failure(raised.exception))
+                first = writer._record(transition, "T", "sha256:" + "0" * 64, "sha256:" + "1" * 64,
+                                       record, self.SUPPLIED)
+                again = writer._record(transition, "T", "sha256:" + "0" * 64, "sha256:" + "1" * 64,
+                                       record, self.SUPPLIED)
+                self.assertEqual(first, again)
+                repository = [r for r in self.receipts("STEGVERSE_REPO_LEDGER_ROOT",
+                                                       "stegverse.repo-transition-receipt/v1")
+                              if r["transition_id"] == transition]
+                organization = [r for r in self.org_receipts() if r["source_transition_id"] == transition]
+                self.assertEqual((len(repository), len(organization)), (1, 1))
+
+    def test_egress_emit_returns_its_own_write_fault_six_field(self):
+        # F-WRITER-TRACE: egress.emit faulting on its own write (each of its
+        # five os.replace points) returns the non-terminal six-field record, not
+        # a raised OSError; the next call emits once.
+        for number in range(1, 6):
+            with self.subTest(replace=number):
+                work = Path(tempfile.mkdtemp(dir=self._work.name))
+                os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(work / "repo")
+                os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(work / "org")
+                mesh = work / "mesh"
+                restore = self.fail_replace_call(number)
+                try:
+                    faulted = egress.emit(PEER, diagnostic("writer-trace"), standing=STANDING,
+                                          capability=PROFILE_ID, mesh_root=mesh, hb_epoch=self.SUPPLIED)
+                finally:
+                    restore()
+                self.assertEqual(faulted["disposition"], "FAIL_CLOSED", faulted)
+                self.assertIs(faulted["terminal"], False)
+                for field in ("failure_code", "failed_predicate", "required_evidence_or_repair",
+                              "retry_entrypoint", "owning_existing_goal", "next_attempt"):
+                    self.assertIn(field, faulted)
+                done = egress.emit(PEER, diagnostic("writer-trace"), standing=STANDING,
+                                   capability=PROFILE_ID, mesh_root=mesh, hb_epoch=self.SUPPLIED)
+                self.assertEqual(done["disposition"], "ALLOW", done)
+
+    def test_re_emitting_a_recorded_packet_is_a_no_op_or_a_six_field_collision(self):
+        # V-P11 @bbd81b6: a re-emit is checked against this chain before
+        # anything is published, and never publishes then raises.
+        mesh = Path(tempfile.mkdtemp(dir=self._work.name))
+        first = egress.emit(PEER, diagnostic("re-emit"), standing=STANDING, capability=PROFILE_ID,
+                            mesh_root=mesh, hb_epoch=self.SUPPLIED)
+        # A byte-identical re-emit (the recorded epoch) is an idempotent no-op.
+        same = egress.emit(PEER, diagnostic("re-emit"), standing=STANDING, capability=PROFILE_ID,
+                           mesh_root=mesh, hb_epoch=self.SUPPLIED)
+        self.assertEqual((first["disposition"], same["disposition"]), ("ALLOW", "ALLOW"), same)
+        self.assertIs(same["emission_replayed"], True)
+        self.assertEqual(same["emission_repository_receipt_sha256"], first["emission_repository_receipt_sha256"])
+        self.assertEqual(same["emission_organization_receipt_sha256"], first["emission_organization_receipt_sha256"])
+        # A different-content re-emit (4096 then 5000) is refused six-field;
+        # nothing is published.
+        again = egress.emit(PEER, diagnostic("re-emit"), standing=STANDING, capability=PROFILE_ID,
+                            mesh_root=mesh, hb_epoch=5000)
+        self.assertEqual((again["disposition"], again["failure_code"]), ("FAIL_CLOSED", "EMISSION_REPLAY_COLLISION"))
+        for field in ("failed_predicate", "required_evidence_or_repair", "retry_entrypoint",
+                      "owning_existing_goal", "next_attempt"):
+            self.assertIn(field, again)
+        self.assertIs(again["emitted"], False)
+        self.assertEqual(len(list((mesh / "frames.d").glob("*.json"))), 1)
+        repository = [r for r in self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")
+                      if r["transition_id"] == egress.EMITTED_CLASS + ":" + first["packet_id"]]
+        self.assertEqual(len(repository), 1)
+        match = egress.request_bilateral_match(PEER, "some-packet", standing=STANDING, mesh_root=mesh,
+                                               hb_epoch=self.SUPPLIED)
+        rematch = egress.request_bilateral_match(PEER, "some-packet", standing=STANDING, mesh_root=mesh,
+                                                 hb_epoch=5000)
+        self.assertEqual((match["disposition"], rematch["failure_code"]), ("ALLOW", "EMISSION_REPLAY_COLLISION"))
+        self.assertEqual(len(list((mesh / "frames.d").glob("*.json"))), 2)
+
+    def faulting(self, function, number):
+        original = getattr(os, function)
+        calls = []
+
+        def faulty(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == number:
+                raise OSError(5, "Input/output error")
+            return original(*args, **kwargs)
+        setattr(os, function, faulty)
+        return lambda: setattr(os, function, original)
+
+    def fresh_ledgers(self):
+        work = Path(tempfile.mkdtemp(dir=self._work.name))
+        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(work / "repo")
+        os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(work / "org")
+        return work
+
+    def test_release_and_submit_completes_exactly_once_across_faults_and_repeats(self):
+        # V-P11 @5bc61ff: a fault at any os.replace (10) or fsync (20) of
+        # release --standing, then a retry and a repeated call, leaves exactly
+        # one release and one submission outcome. A repeated call releases
+        # nothing: the release's own receipts are not a new segment.
+        import io, contextlib
+        release = _module("release_organization_batch_v_p11", "resident-runtime/release_organization_batch.py")
+        emitter = _module("emit_v_p11", ".stegverse/transition-ledger/emit.py")
+        zero, one = "sha256:" + "0" * 64, "sha256:" + "1" * 64
+        for function, count in (("replace", 10), ("fsync", 20)):
+            for number in range(1, count + 1):
+                with self.subTest(fault=function + "#" + str(number)):
+                    self.fresh_ledgers()
+                    seed = emitter.append("seed:1", "T", zero, one, hb_epoch=self.SUPPLIED)
+                    release.organization_ledger.append(seed, "REPO_STATE_PROPAGATION", zero, one, {}, "NONE",
+                                                       hb_epoch=self.SUPPLIED)
+                    restore = self.faulting(function, number)
+                    try:
+                        release.release_and_submit(standing=STANDING, hb_epoch=self.SUPPLIED)
+                    except RuntimeError as error:
+                        self.assertIsNotNone(kernel.write_failure(error))
+                    finally:
+                        restore()
+                    release.release_and_submit(standing=STANDING, hb_epoch=self.SUPPLIED)
+                    repeated = release.release_and_submit(standing=STANDING, hb_epoch=self.SUPPLIED)
+                    self.assertIs(repeated["release"]["released"], False)
+                    self.assertIsNone(repeated["submission"])
+                    classes = [r["transition_class"] for r in self.receipts(
+                        "STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")]
+                    self.assertEqual(classes.count(release.RELEASE_CLASS), 1, classes)
+                    self.assertEqual(classes.count(release.SUBMIT_REFUSED_CLASS), 1, classes)
+
+    def test_a_writer_cli_fault_after_head_is_replaced_does_not_duplicate_on_retry(self):
+        # V-P11 @5bc61ff: emit.py and aggregate_repo_transition.py faulting at
+        # each fsync/replace print one record per run, and a retry of a failed
+        # run leaves exactly one receipt (a fault after HEAD's replace is
+        # committed, not reported as a failure to retry).
+        import io, contextlib, sys
+        emitter = _module("emit_cli_v_p11", ".stegverse/transition-ledger/emit.py")
+        aggregate = _module("aggregate_cli_v_p11", "resident-runtime/aggregate_repo_transition.py")
+        zero, one = "sha256:" + "0" * 64, "sha256:" + "1" * 64
+        for name, module in (("emit", emitter), ("aggregate", aggregate)):
+            for function in ("replace", "fsync"):
+                for number in range(1, 9):
+                    with self.subTest(cli=name, fault=function + "#" + str(number)):
+                        work = self.fresh_ledgers()
+                        if name == "emit":
+                            argv = ["emit", "--transition-id", "x:1", "--transition-class", "T",
+                                    "--predecessor-state-sha256", zero, "--successor-state-sha256", one,
+                                    "--hb-epoch", str(self.SUPPLIED)]
+                            ledger = work / "repo"
+                        else:
+                            seed = emitter.append("seed:1", "T", zero, one, hb_epoch=self.SUPPLIED)
+                            (work / "seed.json").write_text(json.dumps(seed))
+                            argv = ["aggregate", "--repo-receipt", str(work / "seed.json"),
+                                    "--predecessor-org-state-sha256", zero, "--successor-org-state-sha256", one,
+                                    "--hb-epoch", str(self.SUPPLIED)]
+                            ledger = work / "org"
+
+                        def run():
+                            saved, sys.argv = sys.argv, argv
+                            out = io.StringIO()
+                            try:
+                                with contextlib.redirect_stdout(out):
+                                    try:
+                                        code = module.main()
+                                    except SystemExit as exited:
+                                        code = exited.code
+                            finally:
+                                sys.argv = saved
+                            return code, out.getvalue()
+                        restore = self.faulting(function, number)
+                        try:
+                            code, printed = run()
+                        finally:
+                            restore()
+                        self.assertLessEqual(printed.count('"failure_code"'), 1, printed)
+                        if code not in (0, None):
+                            code, _ = run()
+                            self.assertIn(code, (0, None))
+                        self.assertEqual(len(list((ledger / "receipts").glob("*.json"))), 1)
+
+    def test_a_re_emit_after_a_faulted_record_publishes_no_second_frame(self):
+        # V-P11 @7f3012b row 2: the frame is published, then the emission
+        # record faults (each replace and fsync of emit and of
+        # request_bilateral_match). A re-emit at another epoch finds the frame
+        # on the mesh: exactly 1 frame and 1 EMITTED receipt, and the re-emit is
+        # the six-field EMISSION_REPLAY_COLLISION. A byte-identical re-emit
+        # completes the record instead.
+        calls = {
+            "emit": lambda epoch, mesh: egress.emit(PEER, diagnostic("faulted-record"), standing=STANDING,
+                                                    capability=PROFILE_ID, mesh_root=mesh, hb_epoch=epoch),
+            "bilateral": lambda epoch, mesh: egress.request_bilateral_match(PEER, "faulted-packet", standing=STANDING,
+                                                                            mesh_root=mesh, hb_epoch=epoch),
+        }
+        for name, call in calls.items():
+            for function, count in (("replace", 6), ("fsync", 12)):
+                for number in range(1, count + 1):
+                    for second in (5000, self.SUPPLIED):
+                        with self.subTest(call=name, fault=function + "#" + str(number), re_emit=second):
+                            work = self.fresh_ledgers()
+                            mesh = work / "mesh"
+                            restore = self.faulting(function, number)
+                            try:
+                                first = call(self.SUPPLIED, mesh)
+                            finally:
+                                restore()
+                            frames_d = mesh / "frames.d"
+                            published = frames_d.exists() and any(frames_d.glob("*.json"))
+                            again = call(second, mesh)
+                            frames = list((mesh / "frames.d").glob("*.json")) if (mesh / "frames.d").exists() else []
+                            emitted = [r for r in self.receipts("STEGVERSE_REPO_LEDGER_ROOT",
+                                                                "stegverse.repo-transition-receipt/v1")
+                                       if r["transition_class"] == egress.EMITTED_CLASS]
+                            self.assertEqual(len(frames), 1, (first, again))
+                            self.assertEqual(len(emitted), 1, (first, again))
+                            if second == self.SUPPLIED or not published:
+                                # Byte-identical: the record is completed. Or the
+                                # fault came before the frame: a fresh emit.
+                                self.assertEqual(again["disposition"], "ALLOW", again)
+                            else:
+                                self.assertEqual(again.get("failure_code"), "EMISSION_REPLAY_COLLISION", again)
+                                self.assertIs(again["emitted"], False)
+
+    def test_an_unverified_frame_claiming_our_packet_id_is_refused_and_binds_nothing(self):
+        # V-P11 @be39f2f EGRESS_ON_MESH_FRAME_UNVERIFIED: a frames.d frame that
+        # claims our packet id binds only if it is this packet's own frame.
+        # Malformed, tampered (claimed digest kept) and re-hashed forgeries are
+        # each refused six-field, with nothing published or recorded and no
+        # traceback.
+        import base64, hashlib
+        probe_work = self.fresh_ledgers()
+        genuine = egress.emit(PEER, diagnostic("on-mesh-forgery"), standing=STANDING, capability=PROFILE_ID,
+                              mesh_root=probe_work / "mesh", hb_epoch=self.SUPPLIED)
+        self.assertEqual(genuine["disposition"], "ALLOW", genuine)
+        own = json.loads(next((probe_work / "mesh" / "frames.d").glob("*.json")).read_text())
+        packet_id = genuine["packet_id"]
+        tampered = {**own, "origin_org": "Mallory-org",
+                    "packet_base64": base64.b64encode(b'{"packet_id": "x"}').decode("ascii")}
+        rehashed = {k: v for k, v in tampered.items() if k != "frame_sha256"}
+        rehashed["frame_sha256"] = kernel.sha(rehashed)
+        # A digest-correct forgery: our packet re-encoded with another origin and
+        # payload, packet_sha256, packet_base64 and frame_sha256 all recomputed.
+        forged_packet = {**json.loads(base64.b64decode(own["packet_base64"])),
+                         "payload": {"forged": True}}
+        forged_packet["origin"] = {**forged_packet["origin"], "org": "Mallory-org"}
+        consistent = kernel.carrier_frame(forged_packet, epoch=self.SUPPLIED)
+        self.assertEqual(consistent["packet_id"], packet_id)
+        kernel.recover_packet(consistent)
+        forgeries = {
+            "digest_correct_content_swapped": consistent,
+            "malformed": {"packet_id": packet_id, "origin_org": "Mallory-org", "frame_sha256": "sha256:" + "f" * 64,
+                          "packet_base64": "AAAA", "heartbeat_reference": {"epoch": 99}},
+            "tampered_claimed_digest_kept": tampered,
+            "rehashed": rehashed,
+        }
+        for name, forged in forgeries.items():
+            with self.subTest(forgery=name):
+                work = self.fresh_ledgers()
+                frames = work / "mesh" / "frames.d"
+                frames.mkdir(parents=True)
+                (frames / (hashlib.sha256(name.encode()).hexdigest() + ".json")).write_text(json.dumps(forged))
+                refused = egress.emit(PEER, diagnostic("on-mesh-forgery"), standing=STANDING, capability=PROFILE_ID,
+                                      mesh_root=work / "mesh", hb_epoch=self.SUPPLIED)
+                self.assertEqual((refused["disposition"], refused["failure_code"]),
+                                 ("FAIL_CLOSED", "EMISSION_FRAME_UNVERIFIED"), refused)
+                self.assertIs(refused["emitted"], False)
+                for field in ("failed_predicate", "required_evidence_or_repair", "retry_entrypoint",
+                              "owning_existing_goal", "next_attempt"):
+                    self.assertIn(field, refused)
+                self.assertEqual(len(list(frames.glob("*.json"))), 1)
+                self.assertEqual(self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1"), [])
+
+    def test_a_deeply_nested_frames_d_entry_is_skipped_and_emit_proceeds(self):
+        # F-SCAN-RECURSION: one deep frames.d file (RecursionError on decode)
+        # claims nothing; emit and request_bilateral_match proceed normally.
+        work = self.fresh_ledgers()
+        frames = work / "mesh" / "frames.d"
+        frames.mkdir(parents=True)
+        (frames / "0000-deep.json").write_text('{"a":' + "[" * 200000)
+        emitted = egress.emit(PEER, diagnostic("deep-neighbour"), standing=STANDING, capability=PROFILE_ID,
+                              mesh_root=work / "mesh", hb_epoch=self.SUPPLIED)
+        self.assertEqual(emitted["disposition"], "ALLOW", emitted)
+        match = egress.request_bilateral_match(PEER, "deep-neighbour-packet", standing=STANDING,
+                                               mesh_root=work / "mesh", hb_epoch=self.SUPPLIED)
+        self.assertEqual(match["disposition"], "ALLOW", match)
+        self.assertEqual(len(list(frames.glob("*.json"))), 3)
+
+    # ------------------------------------------- lead ruling 09:44Z on the batch chain
+
+    def release_modules(self, tag):
+        release = _module("release_organization_batch_" + tag, "resident-runtime/release_organization_batch.py")
+        emitter = _module("emit_" + tag, ".stegverse/transition-ledger/emit.py")
+        return release, emitter
+
+    def seed_transition(self, release, emitter, name):
+        zero, one = "sha256:" + "0" * 64, "sha256:" + "1" * 64
+        seed = emitter.append(name, "T", zero, one, hb_epoch=self.SUPPLIED)
+        release.organization_ledger.append(seed, "REPO_STATE_PROPAGATION", zero, one, {}, "NONE",
+                                           hb_epoch=self.SUPPLIED)
+
+    def release_classes(self, release):
+        return [r["transition_class"] for r in self.receipts("STEGVERSE_REPO_LEDGER_ROOT",
+                                                             "stegverse.repo-transition-receipt/v1")
+                ].count(release.RELEASE_CLASS)
+
+    def test_release_predecessor_carries_the_prior_release_receipt_digest(self):
+        # Condition 2: the next batch names the prior release's own receipt
+        # digest; it resolves in the ledger and recomputes. Condition 1: the
+        # prior release receipt stays on the chain, excluded from the payload.
+        release, emitter = self.release_modules("ruling_c2")
+        self.fresh_ledgers()
+        self.seed_transition(release, emitter, "c2:1")
+        first = release.release(hb_epoch=self.SUPPLIED)
+        self.assertIsNone(first["release_record"]["release_predecessor_receipt_sha256"])
+        self.seed_transition(release, emitter, "c2:2")
+        second = release.release(hb_epoch=self.SUPPLIED)
+        record = second["release_record"]
+        self.assertEqual(record["release_predecessor_receipt_sha256"], first["release_organization_receipt_sha256"])
+        self.assertEqual(record["release_predecessor"], first["batch_sha256"])
+        self.assertNotIn(first["release_organization_receipt_sha256"], record["released_organization_receipts"])
+        self.assertIn(first["release_organization_receipt_sha256"],
+                      [r["receipt_sha256"] for r in release.organization_chain()])
+        self.assertIsNone(release.release_predecessor_refusal(record))
+
+    def refused_release(self, release, segment):
+        genuine = release.verified_segment
+        release.verified_segment = lambda: segment
+        try:
+            return release.release(hb_epoch=self.SUPPLIED)
+        finally:
+            release.verified_segment = genuine
+
+    def assert_predecessor_refusal(self, refused, code):
+        self.assertEqual((refused["disposition"], refused["failure_code"]), ("FAIL_CLOSED", code), refused)
+        self.assertIs(refused["terminal"], False)
+        self.assertIs(refused["released"], False)
+        self.assertIn("after ledger repair", refused["retry_entrypoint"])
+        for field in ("failed_predicate", "required_evidence_or_repair", "retry_entrypoint",
+                      "owning_existing_goal", "next_attempt"):
+            self.assertIn(field, refused)
+
+    def test_a_release_whose_predecessor_does_not_resolve_is_refused_six_field(self):
+        # Condition 3: RELEASE_PREDECESSOR_UNRESOLVED, non-terminal, nothing written.
+        release, emitter = self.release_modules("ruling_c3_unresolved")
+        self.fresh_ledgers()
+        self.seed_transition(release, emitter, "c3u:1")
+        release.release(hb_epoch=self.SUPPLIED)
+        self.seed_transition(release, emitter, "c3u:2")
+        segment = dict(release.verified_segment(), release_predecessor_receipt_sha256="sha256:" + "f" * 64)
+        refused = self.refused_release(release, segment)
+        self.assert_predecessor_refusal(refused, "RELEASE_PREDECESSOR_UNRESOLVED")
+        self.assertEqual(self.release_classes(release), 1)
+
+    def test_a_release_whose_predecessor_does_not_recompute_is_refused_six_field(self):
+        # Condition 3: RELEASE_PREDECESSOR_DIGEST_MISMATCH, non-terminal, nothing written.
+        release, emitter = self.release_modules("ruling_c3_mismatch")
+        work = self.fresh_ledgers()
+        self.seed_transition(release, emitter, "c3m:1")
+        first = release.release(hb_epoch=self.SUPPLIED)
+        self.seed_transition(release, emitter, "c3m:2")
+        segment = release.verified_segment()
+        digest = first["release_organization_receipt_sha256"]
+        path = work / "org" / "receipts" / (digest.split(":", 1)[1] + ".json")
+        tampered = {**json.loads(path.read_text()), "authority_effect": "TAMPERED"}
+        path.write_text(json.dumps(tampered))
+        refused = self.refused_release(release, segment)
+        self.assert_predecessor_refusal(refused, "RELEASE_PREDECESSOR_DIGEST_MISMATCH")
+        self.assertEqual(self.release_classes(release), 1)
+
+    def test_a_deleted_or_tampered_prior_release_receipt_is_refused_six_field(self):
+        # C3: a chain that does not verify -- the prior release receipt really
+        # deleted, or tampered with -- is RELEASE_PREDECESSOR_RECEIPT_UNVERIFIED,
+        # six-field and non-terminal, with nothing written; never a bare DENY.
+        for damage in ("deleted", "tampered"):
+            with self.subTest(damage=damage):
+                release, emitter = self.release_modules("c3_chain_" + damage)
+                work = self.fresh_ledgers()
+                self.seed_transition(release, emitter, "c3c:1")
+                first = release.release(hb_epoch=self.SUPPLIED)
+                self.seed_transition(release, emitter, "c3c:2")
+                path = work / "org" / "receipts" / (first["release_organization_receipt_sha256"].split(":", 1)[1] + ".json")
+                if damage == "deleted":
+                    path.unlink()
+                else:
+                    path.write_text(json.dumps({**json.loads(path.read_text()), "authority_effect": "TAMPERED"}))
+                refused = release.release(hb_epoch=self.SUPPLIED)
+                self.assert_predecessor_refusal(refused, "RELEASE_PREDECESSOR_RECEIPT_UNVERIFIED")
+                self.assertEqual(self.release_classes(release), 1)
+
+    def test_a_callers_custody_prefixed_communication_is_still_released(self):
+        # V-P11 @35c7cec deferral CUSTODY_PREFIX_USER_COMMUNICATION_NEVER_RELEASED:
+        # only the exact custody id of a recorded release is bookkeeping.
+        release, emitter = self.release_modules("custody_prefix")
+        work = self.fresh_ledgers()
+        emitted = egress.emit(PEER, diagnostic("custody-a-callers-own-thread"), standing=STANDING,
+                              capability=PROFILE_ID, mesh_root=work / "mesh", hb_epoch=self.SUPPLIED)
+        self.assertEqual(emitted["disposition"], "ALLOW", emitted)
+        segment = release.verified_segment()
+        self.assertEqual(segment["segment_length"], 1, segment)
+        self.assertEqual(segment["release_bookkeeping_receipts"], 0)
+
+    def test_a_failed_directory_fsync_is_recorded_as_evidence_not_a_failure(self):
+        # Lead ruling: the replace is the commit; a failed directory fsync after
+        # it is one non-terminal evidence line, the append returns once.
+        import contextlib, io
+        release, emitter = self.release_modules("dir_fsync")
+        self.fresh_ledgers()
+        store_class = emitter.ledger_store.PosixLedgerStore
+        original = store_class.__dict__["_sync_directory"]
+
+        def failing(directory):
+            raise OSError(5, "Input/output error")
+        store_class._sync_directory = staticmethod(failing)
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err):
+                receipt = emitter.append("fsync:1", "T", "sha256:" + "0" * 64, "sha256:" + "1" * 64,
+                                         hb_epoch=self.SUPPLIED)
+        finally:
+            store_class._sync_directory = original
+        lines = [json.loads(line) for line in err.getvalue().splitlines() if line.strip()]
+        self.assertTrue(lines)
+        for line in lines:
+            self.assertEqual(line["failed_step"], "DIRECTORY_FSYNC_AFTER_REPLACE")
+            self.assertIs(line["write_committed"], True)
+            self.assertIs(line["terminal"], False)
+        repository = self.receipts("STEGVERSE_REPO_LEDGER_ROOT", "stegverse.repo-transition-receipt/v1")
+        self.assertEqual([r["receipt_sha256"] for r in repository], [receipt["receipt_sha256"]])
+
+    def test_a_failed_org_head_publish_rolls_back_and_the_next_cycle_appends_once(self):
+        self.run_case("head-publish-rollback", keep_residue=False)
+
+    def test_residue_of_a_failed_publish_is_adopted_by_the_next_append(self):
+        self.run_case("head-publish-adopted", keep_residue=True)
 
 
 def subprocess_git(args):

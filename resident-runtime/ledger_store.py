@@ -34,6 +34,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 from contextlib import contextmanager
@@ -220,7 +221,22 @@ class PosixLedgerStore:
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temp, path)
-            self._sync_directory(path.parent)
+            # The replace is the commit: once it returns, every reader sees the
+            # document. A fault syncing the directory afterwards does not undo
+            # it, so it is not reported as a failed write a retry would append
+            # again (V-P11 @5bc61ff). Durability of the rename is best effort.
+            # The document is content-addressed and already written, so the
+            # failure cannot sit in its own evidence; it is recorded as
+            # evidence of this run instead -- on the store and as one
+            # non-terminal line on stderr -- never as a write failure.
+            try:
+                self._sync_directory(path.parent)
+            except OSError as error:
+                self.durability_unconfirmed = [*getattr(self, "durability_unconfirmed", []), key]
+                sys.stderr.write(json.dumps({
+                    "durability_unconfirmed": key, "failed_step": "DIRECTORY_FSYNC_AFTER_REPLACE",
+                    "detail": type(error).__name__ + ": " + str(error),
+                    "write_committed": True, "terminal": False}, sort_keys=True) + "\n")
         finally:
             if os.path.exists(temp):
                 os.unlink(temp)
@@ -298,10 +314,34 @@ class PosixLedgerStore:
                     raise ValueError("ledger_receipt_collision")
                 if existing is None:
                     missing.append(key)
-            for key in missing:
-                self.put(key, documents[key])
-            self.put(HEAD_KEY, new_head)
+            # A failed put (an OSError at fsync or replace, of a document or of
+            # HEAD) rolls back what this transaction wrote, so a failed append
+            # leaves no unpublished document to wedge the next one.
+            written = []
+            try:
+                for key in missing:
+                    written.append(key)
+                    self.put(key, documents[key])
+                self.put(HEAD_KEY, new_head)
+            except BaseException:
+                # Once HEAD names the new receipt (the fault came after its
+                # replace, at the directory fsync) the documents are published
+                # and stay; the caller retries and finds them. Otherwise
+                # nothing HEAD names was written, and it is removed.
+                if self.get(HEAD_KEY) != new_head:
+                    for key in reversed(written):
+                        self.discard_unpublished(key)
+                raise
             return True
+
+    def discard_unpublished(self, key):
+        """Remove a document no published HEAD names (a failed append's residue)."""
+        try:
+            self._path(key).unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
 
     @staticmethod
     def _sync_directory(directory):

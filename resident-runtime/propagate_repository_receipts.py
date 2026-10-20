@@ -223,6 +223,10 @@ def propagate_all(*, hb_epoch: int | None = None) -> dict[str, Any]:
     }
 
 
+#: The CLI's epoch is refused six-field FAIL_CLOSED before anything is written.
+EPOCH_RETRY_ENTRYPOINT = "resident-runtime/propagate_repository_receipts.py --hb-epoch"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Carry repository transition receipts onto the organization chain.")
@@ -230,18 +234,31 @@ def main() -> int:
                         help="one declared repository; omit to sweep every declared repository")
     parser.add_argument("--repository-ledger-root", type=Path, default=None,
                         help="address of that repository's ledger; derived from the ledger home when absent")
-    parser.add_argument("--hb-epoch", type=int, default=None,
-                        help="heartbeat epoch; derived from the host clock, and marked as derived, when absent")
+    # Taken as the raw string: an int() here would read "+33" or " 33" as 33
+    # before the kernel's shared rule could refuse it.
+    parser.add_argument("--hb-epoch", default=None,
+                        help="supplied heartbeat epoch (ASCII digits, >= 32); refused FAIL_CLOSED "
+                             "when absent, never read from a clock")
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
 
-    if args.repository:
-        result = propagate(args.repository, repository_root=args.repository_ledger_root,
-                           hb_epoch=args.hb_epoch)
-    else:
-        if args.repository_ledger_root is not None:
-            raise SystemExit("--repository-ledger-root names one repository's ledger; pass --repository")
-        result = propagate_all(hb_epoch=args.hb_epoch)
+    refusal = organization_ledger.kernel.writer_epoch_refusal(
+        args.hb_epoch, retry_entrypoint=EPOCH_RETRY_ENTRYPOINT)
+    if refusal is not None:
+        print(json.dumps(refusal, sort_keys=True))
+        return 1
+    if args.repository_ledger_root is not None and not args.repository:
+        raise SystemExit("--repository-ledger-root names one repository's ledger; pass --repository")
+    try:
+        if args.repository:
+            result = propagate(args.repository, repository_root=args.repository_ledger_root,
+                               hb_epoch=args.hb_epoch)
+        else:
+            result = propagate_all(hb_epoch=args.hb_epoch)
+    except organization_ledger.OrgLedgerEpochRefused as exc:
+        # A clock-provenance repository receipt is refused six-field, not traced back.
+        print(json.dumps(exc.refusal, sort_keys=True))
+        return 1
     rendered = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -252,4 +269,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A fault in this CLI's own writes prints six fields, not a traceback.
+    sys.exit(organization_ledger.kernel.run_writer_cli(main, retry_entrypoint=EPOCH_RETRY_ENTRYPOINT))

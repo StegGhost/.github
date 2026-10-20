@@ -6,3 +6,9 @@ __pycache__/
 # per-node state, not source: a committed seen.d would make one node's
 # already-seen set every other node's starting point.
 resident-runtime/federation/seen.d/
+# The same per-node state: each response recorded once per request (F-REPUB),
+# and each verified CARRIED admission (B-P36m).
+resident-runtime/federation/responses.d/
+resident-runtime/federation/admissions.d/
+# Envelopes run_once quarantined for a terminal input fault (PB-EXIT-SPLIT).
+resident-runtime/federation/quarantine.d/

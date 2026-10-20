@@ -1,0 +1,57 @@
+name: Resident Federation Cycle
+
+# The in-tree dispatcher of resident-runtime/federation_cycle.py, the
+# activation manifest's resident_cycle_entrypoint (epoch_bindings, B-P36n).
+# The cycle's epoch is a dispatch input; it is never read from a clock.
+on:
+  workflow_dispatch:
+    inputs:
+      hb_epoch:
+        description: 'supplied heartbeat epoch the cycle carries (ASCII digits, value >= 32); no clock is read for it'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: resident-federation-cycle
+  cancel-in-progress: false
+
+jobs:
+  cycle:
+    runs-on: ubuntu-latest
+    env:
+      HB_EPOCH: ${{ github.event.inputs.hb_epoch }}
+      STEGVERSE_ORG_FEDERATION_GATEWAY_URL: ${{ vars.STEGVERSE_ORG_FEDERATION_GATEWAY_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # Refused by the kernel's shared rule (writer_epoch_refusal), six-field
+      # FAIL_CLOSED, before the cycle runs. A workflow_dispatch string input
+      # cannot tell empty from absent, so a missing key and "" are both
+      # HB_EPOCH_NOT_SUPPLIED.
+      - name: Refuse an absent or invalid dispatch epoch before the cycle
+        env:
+          DISPATCH_INPUTS: ${{ toJSON(github.event.inputs) }}
+        run: |
+          python - <<'PY'
+          import importlib.util, json, os, sys
+          entrypoint = ".github/workflows/resident-federation-cycle.yml"
+          inputs = json.loads(os.environ.get("DISPATCH_INPUTS") or "null")
+          hb_epoch = inputs.get("hb_epoch") if isinstance(inputs, dict) else None
+          if hb_epoch == "":
+              hb_epoch = None
+          spec = importlib.util.spec_from_file_location("kernel", "org-kernel/kernel.py")
+          kernel = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(kernel)
+          refusal = kernel.writer_epoch_refusal(hb_epoch, retry_entrypoint=entrypoint)
+          if refusal is not None:
+              print(json.dumps(refusal, sort_keys=True))
+              sys.exit(1)
+          PY
+
+      - name: Run the resident cycle at the supplied epoch
+        run: python resident-runtime/federation_cycle.py --hb-epoch "$HB_EPOCH"

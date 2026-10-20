@@ -15,7 +15,7 @@ on:
         required: true
         type: string
       hb_epoch:
-        description: 'supplied heartbeat epoch the receipts carry (non-negative integer); no clock is read for it'
+        description: 'supplied heartbeat epoch the receipts carry (ASCII digits, value >= 32); no clock is read for it'
         required: true
         type: string
       packet_id:
@@ -107,6 +107,41 @@ jobs:
             exit 1
           fi
 
+      # Time is supplied with the dispatch. It is not sampled from a clock.
+      # The epoch is refused by the kernel's shared rule (writer_epoch_refusal),
+      # six-field FAIL_CLOSED, before the writer CLI runs; nothing is written.
+      # A workflow_dispatch string input cannot tell empty from absent, so here
+      # both a missing hb_epoch key and "" are HB_EPOCH_NOT_SUPPLIED.
+      - name: Refuse an absent or invalid dispatch epoch before any append
+        env:
+          DISPATCH_INPUTS: ${{ toJSON(github.event.inputs) }}
+        run: |
+          python - <<'PY'
+          import importlib.util, json, os, sys
+          entrypoint = ".github/workflows/organization-ledger-transition.yml"
+          try:
+              inputs = json.loads(os.environ.get("DISPATCH_INPUTS") or "null")
+              hb_epoch = inputs.get("hb_epoch") if isinstance(inputs, dict) else None
+              if hb_epoch == "":
+                  hb_epoch = None
+              spec = importlib.util.spec_from_file_location("kernel", "org-kernel/kernel.py")
+              kernel = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(kernel)
+              refusal = kernel.writer_epoch_refusal(hb_epoch, retry_entrypoint=entrypoint)
+          except Exception as error:
+              refusal = {"disposition": "FAIL_CLOSED", "failure_code": "HB_EPOCH_GATE_UNAVAILABLE",
+                         "failed_predicate": "SUBMISSION_CARRIES_THE_SUPPLIED_HB_EPOCH",
+                         "detail": type(error).__name__,
+                         "required_evidence_or_repair": "the dispatch inputs and org-kernel/kernel.py load",
+                         "retry_entrypoint": entrypoint,
+                         "owning_existing_goal": "INTERLOCK-INTR-RUNTIME-INDEPENDENT-PROTOCOL-001",
+                         "next_attempt": "re-dispatch once the kernel loads; nothing was written",
+                         "derived_from_clock": False, "consequence_committed": False}
+          if refusal is not None:
+              print(json.dumps(refusal, sort_keys=True))
+              sys.exit(1)
+          PY
+
       - name: Perform the intr-destination diagnostic self-closure
         run: |
           set -euo pipefail
@@ -115,12 +150,6 @@ jobs:
           communication_id=$(sed -n '1p' "$RUNNER_TEMP/closure-id.txt")
           packet_id=$(sed -n '2p' "$RUNNER_TEMP/closure-id.txt")
           mkdir -p "$RUNNER_TEMP/results/self-closure"
-          # Time is supplied with the dispatch. It is not sampled from a clock.
-          case "$HB_EPOCH" in
-            ''|*[!0-9]*)
-              echo '{"disposition":"FAIL_CLOSED","failure_code":"DISPATCH_HB_EPOCH_INVALID","failed_predicate":"HB_EPOCH_IS_SUPPLIED_AS_A_NON_NEGATIVE_INTEGER","retry_entrypoint":".github/workflows/organization-ledger-transition.yml","consequence_committed":false}'
-              exit 1 ;;
-          esac
           python resident-runtime/intr_destination_ingress.py \
             --self-close \
             --hb-epoch "$HB_EPOCH" \
