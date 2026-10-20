@@ -192,10 +192,15 @@ with tempfile.TemporaryDirectory() as td:
     assert emitted["disposition"] == E.ALLOW
     packet_id = emitted["packet_id"]
 
-    # Before the far side answers, closure is PENDING and records nothing. An
-    # absence is not a transition.
+    # Before the far side answers, closure fails closed with
+    # DURABLE_QUEUE_OR_EVENT_EPHEMERAL_MATERIALIZATION and the six fields, and
+    # records nothing. An absence is not a transition.
     pending = E.close(PEER, packet_id, comm, root=TREE, mesh_root=mesh, hb_epoch=5001)
-    assert pending["disposition"] == E.PENDING, pending
+    assert pending["disposition"] == E.FAIL_CLOSED, pending
+    assert pending["failure_code"] == E.RESPONSE_ABSENT_FAILURE_CODE, pending
+    assert all(pending.get(f) for f in ("failure_code", "failed_predicate",
+               "required_evidence_or_repair", "retry_entrypoint",
+               "owning_existing_goal", "next_attempt")), pending
     assert pending["closed"] is False
     assert pending["closure_recorded"] is False
     assert pending["absence_is_not_a_transition"] is True
