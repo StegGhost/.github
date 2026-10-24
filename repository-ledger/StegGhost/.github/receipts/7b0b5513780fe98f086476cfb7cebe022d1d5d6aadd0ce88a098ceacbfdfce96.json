@@ -1,0 +1,45 @@
+{
+  "authority_effect": "NONE",
+  "evidence": {
+    "capability": "intr-destination",
+    "communication_id": "intr-path-v1:StegGhost->Admissible-Existence",
+    "destination_address": "admissible-existence.intr-destination",
+    "destination_organization": "Admissible-Existence",
+    "disposition": "ALLOW",
+    "merge_transfer_organization_receipt_sha256": "sha256:49c678359bd06b699f4d6a32323444749d7c3b3853b6d4621f3b3ed4303bb63a",
+    "message": {
+      "body": {
+        "path_id": "StegGhost->Admissible-Existence:intr-destination",
+        "schema": "stegverse.org-intr-destination-diagnostic/v1",
+        "transfer_commit": "79a0ea88a3054244a9f3cbcfb4a13a6ce9f9971d"
+      },
+      "communication_id": "intr-path-v1:StegGhost->Admissible-Existence",
+      "message_class": "ecosystem.communication"
+    },
+    "message_sha256": "sha256:6a275cb96cb6ba8a91d90b12ad5f20ae42b46ecd6e4085ce378a79d00b82b37c",
+    "path_id": "StegGhost->Admissible-Existence:intr-destination",
+    "payload_sha256": "sha256:71726f509d3ba32f4544a51ffb9eb8db966e0befaddb12d8ff8afed3ac8a3a88",
+    "repository": "StegGhost/.github",
+    "schema": "stegverse.intr-path-transfer-evidence/v1",
+    "source_organization": "StegGhost",
+    "transfer_commit": "79a0ea88a3054244a9f3cbcfb4a13a6ce9f9971d"
+  },
+  "hb_reference": {
+    "authority_effect": "NONE",
+    "derived_from_clock": false,
+    "epoch": 469436465,
+    "frequency_hz": 100,
+    "generation": 469436465,
+    "heartbeat_id": "HB:469436465",
+    "phase_offset_ns": 0,
+    "progression_dependency": "OSCILLATOR_ONLY"
+  },
+  "predecessor_state_sha256": "sha256:71726f509d3ba32f4544a51ffb9eb8db966e0befaddb12d8ff8afed3ac8a3a88",
+  "previous_receipt_sha256": "sha256:9ceae7b35f514f5027884338c1fa1056f329ae53ee19c6d145e60e06f91fa582",
+  "receipt_sha256": "sha256:7b0b5513780fe98f086476cfb7cebe022d1d5d6aadd0ce88a098ceacbfdfce96",
+  "repository": "StegGhost/.github",
+  "schema": "stegverse.repo-transition-receipt/v1",
+  "successor_state_sha256": "sha256:7ab55bd9a5cbb67916a1036587428e8c8a09e0ffc684038655b451db8669faac",
+  "transition_class": "INTR_MESH_PATH_TRANSFER",
+  "transition_id": "INTR_MESH_PATH_TRANSFER:StegGhost->Admissible-Existence:intr-destination@intr-path-v1:StegGhost->Admissible-Existence"
+}
