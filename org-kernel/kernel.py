@@ -937,6 +937,21 @@ def verify_carried_committed_request(receipt:Any, repo_root:Path, env:dict[str,s
 #: task-registry-global-invariants.json:58,60,160-161). Ignored by git.
 RUN_STATE_ROOT=Path(__file__).resolve().parents[1]/".stegverse-run"/"state"
 
+REPOSITORY_LEDGER_HOME_ENV="STEGVERSE_REPO_LEDGER_HOME"
+
+def repository_ledger_home(env:dict[str,str]|None=None)->Path:
+    """Where this node keeps other repositories' ledgers, one directory each.
+
+    STEGVERSE_REPO_LEDGER_HOME as the caller set it, else under state_home().
+    propagate_repository_receipts walks these, and aggregate accepts a source
+    ledger outside this repository's own only when it is the receipt
+    repository's directory here (B-P40 row 8)."""
+    values=os.environ if env is None else env
+    override=values.get(REPOSITORY_LEDGER_HOME_ENV)
+    if override:
+        return Path(override).expanduser().resolve()
+    return (state_home(values)/"stegverse/repo-ledgers").resolve()
+
 def state_home(env:dict[str,str]|None=None)->Path:
     """XDG_STATE_HOME as the caller set it, else the repo-relative RUN_STATE_ROOT."""
     values=os.environ if env is None else env

@@ -313,44 +313,79 @@ def source_clock_refusal(source_receipt):
             "derived_from_clock": False, "consequence_committed": False}
 
 
+def _canonical_ledger(location):
+    """A ledger location compared by what it resolves to: a git locator by its
+    real repository path, ref and namespace, a POSIX root by its real path."""
+    text = str(location)
+    if not isinstance(location, Path) and text.startswith("git+"):
+        locator = parse_locator(text)
+        return ("git", os.path.realpath(str(locator.repository)), locator.ref, locator.namespace)
+    return ("posix", os.path.realpath(text))
+
+
 def require_on_repository_ledger(receipt, source_ledger=None):
     """Refuse `receipt` unless it is on the repository ledger it belongs to.
 
     Every source ingest is checked: a receipt that hashes consistently but was
     never appended, or that differs from the stored copy, would launder a
-    fabricated transition into the organization ledger. `source_ledger` is the
-    repository ledger a caller read the receipt from, as a path or locator; with
-    none, the receipt must be this repository's and is checked on emit.py's
-    store. A receipt that is not there is refused SOURCE_RECEIPT_NOT_ON_LEDGER,
-    whether or not it carries committed_request (lead ruling 20:34Z). Read only;
-    nothing is opened for writing."""
+    fabricated transition into the organization ledger.
+
+    The ledger is never the caller's choice (B-P40 row 8). It is this
+    repository's emit.py store for this repository's receipts, or, for another
+    repository's, that repository's directory under the node's repository
+    ledger home, which is where propagate_repository_receipts walks; with no
+    `source_ledger` the first of those is read. A `source_ledger` is accepted
+    only when it resolves (realpath, symlinks followed) to one of them for the
+    receipt's own repository.
+
+    A receipt not there, or a ledger whose stored receipt is unreadable, is
+    refused SOURCE_RECEIPT_NOT_ON_LEDGER, terminal. An OSError reading the
+    store is the non-terminal LedgerWriteFailed. Read only; nothing is
+    written."""
     refusal = kernel.SourceReceiptNotOnLedger
     claimed = receipt.get("receipt_sha256")
+    repository = receipt.get("repository")
+    if receipt.get("schema") != "stegverse.repo-transition-receipt/v1" or not isinstance(repository, str):
+        raise refusal("source receipt is not a repo-transition receipt naming its repository")
+    spec = importlib.util.spec_from_file_location("aggregate_repo_emit",
+                                                  ROOT / ".stegverse/transition-ledger/emit.py")
+    repo_ledger = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(repo_ledger)
+    allowed = []
+    if repository == repo_ledger.C["repository"]:
+        allowed.append(repo_ledger.lr())
+    if "/" in repository and ".." not in repository.split("/"):
+        allowed.append(kernel.repository_ledger_home() / repository)
+    if not allowed:
+        raise refusal("source receipt names no repository ledger: " + repr(repository))
     if source_ledger is None:
-        spec = importlib.util.spec_from_file_location("aggregate_repo_emit",
-                                                      ROOT / ".stegverse/transition-ledger/emit.py")
-        repo_ledger = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(repo_ledger)
-        if (receipt.get("schema") != "stegverse.repo-transition-receipt/v1"
-                or receipt.get("repository") != repo_ledger.C["repository"]):
-            raise refusal("source receipt for " + repr(receipt.get("repository")) + " names no repository ledger "
-                          "this run can read (this repository is " + repo_ledger.C["repository"] + ")")
-        source_ledger = repo_ledger.lr()
+        source_ledger = allowed[0]
+    elif _canonical_ledger(source_ledger) not in {_canonical_ledger(location) for location in allowed}:
+        raise refusal("source ledger " + str(source_ledger) + " is not " + repr(repository)
+                      + "'s ledger (this repository's store or the repository ledger home)")
     with kernel.ledger_write(EPOCH_RETRY_ENTRYPOINT):
         store = open_store(source_ledger)
-        head = store.get(HEAD_KEY)
-        cursor = head.get("receipt_sha256") if isinstance(head, dict) else None
-        seen = set()
-        while isinstance(cursor, str) and cursor not in seen:
-            seen.add(cursor)
-            stored = store.get(receipt_key(cursor))
-            if not isinstance(stored, dict):
-                break
-            if cursor == claimed:
-                if stored != receipt:
-                    raise refusal("source receipt " + str(claimed) + " differs from the one on its repository ledger")
-                return
-            cursor = stored.get("previous_receipt_sha256")
+        try:
+            head = store.get(HEAD_KEY)
+            cursor = head.get("receipt_sha256") if isinstance(head, dict) else None
+            seen = set()
+            while isinstance(cursor, str) and cursor not in seen:
+                seen.add(cursor)
+                stored = store.get(receipt_key(cursor))
+                if not isinstance(stored, dict):
+                    break
+                if cursor == claimed:
+                    if stored != receipt:
+                        raise refusal("source receipt " + str(claimed)
+                                      + " differs from the one on its repository ledger")
+                    return
+                cursor = stored.get("previous_receipt_sha256")
+        except ValueError as error:
+            # A corrupt stored document (truncated, garbage) is not a receipt this
+            # ledger holds: refused, never a traceback (B-P40 row 9).
+            if getattr(error, "input_refused", False):
+                raise
+            raise refusal("repository ledger is unreadable: " + type(error).__name__) from None
     raise refusal("source receipt " + str(claimed) + " is not reachable from its repository ledger HEAD")
 
 
@@ -456,9 +491,6 @@ def main():
     parser.add_argument("--predecessor-org-state-sha256", required=True)
     parser.add_argument("--successor-org-state-sha256", required=True)
     parser.add_argument("--boundary-evidence-json", default="{}")
-    parser.add_argument("--source-ledger", default=None,
-                        help="the repository ledger (path or git+ locator) the source receipt is on; "
-                             "default: this repository's ledger")
     parser.add_argument("--authority-effect", default="NONE")
     parser.add_argument("--hb-epoch", default=None,
                         help="supplied heartbeat epoch (ASCII digits, >= 32); refused FAIL_CLOSED when absent, "
@@ -480,7 +512,7 @@ def main():
         result = append(receipt, args.org_transition_class or default_class,
                         args.predecessor_org_state_sha256, args.successor_org_state_sha256,
                         evidence, args.authority_effect,
-                        hb_epoch=args.hb_epoch, source_ledger=args.source_ledger)
+                        hb_epoch=args.hb_epoch)
     except (OrgLedgerEpochRefused, kernel.LedgerWriteFailed) as exc:
         print(json.dumps(exc.refusal, sort_keys=True))
         raise SystemExit(1)

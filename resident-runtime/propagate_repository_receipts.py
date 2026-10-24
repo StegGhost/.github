@@ -73,11 +73,8 @@ organization_ledger = _module("aggregate_repo_transition",
 
 
 def repository_ledger_home() -> Path:
-    override = os.getenv(LEDGER_HOME_VARIABLE)
-    if override:
-        return Path(override).expanduser().resolve()
-    return (organization_ledger.kernel.state_home()
-            / "stegverse/repo-ledgers").resolve()
+    # One definition, the kernel's: aggregate checks a source ledger against it.
+    return organization_ledger.kernel.repository_ledger_home()
 
 
 def declared_repositories() -> list[str]:
