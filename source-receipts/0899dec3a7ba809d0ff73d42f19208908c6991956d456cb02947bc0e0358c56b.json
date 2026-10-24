@@ -1,0 +1,45 @@
+{
+  "authority_effect": "NONE",
+  "evidence": {
+    "capability": "intr-destination",
+    "communication_id": "intr-path-v1:StegGhost->Triad-Test",
+    "destination_address": "triad-test.intr-destination",
+    "destination_organization": "Triad-Test",
+    "disposition": "ALLOW",
+    "merge_transfer_organization_receipt_sha256": "sha256:a5eee4edb6b913cf691a8f41846cbeeb502a7cb5e1b81e6c3c36aa9ca75bd5b4",
+    "message": {
+      "body": {
+        "path_id": "StegGhost->Triad-Test:intr-destination",
+        "schema": "stegverse.org-intr-destination-diagnostic/v1",
+        "transfer_commit": "c7aec62b423cdd973b4893384f3c331a472e4f70"
+      },
+      "communication_id": "intr-path-v1:StegGhost->Triad-Test",
+      "message_class": "ecosystem.communication"
+    },
+    "message_sha256": "sha256:a4a7f002c23bf751dd5348ce5d8308814aa8fca89fcca46d0b72eb3187c9ab40",
+    "path_id": "StegGhost->Triad-Test:intr-destination",
+    "payload_sha256": "sha256:9b704327509f2199b7ad914c98f33bff0a0d0325f2a6c9002fffb7439f5e173a",
+    "repository": "StegGhost/.github",
+    "schema": "stegverse.intr-path-transfer-evidence/v1",
+    "source_organization": "StegGhost",
+    "transfer_commit": "c7aec62b423cdd973b4893384f3c331a472e4f70"
+  },
+  "hb_reference": {
+    "authority_effect": "NONE",
+    "derived_from_clock": false,
+    "epoch": 469436465,
+    "frequency_hz": 100,
+    "generation": 469436465,
+    "heartbeat_id": "HB:469436465",
+    "phase_offset_ns": 0,
+    "progression_dependency": "OSCILLATOR_ONLY"
+  },
+  "predecessor_state_sha256": "sha256:9b704327509f2199b7ad914c98f33bff0a0d0325f2a6c9002fffb7439f5e173a",
+  "previous_receipt_sha256": "sha256:5dd41b8cd9205da81d634503a124d35078805402f82317994c0509f6fdc0b6b0",
+  "receipt_sha256": "sha256:0899dec3a7ba809d0ff73d42f19208908c6991956d456cb02947bc0e0358c56b",
+  "repository": "StegGhost/.github",
+  "schema": "stegverse.repo-transition-receipt/v1",
+  "successor_state_sha256": "sha256:b4cf136e6261d5597a1592d8b6a85891c1467103c1873a2d4cbabacee06b1200",
+  "transition_class": "INTR_MESH_PATH_TRANSFER",
+  "transition_id": "INTR_MESH_PATH_TRANSFER:StegGhost->Triad-Test:intr-destination@intr-path-v1:StegGhost->Triad-Test"
+}
