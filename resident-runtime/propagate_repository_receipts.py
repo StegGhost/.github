@@ -183,7 +183,9 @@ def propagate(repository: str, *, repository_root: Path | None = None,
              "repository_transition_class": receipt.get("transition_class"),
              "crossed_an_organization_boundary": False,
              "interlock_intr_involved": False},
-            "NONE", hb_epoch=hb_epoch)
+            # The repository ledger the receipt was read from: aggregate checks
+            # it is reachable from that ledger's HEAD (B-P40).
+            "NONE", hb_epoch=hb_epoch, source_ledger=root)
         propagated.append({
             "repository_receipt_sha256": digest,
             "repository_transition_id": receipt.get("transition_id"),

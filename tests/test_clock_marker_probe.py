@@ -69,6 +69,21 @@ def provision(root: Path, organization: str, role: str, service: str) -> None:
         json.dumps({"organization": organization, "services": [row]}))
 
 
+def on_repository_ledger(receipt, root: Path) -> Path:
+    """Append `receipt` as the HEAD of a scratch repository ledger at `root`.
+
+    aggregate refuses a source receipt that is not on its repository ledger
+    (B-P40 OFF_LEDGER_SOURCE_RECEIPT_WITHOUT_BINDING_ACCEPTED), so a probe's
+    hand-built source is put on one and named as the source ledger."""
+    store_module = load("probe_source_ledger_store", "resident-runtime/ledger_store.py")
+    store = store_module.open_store(root)
+    store.initialize()
+    digest = receipt["receipt_sha256"]
+    assert store.append_transaction(store_module.receipt_key(digest), receipt,
+                                    store.get(store_module.HEAD_KEY), {"receipt_sha256": digest})
+    return root
+
+
 def unmarked_clock_values(value, path="$", parent=None):
     """Paths of pinned-clock values not marked as clock-derived."""
     found = []
@@ -306,8 +321,11 @@ class SharedRuleAndSourceProvenance(unittest.TestCase):
         return {**body, "receipt_sha256": self.org.sha(body)}
 
     def append(self, receipt, **kw):
+        source = self.tmp / "source-ledgers" / receipt["receipt_sha256"][7:19]
+        if not (source / "HEAD.json").exists():
+            on_repository_ledger(receipt, source)
         return self.org.append(receipt, "REPO_STATE_PROPAGATION", "sha256:" + "1" * 64, "sha256:" + "2" * 64,
-                               {}, "NONE", hb_epoch="4096", **kw)
+                               {}, "NONE", hb_epoch="4096", source_ledger=source, **kw)
 
     def files(self):
         return sorted(p for p in self.ledger.rglob("*") if p.is_file()) if self.ledger.exists() else []
@@ -889,8 +907,10 @@ class InboundEpochIsSupplied(unittest.TestCase):
                 "transition_id": "seed", "transition_class": "SEED", "predecessor_state_sha256": "sha256:" + "1" * 64,
                 "successor_state_sha256": "sha256:" + "2" * 64, "evidence": {}, "authority_effect": "NONE",
                 "hb_reference": KERNEL.hb_reference(epoch=4096), "previous_receipt_sha256": None}
-        head = org.append({**body, "receipt_sha256": org.sha(body)}, "REPO_STATE_PROPAGATION",
-                          "sha256:" + "1" * 64, "sha256:" + "2" * 64, {}, "NONE", hb_epoch=4096)
+        seed = {**body, "receipt_sha256": org.sha(body)}
+        head = org.append(seed, "REPO_STATE_PROPAGATION",
+                          "sha256:" + "1" * 64, "sha256:" + "2" * 64, {}, "NONE", hb_epoch=4096,
+                          source_ledger=on_repository_ledger(seed, self.tmp / "seed-repo-ledger"))
         claim = {"source": "ORGANIZATION_LEDGER_HEAD", "head_receipt_sha": head["receipt_sha256"]}
         frame = KERNEL.carrier_frame(self.request, epoch=4096, carried=claim)
         KERNEL.publish_frame(frame, root=self.mesh)
@@ -1271,8 +1291,10 @@ class WriterEntryPointsReportFaultsSixField(unittest.TestCase):
                 "hb_reference": KERNEL.hb_reference(epoch=4096), "previous_receipt_sha256": None}
         source = self.tmp / "source.json"
         source.write_text(json.dumps({**body, "receipt_sha256": org.sha(body)}))
+        ledger = on_repository_ledger({**body, "receipt_sha256": org.sha(body)}, self.tmp / "source-ledger")
         argv = ["--repo-receipt", str(source), "--predecessor-org-state-sha256", "sha256:" + "1" * 64,
-                "--successor-org-state-sha256", "sha256:" + "2" * 64, "--hb-epoch", "4096"]
+                "--successor-org-state-sha256", "sha256:" + "2" * 64, "--hb-epoch", "4096",
+                "--source-ledger", str(ledger)]
         self.assert_fault_then_once(org, argv)
         self.assertEqual(len(list((self.tmp / "org" / "receipts").glob("*.json"))), 1)
 

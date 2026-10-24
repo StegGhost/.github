@@ -272,6 +272,53 @@ class ForgedCommittedRequestIsRefused(Scratch):
                 self.assert_refused_nothing_copied(self.aggregate(self.forged(claim)))
 
 
+class OffLedgerSourceWithoutBindingIsRefused(Scratch):
+    """V-P11 @58e8177 OFF_LEDGER_SOURCE_RECEIPT_WITHOUT_BINDING_ACCEPTED: every
+    source ingest is checked against its repository ledger, binding or not."""
+
+    def receipt(self, transition_id):
+        emit = load("b_p40_offledger_emit", ".stegverse/transition-ledger/emit.py")
+        body = {"schema": "stegverse.repo-transition-receipt/v1", "repository": emit.C["repository"],
+                "transition_id": transition_id, "transition_class": "T", "predecessor_state_sha256": "sha256:" + "1" * 64,
+                "successor_state_sha256": "sha256:" + "2" * 64, "evidence": {}, "authority_effect": "NONE",
+                "hb_reference": KERNEL.hb_reference(epoch=4096), "previous_receipt_sha256": None}
+        return {**body, "receipt_sha256": emit.sha(body)}
+
+    def aggregate(self, receipt, *extra_args):
+        path = self.tmp / "source.json"
+        path.write_text(json.dumps(receipt))
+        return self.run_cli("resident-runtime/aggregate_repo_transition.py", "--repo-receipt", str(path),
+                            "--predecessor-org-state-sha256", "sha256:" + "3" * 64,
+                            "--successor-org-state-sha256", "sha256:" + "4" * 64, "--hb-epoch", "4096", *extra_args)
+
+    def test_a_fabricated_receipt_with_a_consistent_hash_and_no_binding_is_refused(self):
+        refusal = self.assert_six_field(self.aggregate(self.receipt("fabricated")),
+                                        "SOURCE_RECEIPT_NOT_ON_REPOSITORY_LEDGER", 2)
+        self.assertIs(refusal["terminal"], True)
+        self.assertEqual(self.files_under("org-ledger"), [])
+
+    def test_a_receipt_on_another_ledger_or_of_another_repository_is_refused(self):
+        emit = load("b_p40_offledger_emit2", ".stegverse/transition-ledger/emit.py")
+        body = {k: v for k, v in self.receipt("other-repo").items() if k != "receipt_sha256"}
+        body["repository"] = "StegGhost/elsewhere"
+        other = {**body, "receipt_sha256": emit.sha(body)}
+        self.assert_six_field(self.aggregate(other), "SOURCE_RECEIPT_NOT_ON_REPOSITORY_LEDGER", 2)
+        empty = self.tmp / "empty-ledger"
+        empty.mkdir()
+        self.assert_six_field(self.aggregate(self.receipt("not-there"), "--source-ledger", str(empty)),
+                              "SOURCE_RECEIPT_NOT_ON_REPOSITORY_LEDGER", 2)
+        self.assertEqual(self.files_under("org-ledger"), [])
+
+    def test_an_appended_receipt_is_accepted(self):
+        result = self.run_cli(".stegverse/transition-ledger/emit.py", "--transition-id", "real", "--transition-class",
+                              "T", "--predecessor-state-sha256", "sha256:" + "1" * 64,
+                              "--successor-state-sha256", "sha256:" + "2" * 64, "--hb-epoch", "4096")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        accepted = self.aggregate(json.loads(result.stdout))
+        self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+        self.assertTrue(self.files_under("org-ledger"))
+
+
 class CallerEvidenceCannotSetCommittedRequestRow5(Scratch):
     """V-P11 @aa1a30f row 5: committed_request inside caller evidence, at any
     depth, CLI or in-process, pair set or unset, is COMMITTED_REQUEST_FORGED
@@ -324,6 +371,14 @@ class CallerEvidenceCannotSetCommittedRequestRow5(Scratch):
         finally:
             for key, value in saved.items():
                 os.environ.pop(key, None) if value is None else os.environ.__setitem__(key, value)
+
+    def test_a_cyclic_evidence_value_terminates(self):
+        cyclic = {"a": []}
+        cyclic["a"].append(cyclic)
+        KERNEL.refuse_caller_committed_request(cyclic, argument="evidence")
+        cyclic["a"].append(self.FORGED)
+        with self.assertRaises(KERNEL.CommittedRequestForged):
+            KERNEL.refuse_caller_committed_request(cyclic, argument="evidence")
 
     def test_a_deep_evidence_value_is_scanned_not_a_recursion_error(self):
         deep = self.FORGED

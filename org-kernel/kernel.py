@@ -840,6 +840,23 @@ class CommittedRequestUnverified(InputRefused):
                           "next_attempt":"none for this receipt: it is refused and nothing was copied",
                           "terminal":True,"derived_from_clock":False,"consequence_committed":False})
 
+class SourceReceiptNotOnLedger(InputRefused):
+    """A source receipt is not on the repository ledger it names.
+
+    A receipt whose hash is self-consistent can still be fabricated: unless it
+    is reachable from that repository ledger's HEAD and identical to the stored
+    copy, it records a transition that never happened. Terminal, before any write."""
+    def __init__(self, detail:str)->None:
+        super().__init__({"disposition":"FAIL_CLOSED","failure_code":"SOURCE_RECEIPT_NOT_ON_REPOSITORY_LEDGER",
+                          "failed_predicate":"SOURCE_RECEIPT_IS_REACHABLE_FROM_ITS_REPOSITORY_LEDGER_HEAD",
+                          "detail":detail,
+                          "required_evidence_or_repair":("a source receipt appended to its repository's ledger "
+                                                         "and reachable from that ledger's HEAD"),
+                          "retry_entrypoint":"resident-runtime/aggregate_repo_transition.py (the on-ledger receipt)",
+                          "owning_existing_goal":HB_EPOCH_OWNING_EXISTING_GOAL,
+                          "next_attempt":"none for this receipt: it is refused and nothing was copied",
+                          "terminal":True,"derived_from_clock":False,"consequence_committed":False})
+
 class CommittedRequestForged(InputRefused):
     """Caller-supplied evidence carries a committed_request key.
 
@@ -861,10 +878,17 @@ class CommittedRequestForged(InputRefused):
 def refuse_caller_committed_request(value:Any, *, argument:str)->None:
     """CommittedRequestForged when `value` holds a committed_request key at any depth.
 
-    Walked iteratively, so a deeply nested value is scanned, not a RecursionError."""
+    Walked iteratively, so a deeply nested value is scanned, not a RecursionError,
+    and each container once, so a cyclic one terminates."""
     stack:list[tuple[Any,str]]=[(value,"$")]
+    seen:set[int]=set()
     while stack:
         item,where=stack.pop()
+        if isinstance(item,(dict,list,tuple)):
+            # A container met twice (shared or cyclic in-process input) is not re-walked.
+            if id(item) in seen:
+                continue
+            seen.add(id(item))
         if isinstance(item,dict):
             if "committed_request" in item:
                 raise CommittedRequestForged(argument,where+".committed_request")
