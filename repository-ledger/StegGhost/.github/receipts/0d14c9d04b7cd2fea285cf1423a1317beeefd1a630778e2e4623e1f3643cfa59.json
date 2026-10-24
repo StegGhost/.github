@@ -1,0 +1,45 @@
+{
+  "authority_effect": "NONE",
+  "evidence": {
+    "capability": "intr-destination",
+    "communication_id": "intr-path-v1:StegGhost->GCAT-BCAT-Engine",
+    "destination_address": "gcat-bcat-engine.intr-destination",
+    "destination_organization": "GCAT-BCAT-Engine",
+    "disposition": "ALLOW",
+    "merge_transfer_organization_receipt_sha256": "sha256:49c678359bd06b699f4d6a32323444749d7c3b3853b6d4621f3b3ed4303bb63a",
+    "message": {
+      "body": {
+        "path_id": "StegGhost->GCAT-BCAT-Engine:intr-destination",
+        "schema": "stegverse.org-intr-destination-diagnostic/v1",
+        "transfer_commit": "79a0ea88a3054244a9f3cbcfb4a13a6ce9f9971d"
+      },
+      "communication_id": "intr-path-v1:StegGhost->GCAT-BCAT-Engine",
+      "message_class": "ecosystem.communication"
+    },
+    "message_sha256": "sha256:9428ff739e4187c33d3c494f497e0400dee8337fd9ecb5f0305a8a52b2f0f6d0",
+    "path_id": "StegGhost->GCAT-BCAT-Engine:intr-destination",
+    "payload_sha256": "sha256:2d8f0d79bc59ca9b16c99a29750bfbd5a5e27cd027e1f843b5f57cead5ecdc50",
+    "repository": "StegGhost/.github",
+    "schema": "stegverse.intr-path-transfer-evidence/v1",
+    "source_organization": "StegGhost",
+    "transfer_commit": "79a0ea88a3054244a9f3cbcfb4a13a6ce9f9971d"
+  },
+  "hb_reference": {
+    "authority_effect": "NONE",
+    "derived_from_clock": false,
+    "epoch": 469436465,
+    "frequency_hz": 100,
+    "generation": 469436465,
+    "heartbeat_id": "HB:469436465",
+    "phase_offset_ns": 0,
+    "progression_dependency": "OSCILLATOR_ONLY"
+  },
+  "predecessor_state_sha256": "sha256:2d8f0d79bc59ca9b16c99a29750bfbd5a5e27cd027e1f843b5f57cead5ecdc50",
+  "previous_receipt_sha256": "sha256:7b0b5513780fe98f086476cfb7cebe022d1d5d6aadd0ce88a098ceacbfdfce96",
+  "receipt_sha256": "sha256:0d14c9d04b7cd2fea285cf1423a1317beeefd1a630778e2e4623e1f3643cfa59",
+  "repository": "StegGhost/.github",
+  "schema": "stegverse.repo-transition-receipt/v1",
+  "successor_state_sha256": "sha256:01b55d65401ef42dce13dc5288f630e726789dc35404f83d9b54fd3320c3ecf9",
+  "transition_class": "INTR_MESH_PATH_TRANSFER",
+  "transition_id": "INTR_MESH_PATH_TRANSFER:StegGhost->GCAT-BCAT-Engine:intr-destination@intr-path-v1:StegGhost->GCAT-BCAT-Engine"
+}
