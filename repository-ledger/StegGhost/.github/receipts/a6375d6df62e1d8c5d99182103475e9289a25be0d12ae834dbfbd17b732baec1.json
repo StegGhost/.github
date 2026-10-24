@@ -1,0 +1,45 @@
+{
+  "authority_effect": "NONE",
+  "evidence": {
+    "capability": "intr-destination",
+    "communication_id": "intr-path-v1:StegGhost->AaCT-E",
+    "destination_address": "aact-e.intr-destination",
+    "destination_organization": "AaCT-E",
+    "disposition": "ALLOW",
+    "merge_transfer_organization_receipt_sha256": "sha256:a5eee4edb6b913cf691a8f41846cbeeb502a7cb5e1b81e6c3c36aa9ca75bd5b4",
+    "message": {
+      "body": {
+        "path_id": "StegGhost->AaCT-E:intr-destination",
+        "schema": "stegverse.org-intr-destination-diagnostic/v1",
+        "transfer_commit": "c7aec62b423cdd973b4893384f3c331a472e4f70"
+      },
+      "communication_id": "intr-path-v1:StegGhost->AaCT-E",
+      "message_class": "ecosystem.communication"
+    },
+    "message_sha256": "sha256:7831365728df4e23651af80ac215b907ee472ded4a7e1b2518e144842971437d",
+    "path_id": "StegGhost->AaCT-E:intr-destination",
+    "payload_sha256": "sha256:3edaa124e005ec04803f0a9a0d39c1a71b188f874d6980f851029d67f1af1f59",
+    "repository": "StegGhost/.github",
+    "schema": "stegverse.intr-path-transfer-evidence/v1",
+    "source_organization": "StegGhost",
+    "transfer_commit": "c7aec62b423cdd973b4893384f3c331a472e4f70"
+  },
+  "hb_reference": {
+    "authority_effect": "NONE",
+    "derived_from_clock": false,
+    "epoch": 469436465,
+    "frequency_hz": 100,
+    "generation": 469436465,
+    "heartbeat_id": "HB:469436465",
+    "phase_offset_ns": 0,
+    "progression_dependency": "OSCILLATOR_ONLY"
+  },
+  "predecessor_state_sha256": "sha256:3edaa124e005ec04803f0a9a0d39c1a71b188f874d6980f851029d67f1af1f59",
+  "previous_receipt_sha256": "sha256:270ed6482f959f52948cf0912c595f6365dd3ba337a9dda9576fee8a44c36ac9",
+  "receipt_sha256": "sha256:a6375d6df62e1d8c5d99182103475e9289a25be0d12ae834dbfbd17b732baec1",
+  "repository": "StegGhost/.github",
+  "schema": "stegverse.repo-transition-receipt/v1",
+  "successor_state_sha256": "sha256:13838b4a72b166f2cd81025b9036579b7e5fa46a990c513e8c65ecea6be5848a",
+  "transition_class": "INTR_MESH_PATH_TRANSFER",
+  "transition_id": "INTR_MESH_PATH_TRANSFER:StegGhost->AaCT-E:intr-destination@intr-path-v1:StegGhost->AaCT-E"
+}
