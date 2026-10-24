@@ -6,8 +6,6 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 SPEC=importlib.util.spec_from_file_location("org_kernel",ROOT/"org-kernel"/"kernel.py")
 K=importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(K)
-GWSPEC=importlib.util.spec_from_file_location("federation_gateway_transport",ROOT/"resident-runtime"/"federation_gateway_transport.py")
-GW=importlib.util.module_from_spec(GWSPEC); GWSPEC.loader.exec_module(GW)
 
 #: The epoch is supplied (--hb-epoch, else HB_EPOCH) and checked by the kernel's
 #: shared rule; absent or invalid is refused six-field FAIL_CLOSED before
@@ -27,30 +25,29 @@ def main(argv=None):
         return 1
     hb_epoch=int(raw)
     heartbeat=K.hb_reference(epoch=hb_epoch)
-    if os.getenv("STEGVERSE_ORG_FEDERATION_GATEWAY_URL","").strip():
-        receipt=GW.resident_gateway_cycle(ROOT,hb_epoch=hb_epoch)
-        receipt["heartbeat_reference"]=heartbeat
-        receipt["transport"]="SHARED_SERVICE_GATEWAY"
-    else:
-        results=K.consume_and_respond(ROOT,hb_epoch=hb_epoch)
-        consumed=sum(1 for x in results if (x.get("result") or {}).get("status")=="CONSUMED")
-        responses=sum(1 for x in results if x.get("response_publication"))
-        # Each refusal is surfaced six-field, never silently passed over; the
-        # frame itself was quarantined by the kernel so it is not met again.
-        refusals=[x["result"]["refusal"] for x in results
-                  if (x.get("result") or {}).get("status")=="REFUSED" and x["result"].get("refusal")]
-        receipt={
-          "schema_version":"stegverse.org-federation-cycle.v1",
-          "organization":K.load_registry(ROOT)["organization"],
-          "heartbeat_reference":heartbeat,
-          "frames_seen":len(results),
-          "frames_consumed":consumed,
-          "responses_emitted":responses,
-          "frames_refused":len(refusals),
-          "refusals":refusals,
-          "authority_effect":"NONE_CARRIER_ONLY",
-          "transport":"LOCAL_SPOOL_FALLBACK"
-        }
+    # The repo-local spool is the only route (B-P40): no hosted gateway is
+    # polled or awaited, so the cycle does not depend on a destination being up
+    # (derived from StegVerse-Labs/.github@149f16e
+    # task-registry-global-invariants.json:58,60,160-161).
+    results=K.consume_and_respond(ROOT,hb_epoch=hb_epoch)
+    consumed=sum(1 for x in results if (x.get("result") or {}).get("status")=="CONSUMED")
+    responses=sum(1 for x in results if x.get("response_publication"))
+    # Each refusal is surfaced six-field, never silently passed over; the
+    # frame itself was quarantined by the kernel so it is not met again.
+    refusals=[x["result"]["refusal"] for x in results
+              if (x.get("result") or {}).get("status")=="REFUSED" and x["result"].get("refusal")]
+    receipt={
+      "schema_version":"stegverse.org-federation-cycle.v1",
+      "organization":K.load_registry(ROOT)["organization"],
+      "heartbeat_reference":heartbeat,
+      "frames_seen":len(results),
+      "frames_consumed":consumed,
+      "responses_emitted":responses,
+      "frames_refused":len(refusals),
+      "refusals":refusals,
+      "authority_effect":"NONE_CARRIER_ONLY",
+      "transport":"REPO_LOCAL_SPOOL"
+    }
     out=ROOT/"resident-runtime"/"federation"/"latest-cycle.json"
     out.parent.mkdir(parents=True,exist_ok=True)
     K.write_atomic(out,json.dumps(receipt,indent=2,sort_keys=True)+"\n")

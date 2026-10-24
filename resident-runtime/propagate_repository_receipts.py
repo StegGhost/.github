@@ -76,7 +76,7 @@ def repository_ledger_home() -> Path:
     override = os.getenv(LEDGER_HOME_VARIABLE)
     if override:
         return Path(override).expanduser().resolve()
-    return (organization_ledger.kernel.supplied_state_home(LEDGER_HOME_VARIABLE)
+    return (organization_ledger.kernel.state_home()
             / "stegverse/repo-ledgers").resolve()
 
 

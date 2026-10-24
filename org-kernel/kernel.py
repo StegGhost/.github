@@ -765,35 +765,18 @@ __all__=["hb_reference","derive_channel","carrier_frame","recover_packet","dispa
          "SuppliedEpochRefused","writer_epoch_refusal","supplied_hb_reference","frame_supplied_epoch"]
 
 
-# --- Supplied state root (B-P40) ---
-STATE_ROOT_NOT_SUPPLIED="STATE_ROOT_NOT_SUPPLIED"
+# --- Run state root (B-P40) ---
+#: The repo-relative run root a store defaults to when its caller names none.
+#: The host home directory is never a default: a transition must not depend on
+#: which machine's home it lands in (derived from StegVerse-Labs/.github@149f16e
+#: task-registry-global-invariants.json:58,60,160-161). Ignored by git.
+RUN_STATE_ROOT=Path(__file__).resolve().parents[1]/".stegverse-run"/"state"
 
-class StateRootNotSupplied(InputRefused):
-    """No state root was supplied, and none is taken from the host's home.
-
-    A store is the one its caller names (an override variable, or XDG_STATE_HOME
-    set by the caller); the host home directory is never a default, because a
-    transition must not depend on which machine runs it (derived from
-    StegVerse-Labs/.github@149f16e task-registry-global-invariants.json:58,60,160-161).
-    Raised before anything is opened or written; `refusal` is six-field.
-    """
-    def __init__(self, variable:str)->None:
-        super().__init__({"disposition":"FAIL_CLOSED","failure_code":STATE_ROOT_NOT_SUPPLIED,
-                          "failed_predicate":"STATE_ROOT_IS_SUPPLIED_NOT_HOST_HOME",
-                          "detail":"neither "+variable+" nor XDG_STATE_HOME is set",
-                          "required_evidence_or_repair":"set "+variable+" (or XDG_STATE_HOME) to the store this run uses",
-                          "retry_entrypoint":"the same command with "+variable+" set",
-                          "owning_existing_goal":HB_EPOCH_OWNING_EXISTING_GOAL,
-                          "next_attempt":"supply the root and run again; nothing was written",
-                          "terminal":True,"consequence_committed":False})
-
-def supplied_state_home(variable:str, env:dict[str,str]|None=None)->Path:
-    """XDG_STATE_HOME as the caller set it, or StateRootNotSupplied naming `variable`."""
+def state_home(env:dict[str,str]|None=None)->Path:
+    """XDG_STATE_HOME as the caller set it, else the repo-relative RUN_STATE_ROOT."""
     values=os.environ if env is None else env
     base=values.get("XDG_STATE_HOME")
-    if not base:
-        raise StateRootNotSupplied(variable)
-    return Path(base)
+    return Path(base) if base else RUN_STATE_ROOT
 
 
 # --- Federation mesh v1.1 additions ---
@@ -804,7 +787,7 @@ def federation_root(env:dict[str,str]|None=None)->Path:
     override=values.get(FEDERATION_ROOT_ENV)
     if override:
         return Path(override).expanduser().resolve()
-    return (supplied_state_home(FEDERATION_ROOT_ENV,values)/"stegverse"/"org-federation").resolve()
+    return (state_home(values)/"stegverse"/"org-federation").resolve()
 
 def publish_frame(frame:dict[str,Any], *, root:Path|None=None)->Path:
     mesh=(root or federation_root()).resolve()

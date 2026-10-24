@@ -57,13 +57,13 @@ def ledger_root():
 
     A `git+<repository>#<ref>` names the designated ref. A plain path stays a
     filesystem root. With neither supplied, XDG_STATE_HOME as the caller set
-    it; the host home directory is never a default (StateRootNotSupplied). Opening that location
+    it, else the repo-relative run root; never the host home (kernel.state_home). Opening that location
     does not designate the organization's ledger; the contract does.
     """
     override = os.getenv("STEGVERSE_ORG_LEDGER_ROOT")
     if override:
         return parse_locator(override)
-    return (kernel.supplied_state_home("STEGVERSE_ORG_LEDGER_ROOT")
+    return (kernel.state_home()
             / "stegverse/org-ledgers" / C["organization"]).resolve()
 
 
