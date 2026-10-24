@@ -1394,6 +1394,48 @@ class CliInputsAreRefusedTerminal(WriterEntryPointsReportFaultsSixField):
             self.assertIn(field, record)
         self.assertEqual(self.written(), before)
 
+    def test_every_ingress_refusal_is_terminal_six_field(self):
+        # VALIDATOR 10:31Z amendment: every refusal ingress() raises -- each
+        # RuntimeBoundaryError site, and a field of the wrong type such as a
+        # non-object authority -- is RUNTIME_BOUNDARY_REFUSED, rc 2, nothing
+        # written, no traceback.
+        import base64
+        runtime = load("input_runtime_every_refusal", "runtime/organization_runtime.py")
+        runtime.INGRESS = self.tmp / "ingress"
+        payload = b"payload"
+        intent = {"schema": "stegverse.universal-intr-transport/v1", "protocol": "InTr", "packet_id": "p1",
+                  "payload_hash": runtime.sha(payload), "authority": {"transport_grants_execution_authority": False}}
+
+        def envelope(**changes):
+            env = {"schema": "stegverse.organization-interlock-envelope/v1", "intr_intent": intent,
+                   "payload_base64": base64.b64encode(payload).decode()}
+            env.update(changes)
+            body = {k: v for k, v in env.items() if k != "envelope_hash"}
+            return {**body, "envelope_hash": runtime.sha(body)} if "envelope_hash" not in changes else env
+        cases = {
+            "schema mismatch": envelope(schema="other"),
+            "InTr invalid": envelope(intr_intent={**intent, "protocol": "HTTP"}),
+            "envelope hash mismatch": envelope(envelope_hash="sha256:" + "0" * 64),
+            "payload invalid": envelope(payload_base64="not base64!"),
+            "payload hash mismatch": envelope(payload_base64=base64.b64encode(b"other").decode()),
+            "transport authority drift": envelope(intr_intent={**intent, "authority": {}}),
+            "non-object authority": envelope(intr_intent={**intent, "authority": "x"}),
+            "non-object intr_intent": envelope(intr_intent="x"),
+        }
+        for name, env in cases.items():
+            with self.subTest(refusal=name):
+                path = self.valid("ingress-case.json", env)
+                before = self.written()
+                code, out, err = self.run_cli(runtime, ["ingress", "--file", path, "--hb-epoch", "4096"], fault=False)
+                self.assertNotIn("Traceback", out + err)
+                self.assertEqual(code, 2, out + err)
+                record = json.loads(out.strip().splitlines()[-1])
+                self.assertEqual((record["failure_code"], record["terminal"]), ("RUNTIME_BOUNDARY_REFUSED", True))
+                for field in self.SIX:
+                    self.assertIn(field, record)
+                self.assertEqual(self.written(), before)
+                self.assertFalse((self.tmp / "ingress").exists() and any((self.tmp / "ingress").iterdir()))
+
     def test_inline_json_inputs_are_refused_terminal(self):
         emit = load("input_emit_cli", ".stegverse/transition-ledger/emit.py")
         aggregate = load("input_aggregate_inline_cli", "resident-runtime/aggregate_repo_transition.py")
