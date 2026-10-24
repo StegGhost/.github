@@ -857,6 +857,26 @@ class SourceReceiptNotOnLedger(InputRefused):
                           "next_attempt":"none for this receipt: it is refused and nothing was copied",
                           "terminal":True,"derived_from_clock":False,"consequence_committed":False})
 
+class LedgerRootNotContractDesignated(InputRefused):
+    """A source ledger that is not the one the contract designates.
+
+    Ledger evidence is read only from the repository's contract-designated
+    ledger (the organization ledger ref, namespace repository-ledger/<repo>)
+    or this repository's own emit store, by real path. A scratch root, an
+    environment-chosen home, or a root with files tracked in the checkout is
+    not evidence. Terminal, before any write."""
+    def __init__(self, detail:str)->None:
+        super().__init__({"disposition":"FAIL_CLOSED","failure_code":"LEDGER_ROOT_NOT_CONTRACT_DESIGNATED",
+                          "failed_predicate":"SOURCE_LEDGER_IS_THE_CONTRACT_DESIGNATED_LEDGER",
+                          "detail":detail,
+                          "required_evidence_or_repair":(".stegverse/transition-ledger/contract.json "
+                                                         "repository_ledger_location: the organization ledger ref, "
+                                                         "namespace repository-ledger/<repository>"),
+                          "retry_entrypoint":"resident-runtime/aggregate_repo_transition.py (from the designated ledger)",
+                          "owning_existing_goal":HB_EPOCH_OWNING_EXISTING_GOAL,
+                          "next_attempt":"none for this ledger: nothing was copied",
+                          "terminal":True,"derived_from_clock":False,"consequence_committed":False})
+
 class CommittedRequestForged(InputRefused):
     """Caller-supplied evidence carries a committed_request key.
 
@@ -943,9 +963,9 @@ def repository_ledger_home(env:dict[str,str]|None=None)->Path:
     """Where this node keeps other repositories' ledgers, one directory each.
 
     STEGVERSE_REPO_LEDGER_HOME as the caller set it, else under state_home().
-    propagate_repository_receipts walks these, and aggregate accepts a source
-    ledger outside this repository's own only when it is the receipt
-    repository's directory here (B-P40 row 8)."""
+    Scratch space only: it is never ledger evidence, and aggregate does not
+    accept a source ledger here (REPO_LEDGER_HOME_DEFAULT_INSIDE_CHECKOUT,
+    lead ruling 20:57Z)."""
     values=os.environ if env is None else env
     override=values.get(REPOSITORY_LEDGER_HOME_ENV)
     if override:

@@ -69,15 +69,14 @@ def provision(root: Path, organization: str, role: str, service: str) -> None:
         json.dumps({"organization": organization, "services": [row]}))
 
 
-def on_repository_ledger(receipt, home: Path) -> Path:
-    """Make `receipt` the HEAD of its repository's ledger under `home`.
+def on_repository_ledger(receipt, root: Path) -> Path:
+    """Make `receipt` the HEAD of a scratch repository ledger at `root`.
 
-    aggregate refuses a source receipt that is not on its repository ledger
-    (B-P40 SOURCE_RECEIPT_NOT_ON_LEDGER), and reads another repository's from
-    its directory under STEGVERSE_REPO_LEDGER_HOME (row 8), so a probe's
-    hand-built source is put there; the caller points that variable at `home`."""
+    aggregate reads a source receipt only from its contract-designated ledger
+    or this repository's emit store (B-P40, LEDGER_ROOT_NOT_CONTRACT_DESIGNATED),
+    so a probe's hand-built source is this repository's and goes in the emit
+    store; the caller points STEGVERSE_REPO_LEDGER_ROOT at `root`."""
     store_module = load("probe_source_ledger_store", "resident-runtime/ledger_store.py")
-    root = home / receipt["repository"]
     store = store_module.open_store(root)
     store.initialize()
     digest = receipt["receipt_sha256"]
@@ -86,14 +85,14 @@ def on_repository_ledger(receipt, home: Path) -> Path:
     return root
 
 
-def repository_ledger_home(test, home: Path) -> Path:
-    """Point STEGVERSE_REPO_LEDGER_HOME at `home` for the test's duration."""
+def repository_ledger_root(test, root: Path) -> Path:
+    """Point STEGVERSE_REPO_LEDGER_ROOT (this repository's emit store) at `root`."""
     import os
-    previous = os.environ.get("STEGVERSE_REPO_LEDGER_HOME")
-    os.environ["STEGVERSE_REPO_LEDGER_HOME"] = str(home)
-    test.addCleanup(lambda: os.environ.__setitem__("STEGVERSE_REPO_LEDGER_HOME", previous)
-                    if previous is not None else os.environ.pop("STEGVERSE_REPO_LEDGER_HOME", None))
-    return home
+    previous = os.environ.get("STEGVERSE_REPO_LEDGER_ROOT")
+    os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(root)
+    test.addCleanup(lambda: os.environ.__setitem__("STEGVERSE_REPO_LEDGER_ROOT", previous)
+                    if previous is not None else os.environ.pop("STEGVERSE_REPO_LEDGER_ROOT", None))
+    return root
 
 
 def unmarked_clock_values(value, path="$", parent=None):
@@ -326,14 +325,14 @@ class SharedRuleAndSourceProvenance(unittest.TestCase):
                          "ad8ff52936d5bcd9a2ad6caceb2d9a637a099518989b34bbb3370301c7a4cce2")
 
     def repo_receipt(self, transition_id, hb):
-        body = {"schema": "stegverse.repo-transition-receipt/v1", "repository": self.org.C["organization"] + "/probe",
+        body = {"schema": "stegverse.repo-transition-receipt/v1", "repository": self.org.C["organization"] + "/.github",
                 "transition_id": transition_id, "transition_class": "PROBE",
                 "predecessor_state_sha256": "sha256:" + "1" * 64, "successor_state_sha256": "sha256:" + "2" * 64,
                 "evidence": {}, "authority_effect": "NONE", "hb_reference": hb, "previous_receipt_sha256": None}
         return {**body, "receipt_sha256": self.org.sha(body)}
 
     def append(self, receipt, **kw):
-        on_repository_ledger(receipt, repository_ledger_home(self, self.tmp / "ledger-home"))
+        on_repository_ledger(receipt, repository_ledger_root(self, self.tmp / "repo-ledger"))
         return self.org.append(receipt, "REPO_STATE_PROPAGATION", "sha256:" + "1" * 64, "sha256:" + "2" * 64,
                                {}, "NONE", hb_epoch="4096", **kw)
 
@@ -913,7 +912,7 @@ class InboundEpochIsSupplied(unittest.TestCase):
         self.addCleanup(lambda: os.environ.__setitem__("STEGVERSE_ORG_LEDGER_ROOT", saved)
                         if saved is not None else os.environ.pop("STEGVERSE_ORG_LEDGER_ROOT", None))
         org = load("probe_carried_org", "resident-runtime/aggregate_repo_transition.py")
-        body = {"schema": "stegverse.repo-transition-receipt/v1", "repository": org.C["organization"] + "/probe",
+        body = {"schema": "stegverse.repo-transition-receipt/v1", "repository": org.C["organization"] + "/.github",
                 "transition_id": "seed", "transition_class": "SEED", "predecessor_state_sha256": "sha256:" + "1" * 64,
                 "successor_state_sha256": "sha256:" + "2" * 64, "evidence": {}, "authority_effect": "NONE",
                 "hb_reference": KERNEL.hb_reference(epoch=4096), "previous_receipt_sha256": None}
@@ -921,7 +920,7 @@ class InboundEpochIsSupplied(unittest.TestCase):
         head = org.append(seed, "REPO_STATE_PROPAGATION",
                           "sha256:" + "1" * 64, "sha256:" + "2" * 64, {}, "NONE", hb_epoch=4096,
                           source_ledger=on_repository_ledger(
-                              seed, repository_ledger_home(self, self.tmp / "ledger-home")))
+                              seed, repository_ledger_root(self, self.tmp / "seed-repo-ledger")))
         claim = {"source": "ORGANIZATION_LEDGER_HEAD", "head_receipt_sha": head["receipt_sha256"]}
         frame = KERNEL.carrier_frame(self.request, epoch=4096, carried=claim)
         KERNEL.publish_frame(frame, root=self.mesh)
@@ -1296,14 +1295,14 @@ class WriterEntryPointsReportFaultsSixField(unittest.TestCase):
 
     def test_aggregate_cli(self):
         org = load("probe_aggregate_cli", "resident-runtime/aggregate_repo_transition.py")
-        body = {"schema": "stegverse.repo-transition-receipt/v1", "repository": org.C["organization"] + "/cli",
+        body = {"schema": "stegverse.repo-transition-receipt/v1", "repository": org.C["organization"] + "/.github",
                 "transition_id": "cli", "transition_class": "CLI", "predecessor_state_sha256": "sha256:" + "1" * 64,
                 "successor_state_sha256": "sha256:" + "2" * 64, "evidence": {}, "authority_effect": "NONE",
                 "hb_reference": KERNEL.hb_reference(epoch=4096), "previous_receipt_sha256": None}
         source = self.tmp / "source.json"
         source.write_text(json.dumps({**body, "receipt_sha256": org.sha(body)}))
         on_repository_ledger({**body, "receipt_sha256": org.sha(body)},
-                             repository_ledger_home(self, self.tmp / "ledger-home"))
+                             repository_ledger_root(self, self.tmp / "source-ledger"))
         argv = ["--repo-receipt", str(source), "--predecessor-org-state-sha256", "sha256:" + "1" * 64,
                 "--successor-org-state-sha256", "sha256:" + "2" * 64, "--hb-epoch", "4096"]
         self.assert_fault_then_once(org, argv)

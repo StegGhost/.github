@@ -323,6 +323,32 @@ def _canonical_ledger(location):
     return ("posix", os.path.realpath(text))
 
 
+def designated_repository_ledger(repository):
+    """The contract-designated ledger of an organization repository.
+
+    contract.json repository_ledger_location: the organization ledger ref in
+    this checkout, namespace repository-ledger/<repository>."""
+    location = json.loads((ROOT / ".stegverse/transition-ledger/contract.json").read_text())["repository_ledger_location"]
+    return parse_locator("git+" + str(ROOT) + "#" + location["ref"] + ":repository-ledger/" + repository)
+
+
+def _tracked_in_checkout(location):
+    """Whether a POSIX ledger root holds files tracked in this checkout.
+
+    A ledger force-added and committed to the tree is a file anyone can write
+    in a pull request, not a ledger anyone appended to."""
+    canonical = _canonical_ledger(location)
+    if canonical[0] != "posix":
+        return False
+    root, path = os.path.realpath(str(ROOT)), canonical[1]
+    if os.path.commonpath([root, path]) != root:
+        return False
+    import subprocess
+    listed = subprocess.run(["git", "-C", root, "ls-files", "-z", "--", os.path.relpath(path, root)],
+                            capture_output=True, check=False)
+    return listed.returncode != 0 or bool(listed.stdout)
+
+
 def require_on_repository_ledger(receipt, source_ledger=None):
     """Refuse `receipt` unless it is on the repository ledger it belongs to.
 
@@ -330,39 +356,41 @@ def require_on_repository_ledger(receipt, source_ledger=None):
     never appended, or that differs from the stored copy, would launder a
     fabricated transition into the organization ledger.
 
-    The ledger is never the caller's choice (B-P40 row 8). It is this
-    repository's emit.py store for this repository's receipts, or, for another
-    repository's, that repository's directory under the node's repository
-    ledger home, which is where propagate_repository_receipts walks; with no
-    `source_ledger` the first of those is read. A `source_ledger` is accepted
-    only when it resolves (realpath, symlinks followed) to one of them for the
-    receipt's own repository.
+    The ledger is never the caller's choice (B-P40 row 8, lead ruling 20:57Z).
+    It is the receipt repository's contract-designated ledger
+    (designated_repository_ledger) or, for this repository's receipts, its own
+    emit.py store. A `source_ledger` must resolve (realpath, symlinks followed;
+    git locators by real repository, ref and namespace) to one of them, and a
+    POSIX root may hold no file tracked in the checkout. The repository ledger
+    home is scratch space and is not accepted. Otherwise
+    LEDGER_ROOT_NOT_CONTRACT_DESIGNATED.
 
-    A receipt not there, or a ledger whose stored receipt is unreadable, is
-    refused SOURCE_RECEIPT_NOT_ON_LEDGER, terminal. An OSError reading the
-    store is the non-terminal LedgerWriteFailed. Read only; nothing is
-    written."""
+    A receipt not on the ledger, or a ledger whose stored receipt is
+    unreadable, is refused SOURCE_RECEIPT_NOT_ON_LEDGER, terminal. An OSError
+    reading the store is the non-terminal LedgerWriteFailed. Read only; nothing
+    is written."""
     refusal = kernel.SourceReceiptNotOnLedger
     claimed = receipt.get("receipt_sha256")
     repository = receipt.get("repository")
-    if receipt.get("schema") != "stegverse.repo-transition-receipt/v1" or not isinstance(repository, str):
-        raise refusal("source receipt is not a repo-transition receipt naming its repository")
+    if (receipt.get("schema") != "stegverse.repo-transition-receipt/v1" or not isinstance(repository, str)
+            or not repository.startswith(C["organization"] + "/") or ".." in repository.split("/")):
+        raise refusal("source receipt is not a repo-transition receipt naming an organization repository")
     spec = importlib.util.spec_from_file_location("aggregate_repo_emit",
                                                   ROOT / ".stegverse/transition-ledger/emit.py")
     repo_ledger = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(repo_ledger)
-    allowed = []
+    allowed = [designated_repository_ledger(repository)]
     if repository == repo_ledger.C["repository"]:
-        allowed.append(repo_ledger.lr())
-    if "/" in repository and ".." not in repository.split("/"):
-        allowed.append(kernel.repository_ledger_home() / repository)
-    if not allowed:
-        raise refusal("source receipt names no repository ledger: " + repr(repository))
+        allowed.insert(0, repo_ledger.lr())
     if source_ledger is None:
         source_ledger = allowed[0]
-    elif _canonical_ledger(source_ledger) not in {_canonical_ledger(location) for location in allowed}:
-        raise refusal("source ledger " + str(source_ledger) + " is not " + repr(repository)
-                      + "'s ledger (this repository's store or the repository ledger home)")
+    if _canonical_ledger(source_ledger) not in {_canonical_ledger(location) for location in allowed}:
+        raise kernel.LedgerRootNotContractDesignated(
+            "source ledger " + str(source_ledger) + " is not " + repr(repository)
+            + "'s contract-designated ledger or this repository's store")
+    if _tracked_in_checkout(source_ledger):
+        raise kernel.LedgerRootNotContractDesignated(
+            "source ledger " + str(source_ledger) + " holds files tracked in the checkout")
     with kernel.ledger_write(EPOCH_RETRY_ENTRYPOINT):
         store = open_store(source_ledger)
         try:
