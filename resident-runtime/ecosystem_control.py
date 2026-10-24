@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse, importlib.util, json, os
+import argparse, importlib.util, json
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
 SPEC=importlib.util.spec_from_file_location("org_kernel",ROOT/"org-kernel"/"kernel.py")
 K=importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(K)
-GWSPEC=importlib.util.spec_from_file_location("federation_gateway_transport",ROOT/"resident-runtime"/"federation_gateway_transport.py")
-GW=importlib.util.module_from_spec(GWSPEC); GWSPEC.loader.exec_module(GW)
 
 def main():
     ap=argparse.ArgumentParser()
@@ -35,34 +33,22 @@ def main():
         print(json.dumps(K.resident_status(ROOT),indent=2,sort_keys=True))
         return
     if args.cmd=="collect":
-        if os.getenv("STEGVERSE_ORG_FEDERATION_GATEWAY_URL","").strip():
-            result=GW.collect_local_responses(ROOT,args.communication_id)
-        else:
-            result=K.collect_ecosystem_responses(org,args.communication_id,repo_root=ROOT)
+        result=K.collect_ecosystem_responses(org,args.communication_id,repo_root=ROOT)
         print(json.dumps(result,indent=2,sort_keys=True))
         return
     body=json.loads(args.body_json)
     standing=json.loads(Path(args.standing).read_text())
-    if os.getenv("STEGVERSE_ORG_FEDERATION_GATEWAY_URL","").strip():
-        out=GW.publish_ecosystem_via_gateway(
-            repo_root=ROOT,
-            standing=standing,
-            message_class=args.message_class,
-            subject=args.subject,
-            body=body,
-            requested_action=args.requested_action,
-            communication_id=args.communication_id
-        )
-    else:
-        out=K.publish_ecosystem_from_directory(
-            ROOT,
-            standing=standing,
-            message_class=args.message_class,
-            subject=args.subject,
-            body=body,
-            requested_action=args.requested_action,
-            communication_id=args.communication_id
-        )
+    # The repo-local spool is the only route (B-P40): nothing is sent to a
+    # hosted gateway, so a crossing never waits on a destination being up.
+    out=K.publish_ecosystem_from_directory(
+        ROOT,
+        standing=standing,
+        message_class=args.message_class,
+        subject=args.subject,
+        body=body,
+        requested_action=args.requested_action,
+        communication_id=args.communication_id
+    )
     print(json.dumps({
       "status":"PUBLISHED",
       "organization":org,

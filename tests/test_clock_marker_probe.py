@@ -190,23 +190,6 @@ class ClockMarkerProbe(unittest.TestCase):
             self.assertIs(envelope["carrier"]["derived_from_clock"], True)
         self.assertMarked(ingress, egress)
 
-    def test_gateway_acknowledgement_reads_no_clock(self):
-        # VALIDATOR (4): the ack is stamped from the epoch in hand, or carries
-        # none; it never reads the clock.
-        gateway = load("probe_gateway", "resident-runtime/federation_gateway_transport.py")
-        sent = []
-        gateway._json_request = lambda method, path, *, body=None, headers=None: sent.append(body) or {"state": "OK"}
-        RAISING.append(True)
-        self.addCleanup(RAISING.clear)
-        frame = {"packet_id": "p", "frame_sha256": "sha256:" + "0" * 64}
-        gateway.acknowledge_frame("Org-A", frame, "CONSUMED")
-        gateway.acknowledge_frame("Org-A", frame, "CONSUMED", hb_epoch=4096)
-        self.assertEqual((sent[0]["observed_at"], sent[0]["heartbeat_reference"]), (None, None))
-        self.assertEqual((sent[1]["heartbeat_reference"]["epoch"], sent[1]["heartbeat_reference"]["derived_from_clock"]),
-                         (4096, False))
-        self.assertEqual(CLOCK_CALLS, [])
-        self.assertMarked(*sent)
-
     def test_federation_cycle_refuses_an_absent_epoch(self):
         # S2: with no --hb-epoch and no HB_EPOCH the cycle is refused six-field
         # NOT_SUPPLIED and writes nothing; no clock is read.
@@ -399,18 +382,6 @@ class InboundEpochIsSupplied(unittest.TestCase):
         self.assertSupplied(served[0]["response_publication"]["frame"])
         self.assertEqual(CLOCK_CALLS, [])
 
-    def test_gateway_cycle_responds_at_the_inbound_epoch(self):
-        gateway = load("probe_gateway_cycle", "resident-runtime/federation_gateway_transport.py")
-        gateway.K = KERNEL
-        submitted = []
-        gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": self.frame}
-        gateway.submit_frame = lambda frame: submitted.append(frame) or {}
-        gateway.acknowledge_frame = lambda organization, frame, state, hb_epoch=None: {"state": state}
-        out = gateway.resident_gateway_cycle(self.b)
-        self.assertEqual(out["responses_emitted"], 1)
-        self.assertSupplied(submitted[0])
-        self.assertEqual(CLOCK_CALLS, [])
-
     def test_a_refused_frame_is_quarantined_and_never_retried(self):
         # B-P36j: a mixed batch. The refused frame gets a terminal six-field
         # quarantine marker, the valid one is answered, and a second cycle
@@ -473,22 +444,6 @@ class InboundEpochIsSupplied(unittest.TestCase):
         status = KERNEL.ingest_frame(self.b, clock_monitor)["execution_result"]["application_result"]
         self.assertNotIn("monitor_status", status)
         self.assertEqual(status["monitor_status_refusal"]["failure_code"], "HB_EPOCH_NOT_SUPPLIED")
-        gateway = load("probe_gateway_clock", "resident-runtime/federation_gateway_transport.py")
-        gateway.K = KERNEL
-        submitted = []
-        gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": clock_request}
-        gateway.submit_frame = lambda frame: submitted.append(frame) or {}
-        gateway.acknowledge_frame = lambda organization, frame, state, hb_epoch=None: {"state": state}
-        out = gateway.resident_gateway_cycle(self.b)
-        self.assertEqual((out["responses_emitted"], submitted), (0, []))
-        self.assertEqual(out["response_refusal"]["failure_code"], "HB_EPOCH_NOT_SUPPLIED")
-        self.assertEqual(gateway.resident_gateway_cycle(self.b, hb_epoch=4096)["responses_emitted"], 1)
-        # B-P36o: a tampered frame is refused six-field and acknowledged BLOCKED.
-        tampered = dict(clock_request, frame_sha256="sha256:" + "0" * 64)
-        gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": tampered}
-        blocked = gateway.resident_gateway_cycle(self.b, hb_epoch=4096)
-        self.assertEqual((blocked["state"], blocked["refusal"]["failure_code"]), ("BLOCKED", "FRAME_INTEGRITY_INVALID"))
-        self.assertSupplied(submitted[0])
         self.assertEqual(CLOCK_CALLS, [])
 
     def test_git_carrier_refuses_a_clock_flagged_egress(self):
@@ -914,29 +869,6 @@ class InboundEpochIsSupplied(unittest.TestCase):
         self.assertEqual(KERNEL.consume_and_respond(self.b, mesh_root=self.mesh), [])
         self.assertEqual(CLOCK_CALLS, [])
 
-    def test_a_failed_gateway_ack_never_yields_a_second_response(self):
-        # F-REPUB at the gateway: the ack fails after the response is
-        # submitted; the redelivered frame is not answered again.
-        gateway = load("probe_gateway_repub", "resident-runtime/federation_gateway_transport.py")
-        gateway.K = KERNEL
-        submitted, acks = [], []
-        gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": self.frame}
-        gateway.submit_frame = lambda frame: submitted.append(frame) or {}
-
-        def ack(organization, frame, state, hb_epoch=None):
-            acks.append(state)
-            if len(acks) == 1:
-                raise OSError(104, "Connection reset by peer")
-            return {"state": state}
-        gateway.acknowledge_frame = ack
-        first = gateway.resident_gateway_cycle(self.b)
-        self.assertEqual(first["ack_state"], "ACK_FAILED")
-        second = gateway.resident_gateway_cycle(self.b)
-        self.assertEqual(second["ack_state"], "CONSUMED")
-        self.assertEqual(len(submitted), 1)
-        self.assertEqual(second["response_frame_sha256"], submitted[0]["frame_sha256"])
-        self.assertEqual(CLOCK_CALLS, [])
-
     def test_a_verified_carried_crossing_is_answered_carried_and_recorded(self):
         # VALIDATOR @7a12ee6 rows 2-3 (B-P36m 09:00Z): a frame whose CARRIED
         # claim names the real current org head is admitted with a durable
@@ -975,17 +907,6 @@ class InboundEpochIsSupplied(unittest.TestCase):
         record = json.loads(admissions[0].read_text())
         self.assertEqual((record["packet_id"], record["head_receipt_sha"], record["epoch"], record["derived_from_clock"]),
                          (frame["packet_id"], claim["head_receipt_sha"], 4096, False))
-        # The gateway answers the same way.
-        gateway = load("probe_gateway_carried", "resident-runtime/federation_gateway_transport.py")
-        gateway.K = KERNEL
-        submitted = []
-        other = KERNEL.carrier_frame(self.distinct(self.request["packet_id"] + ":gw"),
-                                     epoch=4096, carried=claim)
-        gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": other}
-        gateway.submit_frame = lambda f: submitted.append(f) or {}
-        gateway.acknowledge_frame = lambda organization, f, state, hb_epoch=None: {"state": state}
-        self.assertEqual(gateway.resident_gateway_cycle(self.b)["responses_emitted"], 1)
-        self.assertEqual(submitted[0]["heartbeat_reference"]["head_receipt_sha"], claim["head_receipt_sha"])
         self.assertEqual(CLOCK_CALLS, [])
 
     def test_a_distinct_request_reusing_a_communication_id_is_refused(self):
@@ -1013,61 +934,7 @@ class InboundEpochIsSupplied(unittest.TestCase):
         responses = [p for p in (self.mesh / "frames.d").glob("*.json")
                      if json.loads(p.read_text()).get("destination_org") == "Org-A"]
         self.assertEqual(len(responses), 1)
-        # The gateway refuses it the same way.
-        gateway = load("probe_gateway_cid", "resident-runtime/federation_gateway_transport.py")
-        gateway.K = KERNEL
-        gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": second}
-        gateway.submit_frame = lambda frame: self.fail("a colliding request was answered")
-        gateway.acknowledge_frame = lambda organization, frame, state, hb_epoch=None: {"state": state}
-        out = gateway.resident_gateway_cycle(self.b)
-        self.assertEqual((out["state"], out["refusal"]["failure_code"]), ("BLOCKED", "RESPONSE_ID_COLLISION"))
         self.assertEqual(CLOCK_CALLS, [])
-
-    def test_a_fault_at_each_gateway_write_submits_exactly_once(self):
-        # B-P36q at the gateway: an OSError writing the response record, writing
-        # the submitted flag, or from the submit itself leaves the request
-        # pending (not acknowledged); the next delivery submits exactly once.
-        for step in ("record", "flag", "submit"):
-            with self.subTest(step=step):
-                root = self.tmp / ("gw-" + step)
-                provision(root, "Org-B", "BOUNDARY_LOCAL_CONTROL", "org-b.org-control")
-                gateway = load("probe_gateway_io_" + step, "resident-runtime/federation_gateway_transport.py")
-                gateway.K = KERNEL
-                submitted, acks = [], []
-                gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": self.frame}
-                gateway.acknowledge_frame = lambda organization, frame, state, hb_epoch=None: acks.append(state) or {
-                    "state": state}
-                calls = []
-
-                def submit(frame, _calls=calls, _step=step):
-                    _calls.append(1)
-                    if _step == "submit" and len(_calls) == 1:
-                        raise OSError(104, "Connection reset by peer")
-                    submitted.append(frame)
-                    return {}
-                gateway.submit_frame = submit
-                original_write = KERNEL.write_atomic
-                writes = []
-
-                def write(path, text, _step=step, _writes=writes):
-                    target = "flag" if str(path).endswith(".submitted") else (
-                        "record" if "responses.d" in str(path) else "other")
-                    _writes.append(target)
-                    if target == _step and _writes.count(target) == 1:
-                        raise OSError(28, "No space left on device")
-                    return original_write(path, text)
-                KERNEL.write_atomic = write
-                try:
-                    first = gateway.resident_gateway_cycle(root)
-                finally:
-                    KERNEL.write_atomic = original_write
-                self.assertEqual(first["state"], "PENDING", first)
-                self.assertIs(first["refusal"]["terminal"], False)
-                self.assertEqual(acks, [])
-                second = gateway.resident_gateway_cycle(root)
-                third = gateway.resident_gateway_cycle(root)
-                self.assertEqual((second["state"], third["state"]), ("CONSUMED", "CONSUMED"))
-                self.assertEqual(len(submitted), 1)
 
     def test_monitor_request_status_takes_the_inbound_epoch(self):
         # R2: resident_status is stamped from the request frame's epoch.
