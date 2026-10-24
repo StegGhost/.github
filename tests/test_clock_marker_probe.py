@@ -73,7 +73,7 @@ def on_repository_ledger(receipt, root: Path) -> Path:
     """Append `receipt` as the HEAD of a scratch repository ledger at `root`.
 
     aggregate refuses a source receipt that is not on its repository ledger
-    (B-P40 OFF_LEDGER_SOURCE_RECEIPT_WITHOUT_BINDING_ACCEPTED), so a probe's
+    (B-P40 SOURCE_RECEIPT_NOT_ON_LEDGER), so a probe's
     hand-built source is put on one and named as the source ledger."""
     store_module = load("probe_source_ledger_store", "resident-runtime/ledger_store.py")
     store = store_module.open_store(root)

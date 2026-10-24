@@ -321,11 +321,10 @@ def require_on_repository_ledger(receipt, source_ledger=None):
     fabricated transition into the organization ledger. `source_ledger` is the
     repository ledger a caller read the receipt from, as a path or locator; with
     none, the receipt must be this repository's and is checked on emit.py's
-    store. A receipt carrying committed_request is refused
-    COMMITTED_REQUEST_DIGEST_UNVERIFIED, any other SOURCE_RECEIPT_NOT_ON_REPOSITORY_LEDGER.
-    Read only; nothing is opened for writing."""
-    binding = isinstance(receipt, dict) and "committed_request" in receipt
-    refusal = kernel.CommittedRequestUnverified if binding else kernel.SourceReceiptNotOnLedger
+    store. A receipt that is not there is refused SOURCE_RECEIPT_NOT_ON_LEDGER,
+    whether or not it carries committed_request (lead ruling 20:34Z). Read only;
+    nothing is opened for writing."""
+    refusal = kernel.SourceReceiptNotOnLedger
     claimed = receipt.get("receipt_sha256")
     if source_ledger is None:
         spec = importlib.util.spec_from_file_location("aggregate_repo_emit",
@@ -386,8 +385,9 @@ def append(source_receipt, org_transition_class, predecessor_state, successor_st
     # before the store is opened, so a refusal writes nothing.
     heartbeat = require_supplied_epoch(hb_epoch, hb_carried)
     # Every source receipt is retained only when it is on its repository ledger,
-    # reachable from that ledger's HEAD; one carrying committed_request must also
-    # carry the committed request (six-field, nothing copied). After the epoch
+    # reachable from that ledger's HEAD (SOURCE_RECEIPT_NOT_ON_LEDGER); one
+    # carrying committed_request must also carry the committed request
+    # (COMMITTED_REQUEST_DIGEST_UNVERIFIED). Six-field, nothing copied. After the epoch
     # and source-provenance refusals, which come first and read nothing.
     require_on_repository_ledger(source_receipt, source_ledger)
     kernel.verify_carried_committed_request(source_receipt, ROOT)

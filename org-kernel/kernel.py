@@ -847,7 +847,7 @@ class SourceReceiptNotOnLedger(InputRefused):
     is reachable from that repository ledger's HEAD and identical to the stored
     copy, it records a transition that never happened. Terminal, before any write."""
     def __init__(self, detail:str)->None:
-        super().__init__({"disposition":"FAIL_CLOSED","failure_code":"SOURCE_RECEIPT_NOT_ON_REPOSITORY_LEDGER",
+        super().__init__({"disposition":"FAIL_CLOSED","failure_code":"SOURCE_RECEIPT_NOT_ON_LEDGER",
                           "failed_predicate":"SOURCE_RECEIPT_IS_REACHABLE_FROM_ITS_REPOSITORY_LEDGER_HEAD",
                           "detail":detail,
                           "required_evidence_or_repair":("a source receipt appended to its repository's ledger "

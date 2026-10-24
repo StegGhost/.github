@@ -202,10 +202,10 @@ class ReceiptsNameTheCommittedRequestRow2(Scratch):
 
 
 class ForgedCommittedRequestIsRefused(Scratch):
-    """V-P11 @722b416 new row: aggregate retained a rehashed off-ledger source
-    receipt carrying a forged committed_request. The claim is verified against
-    the request this run carries or, with none, the file at its path; anything
-    else is COMMITTED_REQUEST_DIGEST_UNVERIFIED and nothing is copied."""
+    """V-P11 @722b416/@aa1a30f row 7 and the lead's 20:34Z ruling. A source
+    receipt not on its repository ledger is SOURCE_RECEIPT_NOT_ON_LEDGER,
+    committed_request or not. An on-ledger receipt whose claim is not the
+    committed request is COMMITTED_REQUEST_DIGEST_UNVERIFIED. Nothing is copied."""
 
     def forged(self, claim):
         emit = load("b_p40_forge_emit", ".stegverse/transition-ledger/emit.py")
@@ -218,6 +218,15 @@ class ForgedCommittedRequestIsRefused(Scratch):
         path.write_text(json.dumps({**body, "receipt_sha256": emit.sha(body)}))
         return path
 
+    def on_ledger(self, **extra):
+        result = self.run_cli(".stegverse/transition-ledger/emit.py", "--transition-id", "t-on", "--transition-class",
+                              "T", "--predecessor-state-sha256", "sha256:" + "1" * 64,
+                              "--successor-state-sha256", "sha256:" + "2" * 64, "--hb-epoch", "4096", **extra)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        path = self.tmp / "on-ledger.json"
+        path.write_text(result.stdout)
+        return path, json.loads(result.stdout)
+
     def aggregate(self, source, **extra):
         return self.run_cli("resident-runtime/aggregate_repo_transition.py", "--repo-receipt", str(source),
                             "--predecessor-org-state-sha256", "sha256:" + "3" * 64,
@@ -226,50 +235,50 @@ class ForgedCommittedRequestIsRefused(Scratch):
     def claim(self, path, digest):
         return {"path": path, "sha256": digest, "hb_epoch_source": "COMMITTED_REQUEST"}
 
-    def assert_refused_nothing_copied(self, result):
-        refusal = self.assert_six_field(result, "COMMITTED_REQUEST_DIGEST_UNVERIFIED", 2)
+    def assert_refused_nothing_copied(self, result, code):
+        refusal = self.assert_six_field(result, code, 2)
         self.assertIs(refusal["terminal"], True)
         self.assertEqual(self.files_under("org-ledger"), [])
 
-    def test_a_forged_digest_against_this_runs_request_is_refused(self):
-        forged = self.forged(self.claim(PAIR["STEGVERSE_COMMITTED_REQUEST_PATH"], "sha256:" + "f" * 64))
-        self.assert_refused_nothing_copied(self.aggregate(forged, **PAIR))
-
-    def test_a_forged_digest_with_no_run_request_is_checked_against_the_committed_file(self):
+    def test_an_off_ledger_receipt_carrying_committed_request_is_not_on_ledger(self):
         readme = "sha256:" + hashlib.sha256((ROOT / "README.md").read_bytes()).hexdigest()
-        self.assert_refused_nothing_copied(self.aggregate(self.forged(self.claim("README.md", "sha256:" + "f" * 64))))
-        self.assert_refused_nothing_copied(self.aggregate(self.forged(self.claim("no/such/request.json", readme))))
-        # Row 7: even the committed file's real digest is refused on a receipt
-        # that was never on the repository ledger (rehashed, off-ledger).
-        self.assert_refused_nothing_copied(self.aggregate(self.forged(self.claim("README.md", readme))))
+        for claim, extra in ((self.claim(PAIR["STEGVERSE_COMMITTED_REQUEST_PATH"], "sha256:" + "f" * 64), PAIR),
+                             (self.claim("README.md", "sha256:" + "f" * 64), {}),
+                             # even the committed file's real digest, off the ledger
+                             (self.claim("README.md", readme), {})):
+            with self.subTest(claim=claim):
+                self.assert_refused_nothing_copied(self.aggregate(self.forged(claim), **extra),
+                                                   "SOURCE_RECEIPT_NOT_ON_LEDGER")
 
-    def test_an_on_ledger_receipt_tampered_after_the_append_is_refused(self):
-        result = self.run_cli(".stegverse/transition-ledger/emit.py", "--transition-id", "t-on", "--transition-class",
-                              "T", "--predecessor-state-sha256", "sha256:" + "1" * 64,
-                              "--successor-state-sha256", "sha256:" + "2" * 64, "--hb-epoch", "4096", **PAIR)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        on_ledger = json.loads(result.stdout)
-        # Positive control: the receipt as appended, under the same run's pair.
-        source = self.tmp / "on-ledger.json"
-        source.write_text(json.dumps(on_ledger))
+    def test_an_on_ledger_receipt_whose_claim_is_not_this_runs_request_is_unverified(self):
+        source, _ = self.on_ledger(**PAIR)
+        other = {**PAIR, "STEGVERSE_COMMITTED_REQUEST_SHA256": "sha256:" + "e" * 64}
+        self.assert_refused_nothing_copied(self.aggregate(source, **other), "COMMITTED_REQUEST_DIGEST_UNVERIFIED")
+        # With no run pair, the claim is checked against the committed file,
+        # which this request path does not name in the tree.
+        self.assert_refused_nothing_copied(self.aggregate(source), "COMMITTED_REQUEST_DIGEST_UNVERIFIED")
+        # Positive control: the same run's pair.
         accepted = self.aggregate(source, **PAIR)
         self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
-        # Its claim rewritten and the receipt rehashed: no longer the stored one.
+
+    def test_an_on_ledger_receipt_tampered_after_the_append_is_not_on_ledger(self):
+        source, on_ledger = self.on_ledger(**PAIR)
         emit = load("b_p40_tamper_emit", ".stegverse/transition-ledger/emit.py")
         body = {k: v for k, v in on_ledger.items() if k != "receipt_sha256"}
         body["committed_request"] = {**body["committed_request"], "sha256": "sha256:" + "e" * 64}
         source.write_text(json.dumps({**body, "receipt_sha256": emit.sha(body)}))
-        before = sorted(str(p) for p in self.files_under("org-ledger"))
-        tampered = self.aggregate(source, **{**PAIR, "STEGVERSE_COMMITTED_REQUEST_SHA256": "sha256:" + "e" * 64})
-        self.assert_six_field(tampered, "COMMITTED_REQUEST_DIGEST_UNVERIFIED", 2)
-        self.assertEqual(sorted(str(p) for p in self.files_under("org-ledger")), before)
+        self.assert_refused_nothing_copied(
+            self.aggregate(source, **{**PAIR, "STEGVERSE_COMMITTED_REQUEST_SHA256": "sha256:" + "e" * 64}),
+            "SOURCE_RECEIPT_NOT_ON_LEDGER")
 
-    def test_a_malformed_claim_is_refused(self):
+    def test_a_malformed_claim_is_unverified(self):
         for claim in ("x", {"path": "README.md"}, {**self.claim("README.md", "sha256:" + "a" * 64), "extra": 1},
                       {**self.claim("README.md", "sha256:" + "a" * 64), "hb_epoch_source": "CLOCK"},
                       self.claim("../README.md", "sha256:" + "a" * 64)):
             with self.subTest(claim=claim):
-                self.assert_refused_nothing_copied(self.aggregate(self.forged(claim)))
+                with self.assertRaises(KERNEL.CommittedRequestUnverified) as refused:
+                    KERNEL.verify_carried_committed_request({"committed_request": claim}, ROOT, env={})
+                self.assertEqual(refused.exception.refusal["failure_code"], "COMMITTED_REQUEST_DIGEST_UNVERIFIED")
 
 
 class OffLedgerSourceWithoutBindingIsRefused(Scratch):
@@ -293,7 +302,7 @@ class OffLedgerSourceWithoutBindingIsRefused(Scratch):
 
     def test_a_fabricated_receipt_with_a_consistent_hash_and_no_binding_is_refused(self):
         refusal = self.assert_six_field(self.aggregate(self.receipt("fabricated")),
-                                        "SOURCE_RECEIPT_NOT_ON_REPOSITORY_LEDGER", 2)
+                                        "SOURCE_RECEIPT_NOT_ON_LEDGER", 2)
         self.assertIs(refusal["terminal"], True)
         self.assertEqual(self.files_under("org-ledger"), [])
 
@@ -302,11 +311,11 @@ class OffLedgerSourceWithoutBindingIsRefused(Scratch):
         body = {k: v for k, v in self.receipt("other-repo").items() if k != "receipt_sha256"}
         body["repository"] = "StegGhost/elsewhere"
         other = {**body, "receipt_sha256": emit.sha(body)}
-        self.assert_six_field(self.aggregate(other), "SOURCE_RECEIPT_NOT_ON_REPOSITORY_LEDGER", 2)
+        self.assert_six_field(self.aggregate(other), "SOURCE_RECEIPT_NOT_ON_LEDGER", 2)
         empty = self.tmp / "empty-ledger"
         empty.mkdir()
         self.assert_six_field(self.aggregate(self.receipt("not-there"), "--source-ledger", str(empty)),
-                              "SOURCE_RECEIPT_NOT_ON_REPOSITORY_LEDGER", 2)
+                              "SOURCE_RECEIPT_NOT_ON_LEDGER", 2)
         self.assertEqual(self.files_under("org-ledger"), [])
 
     def test_an_appended_receipt_is_accepted(self):
