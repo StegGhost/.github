@@ -290,10 +290,16 @@ class EcosystemControlEpochRow5(Scratch):
 
 
 class InTrFilesAreUntouchedRowRuling(unittest.TestCase):
-    """Lead ruling 20:08Z: no InTr edits. Each InTr file is byte-identical to
-    main@79a0ea8, pinned by sha256. The committed request reaches the
-    self-closure's receipts only through emit.append and
-    aggregate_repo_transition.append, which this repository's own code owns."""
+    """INTR_PATH_FILE_BYTE_IDENTICAL_TO_MAIN_MODULO_GRADED_EXCEPTION_FIXES
+    (lead ruling 20:08Z, amended 20:16Z). Each InTr file may differ from
+    main@79a0ea8 only by exception-fix commits that V-P11 graded ALLOW and the
+    PR body lists with their sha and row. No such fix is carried here, so the
+    list is explicitly empty and each file is pinned at main's sha256. The
+    committed request reaches the self-closure's receipts only through
+    emit.append and aggregate_repo_transition.append, this repository's own."""
+
+    #: (commit sha, V-P11 row) of each graded exception fix to an InTr file.
+    GRADED_EXCEPTION_FIXES: tuple[tuple[str, str], ...] = ()
 
     MAIN_SHA256 = {
         "resident-runtime/intr_destination_ingress.py":
@@ -305,6 +311,10 @@ class InTrFilesAreUntouchedRowRuling(unittest.TestCase):
         "resident-runtime/intr_path_tvc_read.py":
             "a3f14f99fe50b598d90173709efa186608acb50921a2bb564ef616fccf8e3afe",
     }
+
+    def test_no_exception_fix_is_claimed(self):
+        # A non-empty list would need each file re-pinned at its head sha.
+        self.assertEqual(self.GRADED_EXCEPTION_FIXES, ())
 
     def test_each_intr_file_is_byte_identical_to_main(self):
         for relative, expected in self.MAIN_SHA256.items():
