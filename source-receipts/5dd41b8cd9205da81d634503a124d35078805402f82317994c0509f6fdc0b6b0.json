@@ -1,0 +1,45 @@
+{
+  "authority_effect": "NONE",
+  "evidence": {
+    "capability": "intr-destination",
+    "communication_id": "intr-path-v1:StegGhost->ECAT-ICAT-Formal",
+    "destination_address": "ecat-icat-formal.intr-destination",
+    "destination_organization": "ECAT-ICAT-Formal",
+    "disposition": "ALLOW",
+    "merge_transfer_organization_receipt_sha256": "sha256:a5eee4edb6b913cf691a8f41846cbeeb502a7cb5e1b81e6c3c36aa9ca75bd5b4",
+    "message": {
+      "body": {
+        "path_id": "StegGhost->ECAT-ICAT-Formal:intr-destination",
+        "schema": "stegverse.org-intr-destination-diagnostic/v1",
+        "transfer_commit": "c7aec62b423cdd973b4893384f3c331a472e4f70"
+      },
+      "communication_id": "intr-path-v1:StegGhost->ECAT-ICAT-Formal",
+      "message_class": "ecosystem.communication"
+    },
+    "message_sha256": "sha256:08f986eb6152e7d8d90eadda849ef138e8a21c12bacf23a159b36cb762529fdd",
+    "path_id": "StegGhost->ECAT-ICAT-Formal:intr-destination",
+    "payload_sha256": "sha256:e673f95e901ba8e6389f4670a415af8271f548686a9aaedc41a49d8dc928eca8",
+    "repository": "StegGhost/.github",
+    "schema": "stegverse.intr-path-transfer-evidence/v1",
+    "source_organization": "StegGhost",
+    "transfer_commit": "c7aec62b423cdd973b4893384f3c331a472e4f70"
+  },
+  "hb_reference": {
+    "authority_effect": "NONE",
+    "derived_from_clock": false,
+    "epoch": 469436465,
+    "frequency_hz": 100,
+    "generation": 469436465,
+    "heartbeat_id": "HB:469436465",
+    "phase_offset_ns": 0,
+    "progression_dependency": "OSCILLATOR_ONLY"
+  },
+  "predecessor_state_sha256": "sha256:e673f95e901ba8e6389f4670a415af8271f548686a9aaedc41a49d8dc928eca8",
+  "previous_receipt_sha256": "sha256:e3da1d6e7fa699b28f4c5c832539b7357ba9ef9b8e9ca90a256f6fdcc1252d79",
+  "receipt_sha256": "sha256:5dd41b8cd9205da81d634503a124d35078805402f82317994c0509f6fdc0b6b0",
+  "repository": "StegGhost/.github",
+  "schema": "stegverse.repo-transition-receipt/v1",
+  "successor_state_sha256": "sha256:85dab5eaa39a41d7ea94c1eaa7775fd4cda121433b9a7f59949b06dca7604b22",
+  "transition_class": "INTR_MESH_PATH_TRANSFER",
+  "transition_id": "INTR_MESH_PATH_TRANSFER:StegGhost->ECAT-ICAT-Formal:intr-destination@intr-path-v1:StegGhost->ECAT-ICAT-Formal"
+}
