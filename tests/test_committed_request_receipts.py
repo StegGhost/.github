@@ -289,5 +289,28 @@ class EcosystemControlEpochRow5(Scratch):
             self.assertEqual((reference["epoch"], reference["derived_from_clock"]), (4096, False))
 
 
+class InTrFilesAreUntouchedRowRuling(unittest.TestCase):
+    """Lead ruling 20:08Z: no InTr edits. Each InTr file is byte-identical to
+    main@79a0ea8, pinned by sha256. The committed request reaches the
+    self-closure's receipts only through emit.append and
+    aggregate_repo_transition.append, which this repository's own code owns."""
+
+    MAIN_SHA256 = {
+        "resident-runtime/intr_destination_ingress.py":
+            "35c212e029a65033cb5ac5b1acbd8379d8fd63721ab8ea66dede1a1648c1042c",
+        "resident-runtime/intr_path_ingress.py":
+            "2607a18a9c55beaab1dd5cdfa6fc22815e030547b869eecab1e9d4f35a301f4b",
+        "resident-runtime/intr_path_transfer.py":
+            "2909ec9480467ad8622726686b1808b87e3f794bc477566806cd86376db7592d",
+        "resident-runtime/intr_path_tvc_read.py":
+            "a3f14f99fe50b598d90173709efa186608acb50921a2bb564ef616fccf8e3afe",
+    }
+
+    def test_each_intr_file_is_byte_identical_to_main(self):
+        for relative, expected in self.MAIN_SHA256.items():
+            with self.subTest(file=relative):
+                self.assertEqual(hashlib.sha256((ROOT / relative).read_bytes()).hexdigest(), expected)
+
+
 if __name__ == "__main__":
     unittest.main()
