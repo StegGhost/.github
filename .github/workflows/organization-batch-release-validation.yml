@@ -26,7 +26,6 @@ on:
       - data/organization-role-runtime-reality-deployment.json
       - data/organization-role-exemption-register.json
       - .github/workflows/organization-batch-release-validation.yml
-  workflow_dispatch:
 
 # This repository is internal; an unpermissioned GITHUB_TOKEN cannot read it.
 permissions:

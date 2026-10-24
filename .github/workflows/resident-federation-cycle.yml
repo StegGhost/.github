@@ -2,14 +2,31 @@ name: Resident Federation Cycle
 
 # The in-tree dispatcher of resident-runtime/federation_cycle.py, the
 # activation manifest's resident_cycle_entrypoint (epoch_bindings, B-P36n).
-# The cycle's epoch is a dispatch input; it is never read from a clock.
+#
+# COMMITTED_REQUEST (B-P40, ruling R-DISPATCH; pattern of StegVerse-Labs/.github
+# organization-ledger-transition.yml:18-25). The trigger is a push to main that
+# changes the committed request file; there is no workflow_dispatch, schedule or
+# cross-repository call, and the workflow takes no inputs. A run is an attempted
+# state transition bound to what was committed, not to a person or a clock
+# (StegVerse-Labs/.github@149f16e data/task-registry-global-invariants.json:54,58,60,120,160-161;
+# data/sv-work-items/invariants.json:133). The request file is:
+#
+#   .stegverse/federation-cycle/request.json
+#   {"schema_version": "stegverse.org-federation-cycle-request.v1",
+#    "hb_epoch": "<ASCII digits, value >= 32>",
+#    "ledger_head": "<40-hex sha of refs/stegverse/organization-ledger the request was made against>"}
+#
+# hb_epoch absent or "" is HB_EPOCH_NOT_SUPPLIED and malformed is HB_EPOCH_INVALID,
+# by the kernel's shared rule (writer_epoch_refusal). ledger_head absent is
+# LEDGER_HEAD_NOT_SUPPLIED; a ledger_head other than the fetched head is
+# LEDGER_HEAD_INVALID (the request is stale). Each is six-field FAIL_CLOSED before
+# the cycle runs. The request's sha256 is carried in the run's receipt. No clock
+# is read.
 on:
-  workflow_dispatch:
-    inputs:
-      hb_epoch:
-        description: 'supplied heartbeat epoch the cycle carries (ASCII digits, value >= 32); no clock is read for it'
-        required: true
-        type: string
+  push:
+    branches: [main]
+    paths:
+      - .stegverse/federation-cycle/request.json
 
 permissions:
   contents: read
@@ -22,26 +39,47 @@ jobs:
   cycle:
     runs-on: ubuntu-latest
     env:
-      HB_EPOCH: ${{ github.event.inputs.hb_epoch }}
-      STEGVERSE_ORG_FEDERATION_GATEWAY_URL: ${{ vars.STEGVERSE_ORG_FEDERATION_GATEWAY_URL }}
+      LEDGER_REF: refs/stegverse/organization-ledger
+      REQUEST: .stegverse/federation-cycle/request.json
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
 
-      # Refused by the kernel's shared rule (writer_epoch_refusal), six-field
-      # FAIL_CLOSED, before the cycle runs. A workflow_dispatch string input
-      # cannot tell empty from absent, so a missing key and "" are both
-      # HB_EPOCH_NOT_SUPPLIED.
-      - name: Refuse an absent or invalid dispatch epoch before the cycle
-        env:
-          DISPATCH_INPUTS: ${{ toJSON(github.event.inputs) }}
+      - name: Read the ledger head the request is checked against
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+$LEDGER_REF:$LEDGER_REF"
+          echo "LEDGER_HEAD=$(git rev-parse "$LEDGER_REF")" >> "$GITHUB_ENV"
+
+      - name: Refuse an absent, invalid or stale committed request before the cycle
         run: |
           python - <<'PY'
-          import importlib.util, json, os, sys
-          entrypoint = ".github/workflows/resident-federation-cycle.yml"
-          inputs = json.loads(os.environ.get("DISPATCH_INPUTS") or "null")
-          hb_epoch = inputs.get("hb_epoch") if isinstance(inputs, dict) else None
+          import hashlib, importlib.util, json, os, re, sys
+          entrypoint = ".github/workflows/resident-federation-cycle.yml (commit a new .stegverse/federation-cycle/request.json)"
+          def refuse(code, predicate, detail, repair):
+              print(json.dumps({"disposition": "FAIL_CLOSED", "failure_code": code,
+                                "failed_predicate": predicate, "detail": detail,
+                                "required_evidence_or_repair": repair,
+                                "retry_entrypoint": entrypoint,
+                                "owning_existing_goal": "SVORG-LLM-ORG-FOUNDATION-001",
+                                "next_attempt": "commit a corrected request to main; nothing was written",
+                                "derived_from_clock": False, "consequence_committed": False}, sort_keys=True))
+              sys.exit(1)
+          path = os.environ["REQUEST"]
+          if not os.path.isfile(path):
+              refuse("FEDERATION_CYCLE_REQUEST_NOT_SUPPLIED", "COMMITTED_REQUEST_IS_PRESENT", path + " absent",
+                     "commit " + path + " to main")
+          try:
+              raw = open(path, "rb").read()
+              request = json.loads(raw)
+          except (OSError, ValueError) as exc:
+              refuse("FEDERATION_CYCLE_REQUEST_INVALID", "COMMITTED_REQUEST_IS_A_JSON_OBJECT", str(exc),
+                     "commit " + path + " as a JSON object")
+          if not isinstance(request, dict):
+              refuse("FEDERATION_CYCLE_REQUEST_INVALID", "COMMITTED_REQUEST_IS_A_JSON_OBJECT", type(request).__name__,
+                     "commit " + path + " as a JSON object")
+          hb_epoch = request.get("hb_epoch")
           if hb_epoch == "":
               hb_epoch = None
           spec = importlib.util.spec_from_file_location("kernel", "org-kernel/kernel.py")
@@ -51,7 +89,46 @@ jobs:
           if refusal is not None:
               print(json.dumps(refusal, sort_keys=True))
               sys.exit(1)
+          ledger_head = request.get("ledger_head")
+          if ledger_head in (None, ""):
+              refuse("LEDGER_HEAD_NOT_SUPPLIED", "COMMITTED_REQUEST_NAMES_THE_LEDGER_HEAD", "ledger_head absent",
+                     "the request names the 40-hex sha of " + os.environ["LEDGER_REF"] + " it was made against")
+          if not isinstance(ledger_head, str) or not re.fullmatch(r"[0-9a-f]{40}", ledger_head) \
+                  or ledger_head != os.environ["LEDGER_HEAD"]:
+              refuse("LEDGER_HEAD_INVALID", "COMMITTED_REQUEST_LEDGER_HEAD_IS_THE_FETCHED_HEAD",
+                     "request " + repr(ledger_head) + ", fetched " + os.environ["LEDGER_HEAD"],
+                     "re-commit the request against the current ledger head")
+          receipt = {"request_path": path, "request_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
+                     "request_commit": os.environ["GITHUB_SHA"], "ledger_head": ledger_head,
+                     "hb_epoch": str(hb_epoch), "derived_from_clock": False}
+          os.makedirs(os.environ["RUNNER_TEMP"] + "/results", exist_ok=True)
+          with open(os.environ["RUNNER_TEMP"] + "/results/request.json", "w") as out:
+              json.dump(receipt, out, indent=2, sort_keys=True)
+          with open(os.environ["GITHUB_ENV"], "a") as env:
+              env.write("HB_EPOCH=" + str(hb_epoch) + "\n")
+          print(json.dumps(receipt, sort_keys=True))
           PY
 
-      - name: Run the resident cycle at the supplied epoch
+      - name: Run the resident cycle at the committed epoch
         run: python resident-runtime/federation_cycle.py --hb-epoch "$HB_EPOCH"
+
+      - name: Carry the request digest in the cycle receipt
+        run: |
+          python - <<'PY'
+          import json, os
+          results = os.environ["RUNNER_TEMP"] + "/results"
+          request = json.load(open(results + "/request.json"))
+          cycle = json.load(open("resident-runtime/federation/latest-cycle.json"))
+          cycle["committed_request"] = request
+          with open(results + "/cycle.json", "w") as out:
+              json.dump(cycle, out, indent=2, sort_keys=True)
+          print(json.dumps(cycle, sort_keys=True))
+          PY
+
+      - name: Retain the run's evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: resident-federation-cycle
+          path: ${{ runner.temp }}/results
+          if-no-files-found: ignore

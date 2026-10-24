@@ -1247,18 +1247,22 @@ class ManifestEntrypointsBindTheirEpoch(unittest.TestCase):
             with self.subTest(entrypoint=path):
                 binding = bindings.get(path)
                 self.assertIsNotNone(binding, path + " requires an epoch but the manifest binds none")
-                self.assertIn(binding["hb_epoch"]["from"], ("dispatch_input", "carried"))
+                self.assertIn(binding["hb_epoch"]["from"], ("committed_request", "carried"))
                 self.assertIs(binding["hb_epoch"]["derived_from_clock"], False)
                 flag = binding["hb_epoch"]["cli_flag"]
                 self.assertIn('"' + flag + '"', (TREE / path).read_text())
                 dispatcher = binding["dispatcher"]
                 self.assertIs(dispatcher["adds_dependency"], False)
-                # The dispatcher is in the tree: a workflow that takes the epoch
-                # as a dispatch input and passes it to the entrypoint.
+                # The dispatcher is in the tree: a workflow triggered by a push
+                # that commits the request, reading the epoch from that file and
+                # passing it to the entrypoint (B-P40 COMMITTED_REQUEST).
                 self.assertIs(dispatcher["in_tree"], True)
+                self.assertEqual(dispatcher["kind"], "COMMITTED_REQUEST")
                 workflow = (TREE / dispatcher["workflow"]).read_text()
-                self.assertIn("workflow_dispatch:", workflow)
-                self.assertIn("      " + dispatcher["input"] + ":", workflow)
+                self.assertNotIn("workflow_dispatch:", workflow)
+                self.assertIn("      - " + dispatcher["request"] + "\n", workflow)
+                self.assertIn('request.get("' + dispatcher["input"] + '")', workflow)
+                self.assertIn('request.get("ledger_head")', workflow)
                 self.assertIn(dispatcher["invocation"], workflow)
                 self.assertIn(path + " " + flag + " ", dispatcher["invocation"])
                 self.assertIn("writer_epoch_refusal", workflow)
@@ -1266,7 +1270,13 @@ class ManifestEntrypointsBindTheirEpoch(unittest.TestCase):
     def test_no_schedule_or_push_trigger_reaches_an_epoch_requiring_entrypoint(self):
         # Lead 08:35Z: schedule and push are not admissible dispatchers. A
         # workflow they trigger runs no epoch-requiring entrypoint (only tests).
+        # B-P40 (R-DISPATCH): the one admissible push is a committed request, the
+        # manifest's dispatcher workflow, whose push paths are only its request.
         import re
+        manifest = json.loads((TREE / "resident-runtime/activation-manifest.json").read_text())
+        requests = {b["dispatcher"]["workflow"]: b["dispatcher"]["request"]
+                    for b in (manifest.get("epoch_bindings") or {}).values()
+                    if b["dispatcher"].get("kind") == "COMMITTED_REQUEST"}
         requiring = [path for path in TREE.rglob("*.py")
                      if ".git" not in path.parts and "tests" not in path.parts
                      and '"--hb-epoch"' in path.read_text()]
@@ -1278,6 +1288,12 @@ class ManifestEntrypointsBindTheirEpoch(unittest.TestCase):
             on_block = re.search(r"^on:\n((?:[ \t]+.*\n|\n)*)", text, re.M)
             triggers = set(re.findall(r"^  (\w+):", on_block.group(1), re.M)) if on_block else set()
             if not triggers & {"schedule", "push"}:
+                continue
+            request = requests.get(".github/workflows/" + workflow.name)
+            if request is not None and triggers == {"push"}:
+                paths = re.search(r"^  push:\n    branches: \[main\]\n    paths:\n((?:      - .*\n)+)", text, re.M)
+                self.assertIsNotNone(paths, workflow.name)
+                self.assertEqual(paths.group(1), "      - " + request + "\n", workflow.name)
                 continue
             for line in text.splitlines():
                 for name in names:

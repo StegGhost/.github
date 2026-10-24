@@ -22,6 +22,8 @@ on:
       - '.stegverse/transition-ledger/emit.py'
       - 'tests/test_clock_marker_probe.py'
       - '.github/workflows/clock-marker-probe-validation.yml'
+      - 'tests/test_workflow_triggers.py'
+      - '.github/workflows/**'
   push:
     branches: [main]
     paths:
@@ -43,7 +45,8 @@ on:
       - '.stegverse/transition-ledger/emit.py'
       - 'tests/test_clock_marker_probe.py'
       - '.github/workflows/clock-marker-probe-validation.yml'
-  workflow_dispatch:
+      - 'tests/test_workflow_triggers.py'
+      - '.github/workflows/**'
 
 permissions:
   contents: read
@@ -60,3 +63,6 @@ jobs:
       # an absent epoch or stamp the supplied one.
       - name: Fixed-clock probe of every route
         run: python -m unittest tests.test_clock_marker_probe -v
+      # No workflow is triggered by hand or by a clock (B-P40, R-DISPATCH).
+      - name: Workflow triggers are state transitions
+        run: python -m unittest tests.test_workflow_triggers -v

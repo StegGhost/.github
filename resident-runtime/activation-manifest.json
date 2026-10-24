@@ -30,7 +30,7 @@
   "epoch_bindings": {
     "resident-runtime/federation_cycle.py": {
       "hb_epoch": {
-        "from": "dispatch_input",
+        "from": "committed_request",
         "cli_flag": "--hb-epoch",
         "env": "HB_EPOCH",
         "rule": "SUBMISSION_CARRIES_THE_SUPPLIED_HB_EPOCH",
@@ -38,11 +38,14 @@
         "derived_from_clock": false
       },
       "dispatcher": {
-        "kind": "WORKFLOW_DISPATCH",
+        "kind": "COMMITTED_REQUEST",
         "workflow": ".github/workflows/resident-federation-cycle.yml",
+        "request": ".stegverse/federation-cycle/request.json",
         "input": "hb_epoch",
+        "ledger_head": "refs/stegverse/organization-ledger",
         "invocation": "python resident-runtime/federation_cycle.py --hb-epoch \"$HB_EPOCH\"",
         "empty_or_absent_input": "HB_EPOCH_NOT_SUPPLIED, refused before the cycle runs",
+        "ledger_head_absent_or_mismatched": "LEDGER_HEAD_NOT_SUPPLIED / LEDGER_HEAD_INVALID, refused before the cycle runs",
         "in_tree": true,
         "adds_dependency": false
       }
