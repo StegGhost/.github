@@ -31,7 +31,6 @@ on:
       - resident-runtime/ecosystem_control.py
       - resident-runtime/federation_gateway_transport.py
       - .github/workflows/node-standing-ingress-validation.yml
-  workflow_dispatch:
 
 # contents: read, not {}. This repository is internal, so an unpermissioned
 # GITHUB_TOKEN cannot read it and actions/checkout fails with

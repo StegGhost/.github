@@ -123,6 +123,8 @@
       "bypass rejection semantics"
     ],
     "currently_observed_discovery_host_is_canonical": false,
+    "currently_observed_discovery_host_normative": false,
+    "currently_observed_discovery_host_status": "NON_NORMATIVE_OBSERVATION: recorded as seen, never a transition predicate, an endpoint to await, or an always-on receiver (B-P40, derived from StegVerse-Labs/.github@149f16e task-registry-global-invariants.json:58,60,160-161)",
     "currently_observed_discovery_host_provider_class": "THIRD_PARTY_HOST_UNDER_ACTIVE_ERADICATION",
     "canonical_discovery_host": "UNRESOLVED_PENDING_HOST_DECLARATION",
     "third_party_hosts_required": false,

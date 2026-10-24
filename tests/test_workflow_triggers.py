@@ -10,9 +10,9 @@ to what was committed: triggers are pull_request, push or workflow_run; a
 writer takes its epoch from a committed request (COMMITTED_REQUEST), never
 from a dispatch input or a schedule.
 
-The YAML is read as text (stdlib only). ALLOWLIST holds the workflows whose
-trigger another author wrote; each is listed on the owning Goal issue for its
-owner to replace and leaves this list when it is.
+The YAML is read as text (stdlib only). ALLOWLIST holds only workflows on a
+declared other-lane surface (TVC, InTr-path, KV), handed off to that lane; an
+entry leaves the list when its trigger is replaced.
 """
 from __future__ import annotations
 
@@ -23,16 +23,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 
-#: path -> trigger keys another author added, not edited here (B-P40).
-ALLOWLIST = {
-    ".github/workflows/bilateral-match-validation.yml": {"workflow_dispatch"},
-    ".github/workflows/intr-destination-capability-validation.yml": {"workflow_dispatch"},
-    ".github/workflows/node-standing-ingress-validation.yml": {"workflow_dispatch"},
-    ".github/workflows/org-boundary-execution.yml": {"workflow_dispatch"},
-    ".github/workflows/org-runtime-boundary.yml": {"workflow_dispatch"},
-    ".github/workflows/organization-egress-boundary-validation.yml": {"workflow_dispatch"},
-    ".github/workflows/organization-ledger-transition.yml": {"workflow_dispatch"},
-}
+#: path -> trigger keys handed off to another lane's surface, not edited here
+#: (B-P40, R-SCOPE). None is a workflow trigger: every workflow here conforms.
+ALLOWLIST: dict[str, set[str]] = {}
 
 FORBIDDEN = {"workflow_dispatch", "schedule", "repository_dispatch"}
 

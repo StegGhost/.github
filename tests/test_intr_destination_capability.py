@@ -734,10 +734,14 @@ class DesignatedLedgerRefTests(unittest.TestCase):
         self.assertIs(location["new_ledger_root"], False)
         self.assertTrue(location["namespace"])
 
-    def test_the_dispatch_workflow_appends_pushes_and_reads_the_ref_back(self):
+    def test_the_committed_request_workflow_appends_pushes_and_reads_the_ref_back(self):
         text = (ROOT / ".github/workflows/organization-ledger-transition.yml").read_text(
             encoding="utf-8")
-        self.assertIn("workflow_dispatch", text)
+        # B-P40 COMMITTED_REQUEST: a push committing the request, no dispatch, no inputs.
+        self.assertNotIn("workflow_dispatch:", text)
+        self.assertNotIn("github.event.inputs", text)
+        self.assertIn("on:\n  push:\n    branches: [main]\n    paths:\n"
+                      "      - .stegverse/organization-ledger-transition/request.json\n", text)
         self.assertIn("refs/stegverse/organization-ledger", text)
         self.assertIn("--self-close", text)
         self.assertIn("communication_id", text)
@@ -747,14 +751,15 @@ class DesignatedLedgerRefTests(unittest.TestCase):
         self.assertNotIn("federation.json", text)
 
 
-class DispatchEpochGateTests(unittest.TestCase):
-    """The workflow's own inline epoch gate emits the kernel's six-field refusal.
+class CommittedRequestGateTests(unittest.TestCase):
+    """The workflow's own inline request gate emits six-field refusals.
 
     The step's run block is read from the workflow and executed as-is; only
-    DISPATCH_INPUTS (the toJSON of the dispatch inputs) varies per case.
+    the committed request file (REQUEST) varies per case. LEDGER_REF is this
+    checkout's HEAD, so a request naming HEAD or an ancestor is on the ledger.
     """
 
-    STEP = "      - name: Refuse an absent or invalid dispatch epoch before any append\n"
+    STEP = "      - name: Refuse an absent, invalid or stale committed request before any append\n"
     SIX_FIELDS = ("failure_code", "failed_predicate", "required_evidence_or_repair",
                   "retry_entrypoint", "owning_existing_goal", "next_attempt")
 
@@ -771,12 +776,24 @@ class DispatchEpochGateTests(unittest.TestCase):
             body.append(line[10:] if line.strip() else "\n")
         cls.script = "".join(body)
 
-    def run_gate(self, inputs):
-        env = {k: v for k, v in os.environ.items() if k != "DISPATCH_INPUTS"}
-        if inputs is not None:
-            env["DISPATCH_INPUTS"] = json.dumps(inputs)
-        return subprocess.run(["bash", "-e", "-c", self.script], cwd=ROOT, env=env,
-                              capture_output=True, text=True, check=False)
+    HEAD = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True,
+                          text=True, check=True).stdout.strip()
+
+    def run_gate(self, inputs, raw=None):
+        work = tempfile.TemporaryDirectory()
+        self.addCleanup(work.cleanup)
+        request = Path(work.name) / "request.json"
+        if raw is not None:
+            request.write_text(raw)
+        elif inputs is not None:
+            request.write_text(json.dumps(inputs))
+        env = {k: v for k, v in os.environ.items() if k not in ("GITHUB_ENV", "GITHUB_SHA")}
+        env.update(REQUEST=str(request), LEDGER_REF="HEAD", RUNNER_TEMP=work.name,
+                   GITHUB_ENV=str(Path(work.name) / "env"))
+        result = subprocess.run(["bash", "-e", "-c", self.script], cwd=ROOT, env=env,
+                                capture_output=True, text=True, check=False)
+        result.work = Path(work.name)
+        return result
 
     def assert_refused(self, inputs, code):
         result = self.run_gate(inputs)
@@ -793,21 +810,43 @@ class DispatchEpochGateTests(unittest.TestCase):
         self.assertIs(refusal["consequence_committed"], False)
 
     def test_an_absent_or_empty_epoch_is_not_supplied(self):
-        # A dispatch string input cannot tell "" from absent; both are NOT_SUPPLIED here.
+        # A missing hb_epoch key and "" are both NOT_SUPPLIED.
         self.assert_refused({"communication_id": "c-1"}, "HB_EPOCH_NOT_SUPPLIED")
         self.assert_refused({"hb_epoch": ""}, "HB_EPOCH_NOT_SUPPLIED")
-        self.assert_refused(None, "HB_EPOCH_NOT_SUPPLIED")
+        self.assert_refused({}, "HB_EPOCH_NOT_SUPPLIED")
+
+    def test_an_absent_or_malformed_request_is_refused(self):
+        self.assert_refused(None, "LEDGER_TRANSITION_REQUEST_NOT_SUPPLIED")
+        result = self.run_gate(None, raw="[1]")
+        self.assertEqual(json.loads(result.stdout)["failure_code"], "LEDGER_TRANSITION_REQUEST_INVALID")
+        result = self.run_gate(None, raw="{")
+        self.assertEqual(json.loads(result.stdout)["failure_code"], "LEDGER_TRANSITION_REQUEST_INVALID")
+
+    def test_identifiers_and_ledger_head_are_checked(self):
+        base = {"hb_epoch": "4096", "communication_id": "c-1", "ledger_head": self.HEAD}
+        self.assert_refused({**base, "communication_id": ""}, "COMMUNICATION_ID_NOT_SUPPLIED")
+        self.assert_refused({**base, "communication_id": "a/../b"}, "REQUEST_IDENTIFIER_INVALID")
+        self.assert_refused({**base, "packet_id": "p\u00e9"}, "REQUEST_IDENTIFIER_INVALID")
+        self.assert_refused({k: v for k, v in base.items() if k != "ledger_head"}, "LEDGER_HEAD_NOT_SUPPLIED")
+        self.assert_refused({**base, "ledger_head": "f" * 40}, "LEDGER_HEAD_INVALID")
+        self.assert_refused({**base, "ledger_head": "GENESIS"}, "LEDGER_HEAD_INVALID")
 
     def test_an_invalid_epoch_is_refused(self):
         for value in ("\u0663\u0663", "\uff13\uff13", "+33", " 33", "33.0", "31", "abc"):
             with self.subTest(value=value):
                 self.assert_refused({"hb_epoch": value}, "HB_EPOCH_INVALID")
 
-    def test_a_supplied_epoch_passes(self):
-        result = self.run_gate({"hb_epoch": "4096", "communication_id": "c-1"})
+    def test_a_committed_request_on_the_ledger_passes(self):
+        result = self.run_gate({"hb_epoch": "4096", "communication_id": "c-1", "ledger_head": self.HEAD})
         self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
-        self.assertEqual(result.stdout, "")
         self.assertNotIn("Traceback", result.stderr)
+        receipt = json.loads(result.stdout)
+        self.assertEqual(receipt["hb_epoch"], "4096")
+        self.assertTrue(receipt["request_sha256"].startswith("sha256:"))
+        self.assertIs(receipt["derived_from_clock"], False)
+        self.assertEqual((result.work / "env").read_text(), "HB_EPOCH=4096\n")
+        self.assertEqual((result.work / "closure-id.txt").read_text(),
+                         "c-1\norganization-intr-destination-self-closure\n")
 
     def test_the_legacy_inline_refusal_is_gone(self):
         text = (ROOT / ".github/workflows/organization-ledger-transition.yml").read_text(

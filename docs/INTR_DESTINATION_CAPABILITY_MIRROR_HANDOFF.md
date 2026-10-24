@@ -154,8 +154,9 @@ The organization ledger ref is `refs/stegverse/organization-ledger` in
 subtree of that same ref (`repository_ledger_location` in `contract.json`).
 `resident-runtime/intr_destination_ingress.py` `self_close` forms a diagnostic
 and receives it here. Both receipts carry `communication_id`.
-`.github/workflows/organization-ledger-transition.yml` is the
-`workflow_dispatch` run that appends those receipts on the designated ref,
+`.github/workflows/organization-ledger-transition.yml` is the run, triggered
+by a push to main committing `.stegverse/organization-ledger-transition/request.json`
+(COMMITTED_REQUEST, B-P40), that appends those receipts on the designated ref,
 pushes it fast-forward only, and reads them back from a fresh fetch.
 `SGHOST-EXEMPTION-006` still refuses the master-records handoff. That refusal
 is a separate act from recording on this ledger.

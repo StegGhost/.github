@@ -12,7 +12,6 @@ on:
       - 'org-runtime/**'
       - 'ORG_RESIDENT_RUNTIME_INTR_BOUNDARY_MIRROR_HANDOFF.md'
       - '.github/workflows/org-runtime-boundary.yml'
-  workflow_dispatch:
 
 permissions:
   contents: read

@@ -1270,13 +1270,22 @@ class ManifestEntrypointsBindTheirEpoch(unittest.TestCase):
     def test_no_schedule_or_push_trigger_reaches_an_epoch_requiring_entrypoint(self):
         # Lead 08:35Z: schedule and push are not admissible dispatchers. A
         # workflow they trigger runs no epoch-requiring entrypoint (only tests).
-        # B-P40 (R-DISPATCH): the one admissible push is a committed request, the
-        # manifest's dispatcher workflow, whose push paths are only its request.
+        # B-P40 (R-DISPATCH): the one admissible push is a committed request: a
+        # workflow whose push paths are only its .stegverse/**/request.json, that
+        # reads hb_epoch from that file through the kernel's shared rule. The
+        # manifest's dispatcher is one of them.
         import re
         manifest = json.loads((TREE / "resident-runtime/activation-manifest.json").read_text())
         requests = {b["dispatcher"]["workflow"]: b["dispatcher"]["request"]
                     for b in (manifest.get("epoch_bindings") or {}).values()
                     if b["dispatcher"].get("kind") == "COMMITTED_REQUEST"}
+        self.assertIn(".github/workflows/resident-federation-cycle.yml", requests)
+        for workflow in sorted((TREE / ".github/workflows").glob("*.yml")):
+            text = workflow.read_text()
+            only = re.search(r"^on:\n  push:\n    branches: \[main\]\n    paths:\n"
+                             r"      - (\.stegverse/[\w./-]+/request\.json)\n\n", text, re.M)
+            if only and 'request.get("hb_epoch")' in text and "writer_epoch_refusal(hb_epoch" in text:
+                requests.setdefault(".github/workflows/" + workflow.name, only.group(1))
         requiring = [path for path in TREE.rglob("*.py")
                      if ".git" not in path.parts and "tests" not in path.parts
                      and '"--hb-epoch"' in path.read_text()]

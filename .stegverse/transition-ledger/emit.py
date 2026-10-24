@@ -18,10 +18,10 @@ def sha(v):return "sha256:"+hashlib.sha256(v if isinstance(v,(bytes,bytearray)) 
 def lr():
  o=os.getenv("STEGVERSE_REPO_LEDGER_ROOT")
  # A git+<repository>#<ref>[:namespace] locator is the designated durable root.
- # A plain path stays a filesystem root. With neither supplied, the host state
- # directory remains the local root callers already resolved.
+ # A plain path stays a filesystem root. With neither supplied, XDG_STATE_HOME
+ # as the caller set it; never the host home directory (StateRootNotSupplied).
  if o:return ledger_store.parse_locator(o)
- return (Path(os.getenv("XDG_STATE_HOME",str(Path.home()/".local/state")))/"stegverse/repo-ledgers"/C["repository"]).resolve()
+ return (kernel.supplied_state_home("STEGVERSE_REPO_LEDGER_ROOT")/"stegverse/repo-ledgers"/C["repository"]).resolve()
 # A transition occurring in this repository emits its receipt here. An
 # in-process caller needs the same append the CLI performs, with the same lock
 # and the same HEAD publication -- a second implementation of this would be a

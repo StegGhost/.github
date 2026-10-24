@@ -1,28 +1,37 @@
 name: Organization Ledger Transition
 
-# A workflow_dispatch run performs an intr-destination diagnostic self-closure:
+# A committed request performs an intr-destination diagnostic self-closure:
 # both ledger levels append receipts carrying communication_id, the designated
 # ref (org-contract.json organization_ledger_ref) is published by a
 # fast-forward-only push, and a fresh fetch reads the receipts back.
 # The ledger is the evidence; this run's success is not.
 # SGHOST-EXEMPTION-006 refuses the master-records handoff. This workflow does
 # not perform that handoff.
+#
+# COMMITTED_REQUEST (B-P40, ruling R-DISPATCH; pattern of StegVerse-Labs/.github
+# organization-ledger-transition.yml:18-25). The trigger is a push to main that
+# changes the committed request file. There is no workflow_dispatch, schedule or
+# cross-repository call, and the workflow takes no inputs: a run is a
+# manifest-bound state transition, not a person's or a clock's (derived from
+# StegVerse-Labs/.github@149f16e data/task-registry-global-invariants.json:54,58,60,120,160-161
+# and data/sv-work-items/invariants.json:133; precedent
+# tests/test_organization_ledger_transition_writer.py:254-257). The request file is:
+#
+#   .stegverse/organization-ledger-transition/request.json
+#   {"schema_version": "stegverse.org-ledger-transition-request.v1",
+#    "communication_id": "<printable, no '..', '/' or '\\'>",
+#    "packet_id": "<optional; default organization-intr-destination-self-closure>",
+#    "hb_epoch": "<ASCII digits, value >= 32>",
+#    "ledger_head": "<40-hex sha on refs/stegverse/organization-ledger, or GENESIS before the ref exists>"}
+#
+# The ledger head the request names must be on the published ledger (the head or
+# an ancestor of it): the merge-transfer writer appends on the same push, so the
+# head may move between the commit and this run.
 on:
-  workflow_dispatch:
-    inputs:
-      communication_id:
-        description: 'communication_id the diagnostic self-closure correlates on'
-        required: true
-        type: string
-      hb_epoch:
-        description: 'supplied heartbeat epoch the receipts carry (ASCII digits, value >= 32); no clock is read for it'
-        required: true
-        type: string
-      packet_id:
-        description: 'packet id binding this diagnostic'
-        required: false
-        default: organization-intr-destination-self-closure
-        type: string
+  push:
+    branches: [main]
+    paths:
+      - .stegverse/organization-ledger-transition/request.json
 
 permissions:
   contents: write
@@ -39,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       LEDGER_REF: refs/stegverse/organization-ledger
-      HB_EPOCH: ${{ github.event.inputs.hb_epoch }}
+      REQUEST: .stegverse/organization-ledger-transition/request.json
     steps:
       - name: Checkout organization boundary
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -84,62 +93,89 @@ jobs:
             echo "ledger ref not yet materialized; the first append opens it at genesis"
           fi
 
-      - name: Accept the dispatch identifiers
-        env:
-          INPUT_COMMUNICATION_ID: ${{ github.event.inputs.communication_id }}
-          INPUT_PACKET_ID: ${{ github.event.inputs.packet_id }}
-        run: |
-          set -euo pipefail
-          if ! INPUT_COMMUNICATION_ID="$INPUT_COMMUNICATION_ID" INPUT_PACKET_ID="$INPUT_PACKET_ID" python - <<'PY'
-          import os, sys
-          communication_id = os.environ.get("INPUT_COMMUNICATION_ID") or ""
-          packet_id = os.environ.get("INPUT_PACKET_ID") or "organization-intr-destination-self-closure"
-          def printable(value):
-              return bool(value.strip()) and all(32 <= ord(char) <= 126 for char in value)
-          if not printable(communication_id) or not printable(packet_id):
-              sys.exit(1)
-          if any(token in communication_id or token in packet_id for token in ("..", "/", "\\")):
-              sys.exit(1)
-          open(os.environ["RUNNER_TEMP"] + "/closure-id.txt", "w").write(communication_id + "\n" + packet_id + "\n")
-          PY
-          then
-            echo "FAIL_CLOSED: DISPATCH_IDENTIFIER_INVALID" >&2
-            exit 1
-          fi
-
-      # Time is supplied with the dispatch. It is not sampled from a clock.
+      # Time is supplied by the committed request. It is not sampled from a clock.
       # The epoch is refused by the kernel's shared rule (writer_epoch_refusal),
       # six-field FAIL_CLOSED, before the writer CLI runs; nothing is written.
-      # A workflow_dispatch string input cannot tell empty from absent, so here
-      # both a missing hb_epoch key and "" are HB_EPOCH_NOT_SUPPLIED.
-      - name: Refuse an absent or invalid dispatch epoch before any append
-        env:
-          DISPATCH_INPUTS: ${{ toJSON(github.event.inputs) }}
+      # An hb_epoch key that is missing or "" is HB_EPOCH_NOT_SUPPLIED.
+      - name: Refuse an absent, invalid or stale committed request before any append
         run: |
           python - <<'PY'
-          import importlib.util, json, os, sys
+          import hashlib, importlib.util, json, os, re, subprocess, sys
           entrypoint = ".github/workflows/organization-ledger-transition.yml"
+          def refuse(code, predicate, detail, repair, goal="INTERLOCK-INTR-RUNTIME-INDEPENDENT-PROTOCOL-001"):
+              print(json.dumps({"disposition": "FAIL_CLOSED", "failure_code": code,
+                                "failed_predicate": predicate, "detail": detail,
+                                "required_evidence_or_repair": repair,
+                                "retry_entrypoint": entrypoint, "owning_existing_goal": goal,
+                                "next_attempt": "commit a corrected request to main; nothing was written",
+                                "derived_from_clock": False, "consequence_committed": False}, sort_keys=True))
+              sys.exit(1)
+          path = os.environ.get("REQUEST") or ".stegverse/organization-ledger-transition/request.json"
+          if not os.path.isfile(path):
+              refuse("LEDGER_TRANSITION_REQUEST_NOT_SUPPLIED", "COMMITTED_REQUEST_IS_PRESENT", path + " absent",
+                     "commit " + path + " to main")
           try:
-              inputs = json.loads(os.environ.get("DISPATCH_INPUTS") or "null")
-              hb_epoch = inputs.get("hb_epoch") if isinstance(inputs, dict) else None
-              if hb_epoch == "":
-                  hb_epoch = None
+              raw = open(path, "rb").read()
+              request = json.loads(raw)
+          except (OSError, ValueError) as error:
+              refuse("LEDGER_TRANSITION_REQUEST_INVALID", "COMMITTED_REQUEST_IS_A_JSON_OBJECT", type(error).__name__,
+                     "commit " + path + " as a JSON object")
+          if not isinstance(request, dict):
+              refuse("LEDGER_TRANSITION_REQUEST_INVALID", "COMMITTED_REQUEST_IS_A_JSON_OBJECT", type(request).__name__,
+                     "commit " + path + " as a JSON object")
+          hb_epoch = request.get("hb_epoch")
+          if hb_epoch == "":
+              hb_epoch = None
+          try:
               spec = importlib.util.spec_from_file_location("kernel", "org-kernel/kernel.py")
               kernel = importlib.util.module_from_spec(spec)
               spec.loader.exec_module(kernel)
               refusal = kernel.writer_epoch_refusal(hb_epoch, retry_entrypoint=entrypoint)
           except Exception as error:
-              refusal = {"disposition": "FAIL_CLOSED", "failure_code": "HB_EPOCH_GATE_UNAVAILABLE",
-                         "failed_predicate": "SUBMISSION_CARRIES_THE_SUPPLIED_HB_EPOCH",
-                         "detail": type(error).__name__,
-                         "required_evidence_or_repair": "the dispatch inputs and org-kernel/kernel.py load",
-                         "retry_entrypoint": entrypoint,
-                         "owning_existing_goal": "INTERLOCK-INTR-RUNTIME-INDEPENDENT-PROTOCOL-001",
-                         "next_attempt": "re-dispatch once the kernel loads; nothing was written",
-                         "derived_from_clock": False, "consequence_committed": False}
+              refuse("HB_EPOCH_GATE_UNAVAILABLE", "SUBMISSION_CARRIES_THE_SUPPLIED_HB_EPOCH", type(error).__name__,
+                     "the committed request and org-kernel/kernel.py load")
           if refusal is not None:
               print(json.dumps(refusal, sort_keys=True))
               sys.exit(1)
+          def printable(value):
+              return isinstance(value, str) and bool(value.strip()) and all(32 <= ord(char) <= 126 for char in value)
+          communication_id = request.get("communication_id")
+          packet_id = request.get("packet_id") or "organization-intr-destination-self-closure"
+          if communication_id in (None, ""):
+              refuse("COMMUNICATION_ID_NOT_SUPPLIED", "COMMITTED_REQUEST_NAMES_THE_COMMUNICATION_ID",
+                     "communication_id absent", "the request names the communication_id the closure correlates on")
+          if not printable(communication_id) or not printable(packet_id) or any(
+                  token in communication_id or token in packet_id for token in ("..", "/", "\\")):
+              refuse("REQUEST_IDENTIFIER_INVALID", "COMMITTED_REQUEST_IDENTIFIERS_ARE_PRINTABLE_PATH_FREE",
+                     "communication_id or packet_id", "printable ASCII without '..', '/' or '\\'")
+          ledger_ref = os.environ.get("LEDGER_REF") or "refs/stegverse/organization-ledger"
+          ledger_head = request.get("ledger_head")
+          if ledger_head in (None, ""):
+              refuse("LEDGER_HEAD_NOT_SUPPLIED", "COMMITTED_REQUEST_NAMES_THE_LEDGER_HEAD", "ledger_head absent",
+                     "the request names the sha of " + ledger_ref + " it was made against (GENESIS before the ref exists)",
+                     goal="STEGGHOST-ORGANIZATION-LEDGER-REF")
+          def git(*args):
+              return subprocess.run(["git", *args], capture_output=True, text=True).returncode == 0
+          materialized = git("rev-parse", "--verify", "--quiet", ledger_ref + "^{commit}")
+          on_ledger = (ledger_head == "GENESIS" and not materialized) or (
+              materialized and isinstance(ledger_head, str) and re.fullmatch(r"[0-9a-f]{40}", ledger_head) is not None
+              and git("merge-base", "--is-ancestor", ledger_head, ledger_ref))
+          if not on_ledger:
+              refuse("LEDGER_HEAD_INVALID", "COMMITTED_REQUEST_LEDGER_HEAD_IS_ON_THE_PUBLISHED_LEDGER",
+                     repr(ledger_head) + " is not " + ledger_ref + " or an ancestor of it",
+                     "re-commit the request against the current ledger head", goal="STEGGHOST-ORGANIZATION-LEDGER-REF")
+          temp = os.environ.get("RUNNER_TEMP") or "."
+          os.makedirs(temp + "/results/self-closure", exist_ok=True)
+          open(temp + "/closure-id.txt", "w").write(communication_id + "\n" + packet_id + "\n")
+          receipt = {"request_path": path, "request_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
+                     "request_commit": os.environ.get("GITHUB_SHA"), "ledger_head": ledger_head,
+                     "hb_epoch": str(hb_epoch), "derived_from_clock": False}
+          with open(temp + "/results/self-closure/request.json", "w") as out:
+              json.dump(receipt, out, indent=2, sort_keys=True)
+          if os.environ.get("GITHUB_ENV"):
+              with open(os.environ["GITHUB_ENV"], "a") as env:
+                  env.write("HB_EPOCH=" + str(hb_epoch) + "\n")
+          print(json.dumps(receipt, sort_keys=True))
           PY
 
       - name: Perform the intr-destination diagnostic self-closure
