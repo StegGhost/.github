@@ -53,7 +53,8 @@ def ingress(env:Mapping[str,Any],hb_epoch:Any=None)->dict[str,Any]:
     try: raw=base64.b64decode(env.get("payload_base64",""),validate=True)
     except Exception as exc: raise RuntimeBoundaryError("payload invalid") from exc
     if sha(raw)!=intent.get("payload_hash"): raise RuntimeBoundaryError("payload hash mismatch")
-    if intent.get("authority",{}).get("transport_grants_execution_authority") is not False: raise RuntimeBoundaryError("transport authority drift")
+    authority=intent.get("authority",{})
+    if not isinstance(authority,Mapping) or authority.get("transport_grants_execution_authority") is not False: raise RuntimeBoundaryError("transport authority drift")
     r={"schema":"stegverse.organization-interlock-ingress-receipt/v1","organization":"StegGhost","packet_id":intent.get("packet_id"),"payload_hash":intent.get("payload_hash"),"state":"INGRESS_VALIDATED_NOT_EXECUTED","hb_reference":hb,"interlock_validated":True,"intr_validated":True,"execution_authorized":False,"credential_authority":"TV/TVC","authority_effect":"NONE"}
     r["receipt_hash"]=sha(r); write_once(INGRESS/(safe_id(str(intent.get("packet_id")))+".json"),r); return r
 def main()->int:
@@ -68,8 +69,10 @@ def main()->int:
         else:r=ingress(kernel.read_input_json(x.file,argument="--file",retry_entrypoint=EPOCH_RETRY_ENTRYPOINT),x.hb_epoch)
     except kernel.SuppliedEpochRefused as exc:
         print(json.dumps(exc.refusal,sort_keys=True)); return 1
-    except RuntimeBoundaryError as exc:
-        # A boundary refusal (schema, owner, authority, id, write-once) is terminal and six-field, never a traceback.
+    except (RuntimeBoundaryError,AttributeError,TypeError,KeyError) as exc:
+        # A boundary refusal (schema, owner, authority, id, write-once), or a
+        # field of the wrong type in the envelope, is terminal and six-field,
+        # never a traceback.
         print(json.dumps({"disposition":"FAIL_CLOSED","failure_code":"RUNTIME_BOUNDARY_REFUSED","failed_predicate":"RUNTIME_BOUNDARY_ADMITS_THE_REQUEST",
                           "detail":str(exc),"required_evidence_or_repair":"a request the organization runtime boundary admits",
                           "retry_entrypoint":"runtime/organization_runtime.py "+x.cmd,"owning_existing_goal":kernel.HB_EPOCH_OWNING_EXISTING_GOAL,
