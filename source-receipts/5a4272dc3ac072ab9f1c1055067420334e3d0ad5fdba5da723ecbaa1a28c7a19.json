@@ -1,0 +1,45 @@
+{
+  "authority_effect": "NONE",
+  "evidence": {
+    "capability": "intr-destination",
+    "communication_id": "intr-path-v1:StegGhost->SV-LLM",
+    "destination_address": "sv-llm.intr-destination",
+    "destination_organization": "SV-LLM",
+    "disposition": "ALLOW",
+    "merge_transfer_organization_receipt_sha256": "sha256:49c678359bd06b699f4d6a32323444749d7c3b3853b6d4621f3b3ed4303bb63a",
+    "message": {
+      "body": {
+        "path_id": "StegGhost->SV-LLM:intr-destination",
+        "schema": "stegverse.org-intr-destination-diagnostic/v1",
+        "transfer_commit": "79a0ea88a3054244a9f3cbcfb4a13a6ce9f9971d"
+      },
+      "communication_id": "intr-path-v1:StegGhost->SV-LLM",
+      "message_class": "ecosystem.communication"
+    },
+    "message_sha256": "sha256:cd9af3b7b7aff5e06f7b46dbf94d9bf7cedd99d4fc580a87698d3cae9d68983b",
+    "path_id": "StegGhost->SV-LLM:intr-destination",
+    "payload_sha256": "sha256:d17c33eab941bf33f2b2d1daf7f35a86a9fec3fe585392af592b3ac04be75589",
+    "repository": "StegGhost/.github",
+    "schema": "stegverse.intr-path-transfer-evidence/v1",
+    "source_organization": "StegGhost",
+    "transfer_commit": "79a0ea88a3054244a9f3cbcfb4a13a6ce9f9971d"
+  },
+  "hb_reference": {
+    "authority_effect": "NONE",
+    "derived_from_clock": false,
+    "epoch": 469436465,
+    "frequency_hz": 100,
+    "generation": 469436465,
+    "heartbeat_id": "HB:469436465",
+    "phase_offset_ns": 0,
+    "progression_dependency": "OSCILLATOR_ONLY"
+  },
+  "predecessor_state_sha256": "sha256:d17c33eab941bf33f2b2d1daf7f35a86a9fec3fe585392af592b3ac04be75589",
+  "previous_receipt_sha256": "sha256:a3ac82e9862cb2c9411425b8c7cad20863d25c39a752222948c516a2d640f26f",
+  "receipt_sha256": "sha256:5a4272dc3ac072ab9f1c1055067420334e3d0ad5fdba5da723ecbaa1a28c7a19",
+  "repository": "StegGhost/.github",
+  "schema": "stegverse.repo-transition-receipt/v1",
+  "successor_state_sha256": "sha256:16799779c33b2a6307d8631c08c94d319f4111e6fa24bc2725c757c24bec0ff0",
+  "transition_class": "INTR_MESH_PATH_TRANSFER",
+  "transition_id": "INTR_MESH_PATH_TRANSFER:StegGhost->SV-LLM:intr-destination@intr-path-v1:StegGhost->SV-LLM"
+}
