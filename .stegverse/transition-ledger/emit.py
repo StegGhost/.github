@@ -13,7 +13,8 @@ kernel=importlib.util.module_from_spec(_spec);_spec.loader.exec_module(kernel)
 # this one addresses the same store so it does too.
 _sspec=importlib.util.spec_from_file_location("ledger_store",ROOT/"resident-runtime/ledger_store.py")
 ledger_store=importlib.util.module_from_spec(_sspec);_sspec.loader.exec_module(ledger_store)
-def canon(v):return json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()
+# allow_nan=False: a non-finite number never reaches a receipt (B-P40 row 2).
+def canon(v):return json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=False,allow_nan=False).encode()
 def sha(v):return "sha256:"+hashlib.sha256(v if isinstance(v,(bytes,bytearray)) else canon(v)).hexdigest()
 def lr():
  o=os.getenv("STEGVERSE_REPO_LEDGER_ROOT")
@@ -58,6 +59,9 @@ def append(transition_id,transition_class,predecessor_state_sha256,successor_sta
  the organization's current ledger head or refused CARRIED_PROVENANCE_UNVERIFIED.
  """
  hb=kernel.supplied_hb_reference(hb_epoch,retry_entrypoint=EPOCH_RETRY_ENTRYPOINT,carried=hb_carried,root=ROOT)
+ # The committed request this run answers rides in the receipt (B-P40 clause b);
+ # a half-set or malformed pair raises kernel.CommittedRequestInvalid, nothing written.
+ request=kernel.committed_request()
  # A store-phase fault is this repository's, never the transition's (F-TRANSIENT-RT).
  with kernel.ledger_write(EPOCH_RETRY_ENTRYPOINT):
   store=ledger_store.open_store(lr());store.initialize()
@@ -73,7 +77,9 @@ def append(transition_id,transition_class,predecessor_state_sha256,successor_sta
          or any(theirs.get(k,_ABSENT)!=mine.get(k,_ABSENT) for k in idempotent_on)):
       raise ValueError("ledger_receipt_collision")
      return prior
-   b={"schema":"stegverse.repo-transition-receipt/v1","repository":C["repository"],"transition_id":transition_id,"transition_class":transition_class,"predecessor_state_sha256":predecessor_state_sha256,"successor_state_sha256":successor_state_sha256,"evidence":evidence if evidence is not None else {},"authority_effect":authority_effect,"hb_reference":hb,"previous_receipt_sha256":prev};dg=sha(b);r={**b,"receipt_sha256":dg};key=ledger_store.receipt_key(dg)
+   b={"schema":"stegverse.repo-transition-receipt/v1","repository":C["repository"],"transition_id":transition_id,"transition_class":transition_class,"predecessor_state_sha256":predecessor_state_sha256,"successor_state_sha256":successor_state_sha256,"evidence":evidence if evidence is not None else {},"authority_effect":authority_effect,"hb_reference":hb,"previous_receipt_sha256":prev}
+   if request is not None:b["committed_request"]=request
+   dg=sha(b);r={**b,"receipt_sha256":dg};key=ledger_store.receipt_key(dg)
    # One substrate transaction: a fault before HEAD names the receipt rolls the
    # receipt back, so a failed append leaves no orphan for a retry to duplicate.
    if not store.append_transaction(key,r,head,{"repository":C["repository"],"receipt_sha256":dg,"receipt_path":store.locator(key)}):raise SystemExit("REPO_LEDGER_APPEND_CONTENTION_EXHAUSTED")

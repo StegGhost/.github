@@ -45,7 +45,9 @@ def require_state_digest(field, value):
 
 
 def canon(value):
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    # allow_nan=False: a non-finite number never reaches a receipt (B-P40 row 2).
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                      allow_nan=False).encode()
 
 
 def sha(value):
@@ -337,6 +339,10 @@ def append(source_receipt, org_transition_class, predecessor_state, successor_st
     # the tick; an absent or invalid one raises OrgLedgerEpochRefused here,
     # before the store is opened, so a refusal writes nothing.
     heartbeat = require_supplied_epoch(hb_epoch, hb_carried)
+    # The committed request this run answers rides in the receipt (B-P40 clause
+    # b); a half-set or malformed pair raises kernel.CommittedRequestInvalid here,
+    # before the store is opened.
+    request = kernel.committed_request()
     retained = {source_key(source["source_transition_sha256"]): source_receipt}
     # A fault in the store phase is this repository's, never the source's:
     # raised as kernel.LedgerWriteFailed so a caller keeps the frame pending.
@@ -370,6 +376,8 @@ def append(source_receipt, org_transition_class, predecessor_state, successor_st
                 "hb_reference": heartbeat,
                 "previous_receipt_sha256": previous,
             }
+            if request is not None:
+                body["committed_request"] = request
             digest = sha(body)
             receipt = {**body, "receipt_sha256": digest}
             key = receipt_key(digest)

@@ -114,10 +114,20 @@ jobs:
           if not os.path.isfile(path):
               refuse("LEDGER_TRANSITION_REQUEST_NOT_SUPPLIED", "COMMITTED_REQUEST_IS_PRESENT", path + " absent",
                      "commit " + path + " to main")
+          def nonfinite(token):
+              raise ValueError("non-finite number " + token + " is not JSON")
+          def finite(token):
+              value = float(token)
+              if value != value or value in (float("inf"), float("-inf")):
+                  nonfinite(token)
+              return value
+          # Strict and depth-bounded: NaN, Infinity and 1e999 are refused, and a deeply
+          # nested document (RecursionError, MemoryError) is refused six-field,
+          # never a traceback (B-P40 row 1).
           try:
               raw = open(path, "rb").read()
-              request = json.loads(raw)
-          except (OSError, ValueError) as error:
+              request = json.loads(raw, parse_constant=nonfinite, parse_float=finite)
+          except (OSError, ValueError, RecursionError, MemoryError) as error:
               refuse("LEDGER_TRANSITION_REQUEST_INVALID", "COMMITTED_REQUEST_IS_A_JSON_OBJECT", type(error).__name__,
                      "commit " + path + " as a JSON object")
           if not isinstance(request, dict):
@@ -173,8 +183,12 @@ jobs:
           with open(temp + "/results/self-closure/request.json", "w") as out:
               json.dump(receipt, out, indent=2, sort_keys=True)
           if os.environ.get("GITHUB_ENV"):
+              # Every writer this run invokes records the request it answers
+              # (kernel.committed_request, B-P40 clause b).
               with open(os.environ["GITHUB_ENV"], "a") as env:
                   env.write("HB_EPOCH=" + str(hb_epoch) + "\n")
+                  env.write("STEGVERSE_COMMITTED_REQUEST_PATH=" + path + "\n")
+                  env.write("STEGVERSE_COMMITTED_REQUEST_SHA256=" + receipt["request_sha256"] + "\n")
           print(json.dumps(receipt, sort_keys=True))
           PY
 

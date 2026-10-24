@@ -51,6 +51,12 @@ jobs:
       - name: Read the ledger head the request is checked against
         run: |
           set -euo pipefail
+          # The cycle reads the ledger it is bound to; before the ref exists there
+          # is no head to bind, which is a six-field refusal, not a git error.
+          if ! git ls-remote --exit-code origin "$LEDGER_REF" >/dev/null; then
+            echo '{"disposition":"FAIL_CLOSED","failure_code":"LEDGER_HEAD_UNAVAILABLE","failed_predicate":"COMMITTED_REQUEST_LEDGER_HEAD_IS_ON_THE_PUBLISHED_LEDGER","detail":"refs/stegverse/organization-ledger is not published","required_evidence_or_repair":"the organization ledger ref exists before a cycle is requested against it","retry_entrypoint":".github/workflows/resident-federation-cycle.yml (commit a new .stegverse/federation-cycle/request.json)","owning_existing_goal":"STEGGHOST-ORGANIZATION-LEDGER-REF","next_attempt":"request the cycle once the ledger ref is published; nothing was written","derived_from_clock":false,"consequence_committed":false}'
+            exit 1
+          fi
           git fetch --no-tags origin "+$LEDGER_REF:$LEDGER_REF"
           echo "LEDGER_HEAD=$(git rev-parse "$LEDGER_REF")" >> "$GITHUB_ENV"
 
@@ -72,10 +78,20 @@ jobs:
           if not os.path.isfile(path):
               refuse("FEDERATION_CYCLE_REQUEST_NOT_SUPPLIED", "COMMITTED_REQUEST_IS_PRESENT", path + " absent",
                      "commit " + path + " to main")
+          def nonfinite(token):
+              raise ValueError("non-finite number " + token + " is not JSON")
+          def finite(token):
+              value = float(token)
+              if value != value or value in (float("inf"), float("-inf")):
+                  nonfinite(token)
+              return value
+          # Strict and depth-bounded: NaN, Infinity and 1e999 are refused, and a deeply
+          # nested document (RecursionError, MemoryError) is refused six-field,
+          # never a traceback (B-P40 row 1).
           try:
               raw = open(path, "rb").read()
-              request = json.loads(raw)
-          except (OSError, ValueError) as exc:
+              request = json.loads(raw, parse_constant=nonfinite, parse_float=finite)
+          except (OSError, ValueError, RecursionError, MemoryError) as exc:
               refuse("FEDERATION_CYCLE_REQUEST_INVALID", "COMMITTED_REQUEST_IS_A_JSON_OBJECT", str(exc),
                      "commit " + path + " as a JSON object")
           if not isinstance(request, dict):
@@ -107,8 +123,12 @@ jobs:
           os.makedirs(os.environ["RUNNER_TEMP"] + "/results", exist_ok=True)
           with open(os.environ["RUNNER_TEMP"] + "/results/request.json", "w") as out:
               json.dump(receipt, out, indent=2, sort_keys=True)
+          # Every writer this run invokes records the request it answers
+          # (kernel.committed_request, B-P40 clause b).
           with open(os.environ["GITHUB_ENV"], "a") as env:
               env.write("HB_EPOCH=" + str(hb_epoch) + "\n")
+              env.write("STEGVERSE_COMMITTED_REQUEST_PATH=" + path + "\n")
+              env.write("STEGVERSE_COMMITTED_REQUEST_SHA256=" + receipt["request_sha256"] + "\n")
           print(json.dumps(receipt, sort_keys=True))
           PY
 

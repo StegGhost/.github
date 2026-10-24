@@ -1114,12 +1114,21 @@ class ManifestEntrypointsBindTheirEpoch(unittest.TestCase):
             with self.subTest(entrypoint=path):
                 binding = bindings.get(path)
                 self.assertIsNotNone(binding, path + " requires an epoch but the manifest binds none")
-                self.assertIn(binding["hb_epoch"]["from"], ("committed_request", "carried"))
+                self.assertIn(binding["hb_epoch"]["from"], ("committed_request", "carried", "caller_supplied"))
                 self.assertIs(binding["hb_epoch"]["derived_from_clock"], False)
                 flag = binding["hb_epoch"]["cli_flag"]
                 self.assertIn('"' + flag + '"', (TREE / path).read_text())
                 dispatcher = binding["dispatcher"]
                 self.assertIs(dispatcher["adds_dependency"], False)
+                if dispatcher["kind"] == "CALLER_SUPPLIED":
+                    # A CLI its caller runs with the epoch in hand (B-P40 row 5):
+                    # no workflow dispatches it, and it refuses an absent epoch.
+                    self.assertEqual(binding["hb_epoch"]["from"], "caller_supplied")
+                    self.assertIs(dispatcher["in_tree"], False)
+                    self.assertIn(path + " ", dispatcher["invocation"])
+                    self.assertIn(" " + flag + " ", dispatcher["invocation"])
+                    self.assertIn("writer_epoch_refusal", (TREE / path).read_text())
+                    continue
                 # The dispatcher is in the tree: a workflow triggered by a push
                 # that commits the request, reading the epoch from that file and
                 # passing it to the entrypoint (B-P40 COMMITTED_REQUEST).

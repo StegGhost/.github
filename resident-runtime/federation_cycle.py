@@ -24,6 +24,9 @@ def main(argv=None):
         print(json.dumps(refusal,sort_keys=True))
         return 1
     hb_epoch=int(raw)
+    # The committed request this cycle answers is recorded with it (B-P40 clause
+    # b); a half-set or malformed pair is refused terminal before any write.
+    request=K.committed_request()
     heartbeat=K.hb_reference(epoch=hb_epoch)
     # The repo-local spool is the only route (B-P40): no hosted gateway is
     # polled or awaited, so the cycle does not depend on a destination being up
@@ -48,6 +51,8 @@ def main(argv=None):
       "authority_effect":"NONE_CARRIER_ONLY",
       "transport":"REPO_LOCAL_SPOOL"
     }
+    if request is not None:
+        receipt["committed_request"]=request
     out=ROOT/"resident-runtime"/"federation"/"latest-cycle.json"
     out.parent.mkdir(parents=True,exist_ok=True)
     K.write_atomic(out,json.dumps(receipt,indent=2,sort_keys=True)+"\n")

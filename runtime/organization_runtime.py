@@ -49,11 +49,16 @@ def ingress(env:Mapping[str,Any],hb_epoch:Any=None)->dict[str,Any]:
     intent=env.get("intr_intent")
     if not isinstance(intent,Mapping) or intent.get("schema")!="stegverse.universal-intr-transport/v1" or intent.get("protocol")!="InTr": raise RuntimeBoundaryError("InTr invalid")
     body=dict(env); claimed=body.pop("envelope_hash",None)
-    if claimed!=sha(body): raise RuntimeBoundaryError("envelope hash mismatch")
+    # A non-finite number cannot be canonical JSON: refused, never a traceback (B-P40 row 4).
+    try: digest=sha(body)
+    except ValueError as exc: raise RuntimeBoundaryError("envelope is not canonical JSON: "+str(exc)) from exc
+    if claimed!=digest: raise RuntimeBoundaryError("envelope hash mismatch")
     try: raw=base64.b64decode(env.get("payload_base64",""),validate=True)
     except Exception as exc: raise RuntimeBoundaryError("payload invalid") from exc
     if sha(raw)!=intent.get("payload_hash"): raise RuntimeBoundaryError("payload hash mismatch")
-    if intent.get("authority",{}).get("transport_grants_execution_authority") is not False: raise RuntimeBoundaryError("transport authority drift")
+    authority=intent.get("authority")
+    if not isinstance(authority,Mapping): raise RuntimeBoundaryError("InTr authority is not an object")
+    if authority.get("transport_grants_execution_authority") is not False: raise RuntimeBoundaryError("transport authority drift")
     r={"schema":"stegverse.organization-interlock-ingress-receipt/v1","organization":"StegGhost","packet_id":intent.get("packet_id"),"payload_hash":intent.get("payload_hash"),"state":"INGRESS_VALIDATED_NOT_EXECUTED","hb_reference":hb,"interlock_validated":True,"intr_validated":True,"execution_authorized":False,"credential_authority":"TV/TVC","authority_effect":"NONE"}
     r["receipt_hash"]=sha(r); write_once(INGRESS/(safe_id(str(intent.get("packet_id")))+".json"),r); return r
 def main()->int:

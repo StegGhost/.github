@@ -246,6 +246,21 @@ def writer_fault_record(error:BaseException, *, retry_entrypoint:str)->dict[str,
         return dict(fault.refusal)
     return dict(LedgerWriteFailed(fault,retry_entrypoint=retry_entrypoint).refusal)
 
+def _refuse_nonfinite(token:str)->Any:
+    raise ValueError("non-finite number "+token+" is not JSON")
+
+def _finite_float(token:str)->float:
+    value=float(token)
+    if value!=value or value in (float("inf"),float("-inf")):
+        raise ValueError("non-finite number "+token+" is not JSON")
+    return value
+
+def strict_json_loads(text:str|bytes)->Any:
+    """JSON as RFC 8259 defines it: NaN, Infinity and an overflowing literal
+    such as 1e999 raise ValueError instead of becoming a float no receipt can
+    carry. A deeply nested document still raises RecursionError for the caller."""
+    return json.loads(text,parse_constant=_refuse_nonfinite,parse_float=_finite_float)
+
 class InputRefused(Exception):
     """A CLI input the caller supplied is not readable as the JSON it must be.
 
@@ -263,12 +278,13 @@ def read_input_json(source:Any, *, argument:str, retry_entrypoint:str, inline:bo
                     expect:type=dict)->Any:
     """The JSON value of a CLI input (a file path, or with `inline` the text), or InputRefused.
 
-    A missing path, a directory, undecodable bytes, malformed JSON and a value
-    of the wrong top-level type are each refused terminal, naming the argument.
+    A missing path, a directory, undecodable bytes, malformed JSON, a
+    non-finite number and a value of the wrong top-level type are each refused
+    terminal, naming the argument.
     """
     try:
         text=source if inline else Path(source).read_text(encoding="utf-8")
-        value=json.loads(text)
+        value=strict_json_loads(text)
     # UnicodeDecodeError and JSONDecodeError are ValueErrors; a deeply nested
     # document raises RecursionError (or MemoryError) and is refused the same way.
     except (OSError,ValueError,RecursionError,MemoryError) as error:
@@ -765,6 +781,48 @@ __all__=["hb_reference","derive_channel","carrier_frame","recover_packet","dispa
          "SuppliedEpochRefused","writer_epoch_refusal","supplied_hb_reference","frame_supplied_epoch"]
 
 
+# --- Committed request (B-P40, clause b) ---
+COMMITTED_REQUEST_PATH_ENV="STEGVERSE_COMMITTED_REQUEST_PATH"
+COMMITTED_REQUEST_SHA256_ENV="STEGVERSE_COMMITTED_REQUEST_SHA256"
+
+class CommittedRequestInvalid(InputRefused):
+    """The committed-request pair a run carries is half set or malformed.
+
+    Terminal and six-field, raised before anything is opened or written: a
+    receipt either names the request it answers, or the run carries none."""
+    def __init__(self, detail:str)->None:
+        super().__init__({"disposition":"FAIL_CLOSED","failure_code":"COMMITTED_REQUEST_INVALID",
+                          "failed_predicate":"COMMITTED_REQUEST_PAIR_IS_COMPLETE_AND_WELL_FORMED",
+                          "detail":detail,
+                          "required_evidence_or_repair":("set both "+COMMITTED_REQUEST_PATH_ENV+" (a repository-relative "
+                                                         "path) and "+COMMITTED_REQUEST_SHA256_ENV+" (sha256:<64 hex>), or neither"),
+                          "retry_entrypoint":"the committed-request workflow gate that exports the pair",
+                          "owning_existing_goal":HB_EPOCH_OWNING_EXISTING_GOAL,
+                          "next_attempt":"re-run with a complete pair; nothing was written",
+                          "terminal":True,"derived_from_clock":False,"consequence_committed":False})
+
+def committed_request(env:dict[str,str]|None=None)->dict[str,Any]|None:
+    """The committed request this run answers, for each receipt it writes, or None.
+
+    Read from the pair the workflow gate exports after it has checked the
+    request; neither set is a run with no committed request. Half a pair, a
+    path that is absolute or climbs out, or a digest that is not sha256:<64 hex>
+    raises CommittedRequestInvalid."""
+    values=os.environ if env is None else env
+    path=values.get(COMMITTED_REQUEST_PATH_ENV); digest=values.get(COMMITTED_REQUEST_SHA256_ENV)
+    if not path and not digest:
+        return None
+    if not path or not digest:
+        raise CommittedRequestInvalid("only one of "+COMMITTED_REQUEST_PATH_ENV+" and "+COMMITTED_REQUEST_SHA256_ENV+" is set")
+    if (path.startswith("/") or ".." in path.split("/") or "\\" in path
+            or not all(32<ord(char)<127 for char in path)):
+        raise CommittedRequestInvalid(COMMITTED_REQUEST_PATH_ENV+" is not a repository-relative path: "+repr(path))
+    hexpart=digest[len("sha256:"):] if digest.startswith("sha256:") else ""
+    if len(hexpart)!=64 or any(char not in "0123456789abcdef" for char in hexpart):
+        raise CommittedRequestInvalid(COMMITTED_REQUEST_SHA256_ENV+" is not sha256:<64 hex>: "+repr(digest))
+    return {"path":path,"sha256":digest,"hb_epoch_source":"COMMITTED_REQUEST"}
+
+
 # --- Run state root (B-P40) ---
 #: The repo-relative run root a store defaults to when its caller names none.
 #: The host home directory is never a default: a transition must not depend on
@@ -986,7 +1044,7 @@ def publish_ecosystem_message(*, origin_org:str, origin_service:str, organizatio
                               requested_action:str|None=None, transition_reference:str="ecosystem.communication.v1",
                               authority_effect:str="NONE", communication_id:str|None=None,
                               root:Path|None=None, now_ns:int|None=None,
-                              repo_root:Path|None=None)->dict[str,Any]:
+                              repo_root:Path|None=None, epoch:int|None=None)->dict[str,Any]:
     built=build_ecosystem_packets(
       origin_org=origin_org,origin_service=origin_service,organizations=organizations,standing=standing,
       message_class=message_class,subject=subject,body=body,requested_action=requested_action,
@@ -995,7 +1053,7 @@ def publish_ecosystem_message(*, origin_org:str, origin_service:str, organizatio
     )
     publications=[]
     for packet in built["packets"]:
-        published=publish_packet(packet,root=root,now_ns=now_ns)
+        published=publish_packet(packet,root=root,now_ns=now_ns,epoch=epoch)
         if repo_root is not None:
             # Written after the frame is published, because the record is of an
             # emission and carries the frame's digest. Recording it first would
@@ -1513,7 +1571,7 @@ def _verified_response(row:dict[str,Any], emissions:dict[str,dict[str,Any]])->di
 def publish_ecosystem_from_directory(repo_root:Path, *, standing:dict[str,Any], message_class:str, subject:str, body:dict[str,Any],
                                      requested_action:str|None=None, authority_effect:str="NONE",
                                      communication_id:str|None=None, mesh_root:Path|None=None,
-                                     now_ns:int|None=None)->dict[str,Any]:
+                                     now_ns:int|None=None, epoch:int|None=None)->dict[str,Any]:
     registry=load_registry(repo_root)
     directory=load_federation_directory(repo_root)
     organizations=[row["organization"] for row in directory["organizations"]]
@@ -1531,7 +1589,8 @@ def publish_ecosystem_from_directory(repo_root:Path, *, standing:dict[str,Any], 
       communication_id=communication_id,
       root=mesh_root,
       now_ns=now_ns,
-      repo_root=repo_root
+      repo_root=repo_root,
+      epoch=epoch
     )
 
 

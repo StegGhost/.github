@@ -844,7 +844,11 @@ class CommittedRequestGateTests(unittest.TestCase):
         self.assertEqual(receipt["hb_epoch"], "4096")
         self.assertTrue(receipt["request_sha256"].startswith("sha256:"))
         self.assertIs(receipt["derived_from_clock"], False)
-        self.assertEqual((result.work / "env").read_text(), "HB_EPOCH=4096\n")
+        exported = dict(line.split("=", 1) for line in (result.work / "env").read_text().splitlines())
+        # The epoch, and the committed request every writer records (B-P40 clause b).
+        self.assertEqual(exported, {"HB_EPOCH": "4096",
+                                    "STEGVERSE_COMMITTED_REQUEST_PATH": str(result.work / "request.json"),
+                                    "STEGVERSE_COMMITTED_REQUEST_SHA256": receipt["request_sha256"]})
         self.assertEqual((result.work / "closure-id.txt").read_text(),
                          "c-1\norganization-intr-destination-self-closure\n")
 
@@ -926,6 +930,29 @@ class DiagnosticSelfClosureOnAGitRefTests(unittest.TestCase):
         self.assertIs(repository_ledger["replay_read_organization_receipts"], False)
         self.assertEqual(repository_ledger["consumed_by_organization_receipt_sha256"],
                          closed["organization_receipt_sha256"])
+
+    def test_a_self_closure_under_a_committed_request_names_it_in_both_receipts(self):
+        # B-P40 clause b: the gate exports the request pair; the self-closure's
+        # receipts are written by emit.py and aggregate_repo_transition.py, which
+        # record it. No InTr file is edited for this.
+        pair = {"STEGVERSE_COMMITTED_REQUEST_PATH": ".stegverse/organization-ledger-transition/request.json",
+                "STEGVERSE_COMMITTED_REQUEST_SHA256": "sha256:" + "b" * 64}
+        saved = {name: os.environ.get(name) for name in pair}
+        os.environ.update(pair)
+        try:
+            closed = ingress.self_close("diagnostic-self-closure-cr", registry=REGISTRY,
+                                        packet_id="self-closure-cr", hb_epoch=32)
+        finally:
+            for name, value in saved.items():
+                os.environ.pop(name, None) if value is None else os.environ.__setitem__(name, value)
+        self.assertEqual(closed["disposition"], "ALLOW", closed.get("detail"))
+        store = _module("ledger_store_cr", "resident-runtime/ledger_store.py")
+        expected = {"path": pair["STEGVERSE_COMMITTED_REQUEST_PATH"],
+                    "sha256": pair["STEGVERSE_COMMITTED_REQUEST_SHA256"], "hb_epoch_source": "COMMITTED_REQUEST"}
+        for root, digest in ((self.org_root, closed["organization_receipt_sha256"]),
+                             (self.repo_root, closed["repository_receipt_sha256"])):
+            receipt = store.open_store(store.parse_locator(root)).get(store.receipt_key(digest))
+            self.assertEqual(receipt["committed_request"], expected)
 
 
 class ReadBackEpochIsNeverForwardedTests(AddressedAndClosedTests):

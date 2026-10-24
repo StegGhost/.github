@@ -22,6 +22,8 @@ on:
       - 'tests/test_clock_marker_probe.py'
       - '.github/workflows/clock-marker-probe-validation.yml'
       - 'tests/test_workflow_triggers.py'
+      - 'tests/test_committed_request_receipts.py'
+      - 'resident-runtime/ecosystem_control.py'
       - '.github/workflows/**'
   push:
     branches: [main]
@@ -44,6 +46,8 @@ on:
       - 'tests/test_clock_marker_probe.py'
       - '.github/workflows/clock-marker-probe-validation.yml'
       - 'tests/test_workflow_triggers.py'
+      - 'tests/test_committed_request_receipts.py'
+      - 'resident-runtime/ecosystem_control.py'
       - '.github/workflows/**'
 
 permissions:
@@ -64,3 +68,7 @@ jobs:
       # No workflow is triggered by hand or by a clock (B-P40, R-DISPATCH).
       - name: Workflow triggers are state transitions
         run: python -m unittest tests.test_workflow_triggers -v
+      # Each receipt names its committed request; deep, non-finite and mistyped
+      # inputs are refused six-field (B-P40 VALIDATOR rows 1-5).
+      - name: Committed-request receipts and strict inputs
+        run: python -m unittest tests.test_committed_request_receipts -v

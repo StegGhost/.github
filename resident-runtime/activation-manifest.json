@@ -26,6 +26,22 @@
   "federation_poll_mode": "OUTBOUND_ONLY",
   "federation_network_route": "REPO_LOCAL_SPOOL",
   "epoch_bindings": {
+    "resident-runtime/ecosystem_control.py": {
+      "hb_epoch": {
+        "from": "caller_supplied",
+        "cli_flag": "--hb-epoch",
+        "env": "HB_EPOCH",
+        "rule": "SUBMISSION_CARRIES_THE_SUPPLIED_HB_EPOCH",
+        "absent_or_invalid": "six-field FAIL_CLOSED HB_EPOCH_NOT_SUPPLIED / HB_EPOCH_INVALID, rc 1, nothing published",
+        "derived_from_clock": false
+      },
+      "dispatcher": {
+        "kind": "CALLER_SUPPLIED",
+        "invocation": "python resident-runtime/ecosystem_control.py send-message --subject <s> --body-json <json> --standing <file> --hb-epoch <epoch>",
+        "in_tree": false,
+        "adds_dependency": false
+      }
+    },
     "resident-runtime/federation_cycle.py": {
       "hb_epoch": {
         "from": "committed_request",
