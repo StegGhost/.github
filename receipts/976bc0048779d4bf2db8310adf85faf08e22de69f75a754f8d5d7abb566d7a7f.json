@@ -1,0 +1,38 @@
+{
+  "authority_effect": "NONE",
+  "boundary_evidence": {
+    "communication_id": "intr-path-v1:ECAT-ICAT-Formal->StegGhost",
+    "disposition": "ALLOW",
+    "operation": "ORGANIZATION_INTR_DESTINATION_INGRESS",
+    "path_id": "ECAT-ICAT-Formal->StegGhost:intr-destination",
+    "profile_id": "intr-destination",
+    "source_organization_receipt_sha256": "sha256:c0a99d2a2575bdcd421e91272caacbf927d4c11e46a2d0c0634b20b0f6fcbf03",
+    "source_repository": "ECAT-ICAT-Formal/.github",
+    "source_repository_receipt_sha256": "sha256:26faef609ccb866b2cf34017fab7c99717901685f0b86c4271b63afb0c2a4382"
+  },
+  "canonical_state_transition_receipt_sha256": null,
+  "hb_reference": {
+    "authority_effect": "NONE",
+    "derived_from_clock": false,
+    "epoch": 469436465,
+    "frequency_hz": 100,
+    "generation": 469436465,
+    "heartbeat_id": "HB:469436465",
+    "phase_offset_ns": 0,
+    "progression_dependency": "OSCILLATOR_ONLY"
+  },
+  "org_transition_class": "REPO_STATE_PROPAGATION",
+  "organization": "StegGhost",
+  "predecessor_org_state_sha256": "sha256:b3afd2862defa58c218bba2b21a85c728f77e8a0d1adeaf6e763cb59957e2876",
+  "previous_receipt_sha256": "sha256:ae3191c754c25b1562cc52893566a3f26545ddbf6a77b4abfd864bdb0e0aa4b2",
+  "receipt_sha256": "sha256:976bc0048779d4bf2db8310adf85faf08e22de69f75a754f8d5d7abb566d7a7f",
+  "repo_receipt_sha256": "sha256:b23c2054af4e8a7df115e34c56b58e9c760cc3ddacd2a205040602e23cdec8b7",
+  "repo_transition_id": "INTR_MESH_PATH_INGRESS:ECAT-ICAT-Formal->StegGhost:intr-destination@intr-path-v1:ECAT-ICAT-Formal->StegGhost",
+  "schema": "stegverse.organization-transition-receipt/v1",
+  "source_receipt_schema": "stegverse.repo-transition-receipt/v1",
+  "source_repository": "StegGhost/.github",
+  "source_transition_id": "INTR_MESH_PATH_INGRESS:ECAT-ICAT-Formal->StegGhost:intr-destination@intr-path-v1:ECAT-ICAT-Formal->StegGhost",
+  "source_transition_sha256": "sha256:b23c2054af4e8a7df115e34c56b58e9c760cc3ddacd2a205040602e23cdec8b7",
+  "subject_or_correlation_id": null,
+  "successor_org_state_sha256": "sha256:880161687236ea34c46111fc7c62973c12a86869c38df6a13df33f462480f2e3"
+}
