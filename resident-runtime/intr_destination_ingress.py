@@ -181,8 +181,13 @@ def _result(evidence: Mapping[str, Any], appended: Mapping[str, Any] | None, *,
     return result
 
 
+# ``operation``, ``profile_id`` and ``boundary_extra`` name another operation on the
+# same two-level append (resident-runtime/merge_transfer.py); their defaults are
+# this ingress, so its receipts are unchanged.
 def _append(transition_class: str, packet_id: str, evidence: Mapping[str, Any],
-            hb_epoch: int | None, hb_carried: Mapping[str, Any] | None = None) -> tuple[dict[str, Any], bool]:
+            hb_epoch: int | None, hb_carried: Mapping[str, Any] | None = None, *,
+            operation: str = OPERATION_ID, profile_id: str = PROFILE_ID,
+            boundary_extra: Mapping[str, Any] | None = None) -> tuple[dict[str, Any], bool]:
     """Append at both levels. A replay of the same packet returns the recorded pair."""
     predecessor = evidence["payload_sha256"]
     successor = sha({"disposition": evidence["disposition"], "packet_id": packet_id,
@@ -217,9 +222,9 @@ def _append(transition_class: str, packet_id: str, evidence: Mapping[str, Any],
     # organization receipt already exists returns it unchanged (idempotent).
     organization_receipt = organization_ledger.append(
         repository_receipt, "REPO_STATE_PROPAGATION", predecessor, successor,
-        {"operation": OPERATION_ID, "profile_id": PROFILE_ID,
+        {"operation": operation, "profile_id": profile_id,
          "disposition": evidence["disposition"],
-         "communication_id": evidence.get("communication_id")},
+         "communication_id": evidence.get("communication_id"), **dict(boundary_extra or {})},
         "NONE", hb_epoch=hb_epoch, idempotent=True,
         hb_carried=None if hb_carried is None else dict(hb_carried))
     return ({"repository_receipt": repository_receipt,
