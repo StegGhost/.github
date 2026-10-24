@@ -1563,6 +1563,34 @@ class CliInputsAreRefusedTerminal(WriterEntryPointsReportFaultsSixField):
                 self.assertEqual(self.written(), before)
                 self.assertFalse((self.tmp / "ingress").exists() and any((self.tmp / "ingress").iterdir()))
 
+    def test_a_non_finite_envelope_is_refused_terminal_six_field(self):
+        # V-P11 @755875b row 1: NaN or Infinity in an envelope. At the file read
+        # it is CLI_INPUT_UNREADABLE; reaching ingress() it is the ValueError
+        # canon(allow_nan=False) raises, refused RUNTIME_BOUNDARY_REFUSED. Both
+        # rc 2, terminal six-field, nothing written, no traceback.
+        runtime = load("input_runtime_nonfinite", "runtime/organization_runtime.py")
+        runtime.INGRESS = self.tmp / "ingress"
+        path = self.tmp / "nonfinite.json"
+        path.write_text('{"schema": "stegverse.organization-interlock-envelope/v1", "x": NaN}')
+        before = self.written()
+        code, out, err = self.run_cli(runtime, ["ingress", "--file", str(path), "--hb-epoch", "4096"], fault=False)
+        self.assertNotIn("Traceback", out + err)
+        self.assertEqual(code, 2, out + err)
+        record = json.loads(out.strip().splitlines()[-1])
+        self.assertEqual((record["failure_code"], record["terminal"]), ("CLI_INPUT_UNREADABLE", True))
+        envelope = {"schema": "stegverse.organization-interlock-envelope/v1",
+                    "intr_intent": {"schema": "stegverse.universal-intr-transport/v1", "protocol": "InTr"},
+                    "x": float("inf")}
+        runtime.kernel.read_input_json = lambda *args, **kwargs: envelope
+        code, out, err = self.run_cli(runtime, ["ingress", "--file", str(path), "--hb-epoch", "4096"], fault=False)
+        self.assertNotIn("Traceback", out + err)
+        self.assertEqual(code, 2, out + err)
+        record = json.loads(out.strip().splitlines()[-1])
+        self.assertEqual((record["failure_code"], record["terminal"]), ("RUNTIME_BOUNDARY_REFUSED", True))
+        for field in self.SIX:
+            self.assertIn(field, record)
+        self.assertEqual(self.written(), before)
+
     def test_inline_json_inputs_are_refused_terminal(self):
         emit = load("input_emit_cli", ".stegverse/transition-ledger/emit.py")
         aggregate = load("input_aggregate_inline_cli", "resident-runtime/aggregate_repo_transition.py")
@@ -1571,8 +1599,11 @@ class CliInputsAreRefusedTerminal(WriterEntryPointsReportFaultsSixField):
                 "successor_state_sha256": "sha256:" + "2" * 64, "evidence": {}, "authority_effect": "NONE",
                 "hb_reference": KERNEL.hb_reference(epoch=4096), "previous_receipt_sha256": None}
         source = self.valid("source.json", {**body, "receipt_sha256": aggregate.sha(body)})
+        # NaN, Infinity and 1e999 are not JSON: refused before any write, so no
+        # non-finite number reaches a receipt (V-P11 @755875b row 3).
         for text, error in (("not json", "JSONDecodeError"), ("[1]", "WRONG_TOP_LEVEL_TYPE"),
-                            ("[" * 60000, "RecursionError")):
+                            ("[" * 60000, "RecursionError"), ('{"a":NaN}', "ValueError"),
+                            ('{"a":-Infinity}', "ValueError"), ('{"a":1e999}', "ValueError")):
             with self.subTest(cli="emit", input=error):
                 self.assert_refused(emit, ["--transition-id", "t:in", "--transition-class", "T",
                                            "--predecessor-state-sha256", "sha256:" + "0" * 64,

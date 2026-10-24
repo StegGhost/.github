@@ -246,6 +246,21 @@ def writer_fault_record(error:BaseException, *, retry_entrypoint:str)->dict[str,
         return dict(fault.refusal)
     return dict(LedgerWriteFailed(fault,retry_entrypoint=retry_entrypoint).refusal)
 
+def _refuse_nonfinite(token:str)->Any:
+    raise ValueError("non-finite number "+token+" is not JSON")
+
+def _finite_float(token:str)->float:
+    value=float(token)
+    if value!=value or value in (float("inf"),float("-inf")):
+        raise ValueError("non-finite number "+token+" is not JSON")
+    return value
+
+def strict_json_loads(text:str|bytes)->Any:
+    """JSON as RFC 8259 defines it: NaN, Infinity and an overflowing literal
+    such as 1e999 raise ValueError instead of becoming a float no receipt can
+    carry. A deeply nested document still raises RecursionError for the caller."""
+    return json.loads(text,parse_constant=_refuse_nonfinite,parse_float=_finite_float)
+
 class InputRefused(Exception):
     """A CLI input the caller supplied is not readable as the JSON it must be.
 
@@ -263,12 +278,13 @@ def read_input_json(source:Any, *, argument:str, retry_entrypoint:str, inline:bo
                     expect:type=dict)->Any:
     """The JSON value of a CLI input (a file path, or with `inline` the text), or InputRefused.
 
-    A missing path, a directory, undecodable bytes, malformed JSON and a value
-    of the wrong top-level type are each refused terminal, naming the argument.
+    A missing path, a directory, undecodable bytes, malformed JSON, a
+    non-finite number and a value of the wrong top-level type are each refused
+    terminal, naming the argument.
     """
     try:
         text=source if inline else Path(source).read_text(encoding="utf-8")
-        value=json.loads(text)
+        value=strict_json_loads(text)
     # UnicodeDecodeError and JSONDecodeError are ValueErrors; a deeply nested
     # document raises RecursionError (or MemoryError) and is refused the same way.
     except (OSError,ValueError,RecursionError,MemoryError) as error:

@@ -45,7 +45,9 @@ def require_state_digest(field, value):
 
 
 def canon(value):
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    # allow_nan=False: a non-finite number never reaches a receipt (B-P40 row 2).
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                      allow_nan=False).encode()
 
 
 def sha(value):
