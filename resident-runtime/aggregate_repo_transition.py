@@ -313,15 +313,55 @@ def source_clock_refusal(source_receipt):
             "derived_from_clock": False, "consequence_committed": False}
 
 
+def require_on_repository_ledger(receipt):
+    """CommittedRequestUnverified unless `receipt` is on this repository's ledger.
+
+    Walked from the repository ledger HEAD (emit.py's store): a receipt that
+    hashes consistently but was never appended there, or that differs from the
+    stored one, is refused. Read only; nothing is opened for writing."""
+    spec = importlib.util.spec_from_file_location("aggregate_repo_emit", ROOT / ".stegverse/transition-ledger/emit.py")
+    repo_ledger = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(repo_ledger)
+    claimed = receipt.get("receipt_sha256")
+    if (receipt.get("schema") != "stegverse.repo-transition-receipt/v1"
+            or receipt.get("repository") != repo_ledger.C["repository"]):
+        raise kernel.CommittedRequestUnverified(
+            "a source receipt carrying committed_request must be this repository's ("
+            + repo_ledger.C["repository"] + ") repo-transition receipt")
+    with kernel.ledger_write(EPOCH_RETRY_ENTRYPOINT):
+        store = open_store(repo_ledger.lr())
+        head = store.get(HEAD_KEY)
+        cursor = head.get("receipt_sha256") if isinstance(head, dict) else None
+        seen = set()
+        while isinstance(cursor, str) and cursor not in seen:
+            seen.add(cursor)
+            stored = store.get(receipt_key(cursor))
+            if not isinstance(stored, dict):
+                break
+            if cursor == claimed:
+                if stored != receipt:
+                    raise kernel.CommittedRequestUnverified(
+                        "source receipt " + str(claimed) + " differs from the one on the repository ledger")
+                return
+            cursor = stored.get("previous_receipt_sha256")
+    raise kernel.CommittedRequestUnverified(
+        "source receipt " + str(claimed) + " is not reachable from the repository ledger HEAD")
+
+
 def append(source_receipt, org_transition_class, predecessor_state, successor_state,
            boundary_evidence, authority_effect, hb_epoch=None, idempotent=False, hb_carried=None):
     # Admission is decided before the append lock is taken; an inadmissible
     # source receipt never contends for the organization ledger.
     source = verify_source(source_receipt)
-    # A source receipt's carried committed_request is verified before it is
-    # retained: a rehashed off-ledger receipt can carry a forged one
-    # (kernel.CommittedRequestUnverified, six-field, nothing copied).
-    kernel.verify_carried_committed_request(source_receipt, ROOT)
+    # Only the gate-supplied pair sets committed_request; the key anywhere in
+    # caller boundary evidence is refused before anything is opened.
+    kernel.refuse_caller_committed_request(boundary_evidence, argument="boundary_evidence")
+    # A source receipt that carries a committed_request is retained only when it
+    # is on this repository's ledger, reachable from its HEAD, and its claim is
+    # the committed request (kernel.CommittedRequestUnverified, nothing copied).
+    if isinstance(source_receipt, dict) and "committed_request" in source_receipt:
+        require_on_repository_ledger(source_receipt)
+        kernel.verify_carried_committed_request(source_receipt, ROOT)
     clock_source = source_clock_refusal(source_receipt)
     if clock_source is not None:
         # Read-only: neither the store nor its lock is created for a refusal.

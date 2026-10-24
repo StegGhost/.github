@@ -553,6 +553,15 @@ def emit(destination_organization: Any, payload: Mapping[str, Any], *,
     epoch_refused = organization_ledger.epoch_refusal(hb_epoch)
     if epoch_refused is not None:
         return _epoch_refusal_result(epoch_refused, payload)
+    # A half-set or malformed committed-request pair is refused here, before a
+    # packet is built or published, never after a frame is peer-visible (B-P40).
+    try:
+        kernel.committed_request()
+    except Exception as invalid:
+        if not getattr(invalid, "input_refused", False) or not isinstance(getattr(invalid, "refusal", None), dict):
+            raise
+        return {"schema": RESULT_SCHEMA, "operation": OPERATION_ID, **invalid.refusal,
+                "emitted": False, "refusal_recorded": False, "authority_effect": "NONE_REFUSAL_ONLY"}
     heartbeat = organization_ledger.require_supplied_epoch(hb_epoch)
     origin = this_organization(root)
     try:

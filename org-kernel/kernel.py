@@ -840,6 +840,38 @@ class CommittedRequestUnverified(InputRefused):
                           "next_attempt":"none for this receipt: it is refused and nothing was copied",
                           "terminal":True,"derived_from_clock":False,"consequence_committed":False})
 
+class CommittedRequestForged(InputRefused):
+    """Caller-supplied evidence carries a committed_request key.
+
+    Only the pair the committed-request gate exports sets a receipt's
+    committed_request; the same key anywhere inside caller evidence would be a
+    second, unverified claim written beside it. Terminal, before any write."""
+    def __init__(self, argument:str, where:str)->None:
+        super().__init__({"disposition":"FAIL_CLOSED","failure_code":"COMMITTED_REQUEST_FORGED",
+                          "failed_predicate":"ONLY_THE_GATE_SUPPLIED_PAIR_SETS_COMMITTED_REQUEST",
+                          "argument":argument,"detail":argument+" carries committed_request at "+where,
+                          "required_evidence_or_repair":("remove committed_request from "+argument+"; the committed-request "
+                                                         "gate supplies it through "+COMMITTED_REQUEST_PATH_ENV+"/"
+                                                         +COMMITTED_REQUEST_SHA256_ENV),
+                          "retry_entrypoint":"the same writer with "+argument+" free of committed_request",
+                          "owning_existing_goal":HB_EPOCH_OWNING_EXISTING_GOAL,
+                          "next_attempt":"correct "+argument+" and re-run; nothing was written",
+                          "terminal":True,"derived_from_clock":False,"consequence_committed":False})
+
+def refuse_caller_committed_request(value:Any, *, argument:str)->None:
+    """CommittedRequestForged when `value` holds a committed_request key at any depth.
+
+    Walked iteratively, so a deeply nested value is scanned, not a RecursionError."""
+    stack:list[tuple[Any,str]]=[(value,"$")]
+    while stack:
+        item,where=stack.pop()
+        if isinstance(item,dict):
+            if "committed_request" in item:
+                raise CommittedRequestForged(argument,where+".committed_request")
+            stack.extend((child,where+"."+str(key)) for key,child in item.items())
+        elif isinstance(item,(list,tuple)):
+            stack.extend((child,where+"["+str(index)+"]") for index,child in enumerate(item))
+
 def verify_carried_committed_request(receipt:Any, repo_root:Path, env:dict[str,str]|None=None)->dict[str,Any]|None:
     """The committed_request a source receipt carries, verified, or None when it carries none.
 

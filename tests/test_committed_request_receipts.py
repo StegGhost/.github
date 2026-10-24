@@ -239,11 +239,30 @@ class ForgedCommittedRequestIsRefused(Scratch):
         readme = "sha256:" + hashlib.sha256((ROOT / "README.md").read_bytes()).hexdigest()
         self.assert_refused_nothing_copied(self.aggregate(self.forged(self.claim("README.md", "sha256:" + "f" * 64))))
         self.assert_refused_nothing_copied(self.aggregate(self.forged(self.claim("no/such/request.json", readme))))
-        # Positive control: the committed file's real digest verifies, and the
-        # receipt is retained with its claim.
-        result = self.aggregate(self.forged(self.claim("README.md", readme)))
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertTrue(self.files_under("org-ledger"))
+        # Row 7: even the committed file's real digest is refused on a receipt
+        # that was never on the repository ledger (rehashed, off-ledger).
+        self.assert_refused_nothing_copied(self.aggregate(self.forged(self.claim("README.md", readme))))
+
+    def test_an_on_ledger_receipt_tampered_after_the_append_is_refused(self):
+        result = self.run_cli(".stegverse/transition-ledger/emit.py", "--transition-id", "t-on", "--transition-class",
+                              "T", "--predecessor-state-sha256", "sha256:" + "1" * 64,
+                              "--successor-state-sha256", "sha256:" + "2" * 64, "--hb-epoch", "4096", **PAIR)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        on_ledger = json.loads(result.stdout)
+        # Positive control: the receipt as appended, under the same run's pair.
+        source = self.tmp / "on-ledger.json"
+        source.write_text(json.dumps(on_ledger))
+        accepted = self.aggregate(source, **PAIR)
+        self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+        # Its claim rewritten and the receipt rehashed: no longer the stored one.
+        emit = load("b_p40_tamper_emit", ".stegverse/transition-ledger/emit.py")
+        body = {k: v for k, v in on_ledger.items() if k != "receipt_sha256"}
+        body["committed_request"] = {**body["committed_request"], "sha256": "sha256:" + "e" * 64}
+        source.write_text(json.dumps({**body, "receipt_sha256": emit.sha(body)}))
+        before = sorted(str(p) for p in self.files_under("org-ledger"))
+        tampered = self.aggregate(source, **{**PAIR, "STEGVERSE_COMMITTED_REQUEST_SHA256": "sha256:" + "e" * 64})
+        self.assert_six_field(tampered, "COMMITTED_REQUEST_DIGEST_UNVERIFIED", 2)
+        self.assertEqual(sorted(str(p) for p in self.files_under("org-ledger")), before)
 
     def test_a_malformed_claim_is_refused(self):
         for claim in ("x", {"path": "README.md"}, {**self.claim("README.md", "sha256:" + "a" * 64), "extra": 1},
@@ -251,6 +270,97 @@ class ForgedCommittedRequestIsRefused(Scratch):
                       self.claim("../README.md", "sha256:" + "a" * 64)):
             with self.subTest(claim=claim):
                 self.assert_refused_nothing_copied(self.aggregate(self.forged(claim)))
+
+
+class CallerEvidenceCannotSetCommittedRequestRow5(Scratch):
+    """V-P11 @aa1a30f row 5: committed_request inside caller evidence, at any
+    depth, CLI or in-process, pair set or unset, is COMMITTED_REQUEST_FORGED
+    before any write."""
+
+    FORGED = {"committed_request": {"path": "forged", "sha256": "sha256:" + "f" * 64,
+                                    "hb_epoch_source": "COMMITTED_REQUEST"}}
+
+    def test_the_cli_refuses_forged_evidence_with_or_without_the_pair(self):
+        for evidence in (self.FORGED, {"a": [{"b": self.FORGED}]}):
+            for extra in ({}, PAIR):
+                with self.subTest(evidence=evidence, pair=bool(extra)):
+                    result = self.run_cli(".stegverse/transition-ledger/emit.py", "--transition-id", "t", "--transition-class",
+                                          "T", "--predecessor-state-sha256", "sha256:" + "1" * 64,
+                                          "--successor-state-sha256", "sha256:" + "2" * 64, "--hb-epoch", "4096",
+                                          "--evidence-json", json.dumps(evidence), **extra)
+                    self.assert_six_field(result, "COMMITTED_REQUEST_FORGED", 2)
+                    self.assertEqual(self.files_under("repo-ledger"), [])
+                    # A genuine on-ledger source, so only the evidence is at fault.
+                    ok = self.run_cli(".stegverse/transition-ledger/emit.py", "--transition-id", "t-src",
+                                      "--transition-class", "T", "--predecessor-state-sha256", "sha256:" + "1" * 64,
+                                      "--successor-state-sha256", "sha256:" + "2" * 64, "--hb-epoch", "4096", **extra)
+                    self.assertEqual(ok.returncode, 0, ok.stderr)
+                    receipt = self.tmp / "r.json"
+                    receipt.write_text(ok.stdout)
+                    result = self.run_cli("resident-runtime/aggregate_repo_transition.py", "--repo-receipt", str(receipt),
+                                          "--predecessor-org-state-sha256", "sha256:" + "3" * 64,
+                                          "--successor-org-state-sha256", "sha256:" + "4" * 64, "--hb-epoch", "4096",
+                                          "--boundary-evidence-json", json.dumps(evidence), **extra)
+                    self.assert_six_field(result, "COMMITTED_REQUEST_FORGED", 2)
+                    self.assertEqual(self.files_under("org-ledger"), [])
+                    shutil.rmtree(self.tmp / "repo-ledger")
+
+    def test_in_process_append_refuses_forged_evidence(self):
+        saved = {k: os.environ.get(k) for k in ("STEGVERSE_REPO_LEDGER_ROOT", "STEGVERSE_ORG_LEDGER_ROOT")}
+        os.environ.update(STEGVERSE_REPO_LEDGER_ROOT=str(self.tmp / "repo-ledger"),
+                          STEGVERSE_ORG_LEDGER_ROOT=str(self.tmp / "org-ledger"))
+        try:
+            emit = load("b_p40_row5_emit", ".stegverse/transition-ledger/emit.py")
+            aggregate = load("b_p40_row5_aggregate", "resident-runtime/aggregate_repo_transition.py")
+            with self.assertRaises(Exception) as caught:
+                emit.append("t", "T", "sha256:" + "1" * 64, "sha256:" + "2" * 64, {"x": [self.FORGED]}, hb_epoch=4096)
+            self.assertEqual(caught.exception.refusal["failure_code"], "COMMITTED_REQUEST_FORGED")
+            receipt = emit.append("t-ok", "T", "sha256:" + "1" * 64, "sha256:" + "2" * 64, {}, hb_epoch=4096)
+            with self.assertRaises(Exception) as caught:
+                aggregate.append(receipt, "REPO_STATE_PROPAGATION", "sha256:" + "3" * 64, "sha256:" + "4" * 64,
+                                 self.FORGED, "NONE", hb_epoch=4096)
+            self.assertEqual(caught.exception.refusal["failure_code"], "COMMITTED_REQUEST_FORGED")
+            self.assertEqual(self.files_under("org-ledger"), [])
+        finally:
+            for key, value in saved.items():
+                os.environ.pop(key, None) if value is None else os.environ.__setitem__(key, value)
+
+    def test_a_deep_evidence_value_is_scanned_not_a_recursion_error(self):
+        deep = self.FORGED
+        for _ in range(5000):
+            deep = {"n": [deep]}
+        with self.assertRaises(KERNEL.CommittedRequestForged):
+            KERNEL.refuse_caller_committed_request(deep, argument="evidence")
+
+
+class EgressRefusesABadPairBeforePublishRow6(Scratch):
+    """V-P11 @aa1a30f row 6: a half-set or malformed pair is refused six-field
+    at the top of egress emit and request_bilateral_match; nothing is published."""
+
+    def test_emit_and_bilateral_match_publish_nothing_on_a_bad_pair(self):
+        egress = load("b_p40_row6_egress", "resident-runtime/organization_egress_boundary.py")
+        standing = {"mode": "ESTABLISH_GENESIS", "node_ref": "b-p40-node", "predecessor": None}
+        for bad in ({"STEGVERSE_COMMITTED_REQUEST_PATH": "x/r.json"},
+                    {**PAIR, "STEGVERSE_COMMITTED_REQUEST_SHA256": "sha256:XYZ"}):
+            saved = {k: os.environ.get(k) for k in REQUEST_ENV}
+            for key in REQUEST_ENV:
+                os.environ.pop(key, None)
+            os.environ.update(bad)
+            try:
+                for call in (lambda: egress.emit("Org-B", {"message_class": "ecosystem.communication"},
+                                                 standing=standing, mesh_root=self.tmp / "mesh", hb_epoch=4096),
+                             lambda: egress.request_bilateral_match("Org-B", "p-1", standing=standing,
+                                                                    mesh_root=self.tmp / "mesh", hb_epoch=4096)):
+                    with self.subTest(bad=bad):
+                        result = call()
+                        self.assertEqual((result["disposition"], result["failure_code"], result["emitted"]),
+                                         ("FAIL_CLOSED", "COMMITTED_REQUEST_INVALID", False))
+                        for field in SIX_FIELDS:
+                            self.assertTrue(result.get(field), field)
+                        self.assertEqual(self.files_under("mesh"), [])
+            finally:
+                for key, value in saved.items():
+                    os.environ.pop(key, None) if value is None else os.environ.__setitem__(key, value)
 
 
 class NonFiniteCliInputRow3(Scratch):

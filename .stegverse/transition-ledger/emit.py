@@ -62,6 +62,9 @@ def append(transition_id,transition_class,predecessor_state_sha256,successor_sta
  # The committed request this run answers rides in the receipt (B-P40 clause b);
  # a half-set or malformed pair raises kernel.CommittedRequestInvalid, nothing written.
  request=kernel.committed_request()
+ # Only that pair sets committed_request; the key inside caller evidence, at
+ # any depth, is refused before anything is opened (kernel.CommittedRequestForged).
+ kernel.refuse_caller_committed_request(evidence,argument="evidence")
  # A store-phase fault is this repository's, never the transition's (F-TRANSIENT-RT).
  with kernel.ledger_write(EPOCH_RETRY_ENTRYPOINT):
   store=ledger_store.open_store(lr());store.initialize()
