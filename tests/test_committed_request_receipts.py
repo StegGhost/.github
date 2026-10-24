@@ -201,6 +201,58 @@ class ReceiptsNameTheCommittedRequestRow2(Scratch):
         self.assertEqual(record["committed_request"]["hb_epoch_source"], "COMMITTED_REQUEST")
 
 
+class ForgedCommittedRequestIsRefused(Scratch):
+    """V-P11 @722b416 new row: aggregate retained a rehashed off-ledger source
+    receipt carrying a forged committed_request. The claim is verified against
+    the request this run carries or, with none, the file at its path; anything
+    else is COMMITTED_REQUEST_DIGEST_UNVERIFIED and nothing is copied."""
+
+    def forged(self, claim):
+        emit = load("b_p40_forge_emit", ".stegverse/transition-ledger/emit.py")
+        body = {"schema": "stegverse.repo-transition-receipt/v1", "repository": emit.C["repository"],
+                "transition_id": "forged", "transition_class": "T", "predecessor_state_sha256": "sha256:" + "1" * 64,
+                "successor_state_sha256": "sha256:" + "2" * 64, "evidence": {}, "authority_effect": "NONE",
+                "hb_reference": KERNEL.hb_reference(epoch=4096), "previous_receipt_sha256": None,
+                "committed_request": claim}
+        path = self.tmp / "forged.json"
+        path.write_text(json.dumps({**body, "receipt_sha256": emit.sha(body)}))
+        return path
+
+    def aggregate(self, source, **extra):
+        return self.run_cli("resident-runtime/aggregate_repo_transition.py", "--repo-receipt", str(source),
+                            "--predecessor-org-state-sha256", "sha256:" + "3" * 64,
+                            "--successor-org-state-sha256", "sha256:" + "4" * 64, "--hb-epoch", "4096", **extra)
+
+    def claim(self, path, digest):
+        return {"path": path, "sha256": digest, "hb_epoch_source": "COMMITTED_REQUEST"}
+
+    def assert_refused_nothing_copied(self, result):
+        refusal = self.assert_six_field(result, "COMMITTED_REQUEST_DIGEST_UNVERIFIED", 2)
+        self.assertIs(refusal["terminal"], True)
+        self.assertEqual(self.files_under("org-ledger"), [])
+
+    def test_a_forged_digest_against_this_runs_request_is_refused(self):
+        forged = self.forged(self.claim(PAIR["STEGVERSE_COMMITTED_REQUEST_PATH"], "sha256:" + "f" * 64))
+        self.assert_refused_nothing_copied(self.aggregate(forged, **PAIR))
+
+    def test_a_forged_digest_with_no_run_request_is_checked_against_the_committed_file(self):
+        readme = "sha256:" + hashlib.sha256((ROOT / "README.md").read_bytes()).hexdigest()
+        self.assert_refused_nothing_copied(self.aggregate(self.forged(self.claim("README.md", "sha256:" + "f" * 64))))
+        self.assert_refused_nothing_copied(self.aggregate(self.forged(self.claim("no/such/request.json", readme))))
+        # Positive control: the committed file's real digest verifies, and the
+        # receipt is retained with its claim.
+        result = self.aggregate(self.forged(self.claim("README.md", readme)))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(self.files_under("org-ledger"))
+
+    def test_a_malformed_claim_is_refused(self):
+        for claim in ("x", {"path": "README.md"}, {**self.claim("README.md", "sha256:" + "a" * 64), "extra": 1},
+                      {**self.claim("README.md", "sha256:" + "a" * 64), "hb_epoch_source": "CLOCK"},
+                      self.claim("../README.md", "sha256:" + "a" * 64)):
+            with self.subTest(claim=claim):
+                self.assert_refused_nothing_copied(self.aggregate(self.forged(claim)))
+
+
 class NonFiniteCliInputRow3(Scratch):
     def test_emit_and_aggregate_refuse_non_finite_json_before_any_write(self):
         for value in ('{"a":NaN}', '{"a":-Infinity}', '{"a":1e999}'):

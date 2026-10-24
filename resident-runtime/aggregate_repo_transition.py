@@ -318,6 +318,10 @@ def append(source_receipt, org_transition_class, predecessor_state, successor_st
     # Admission is decided before the append lock is taken; an inadmissible
     # source receipt never contends for the organization ledger.
     source = verify_source(source_receipt)
+    # A source receipt's carried committed_request is verified before it is
+    # retained: a rehashed off-ledger receipt can carry a forged one
+    # (kernel.CommittedRequestUnverified, six-field, nothing copied).
+    kernel.verify_carried_committed_request(source_receipt, ROOT)
     clock_source = source_clock_refusal(source_receipt)
     if clock_source is not None:
         # Read-only: neither the store nor its lock is created for a refusal.

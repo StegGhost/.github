@@ -823,6 +823,57 @@ def committed_request(env:dict[str,str]|None=None)->dict[str,Any]|None:
     return {"path":path,"sha256":digest,"hb_epoch_source":"COMMITTED_REQUEST"}
 
 
+class CommittedRequestUnverified(InputRefused):
+    """A source receipt claims a committed request that cannot be verified.
+
+    Raised before an ingested receipt is retained: a rehashed off-ledger
+    receipt can carry any committed_request, so the claim must equal the
+    request this run carries or, with none, the file committed at its path."""
+    def __init__(self, detail:str)->None:
+        super().__init__({"disposition":"FAIL_CLOSED","failure_code":"COMMITTED_REQUEST_DIGEST_UNVERIFIED",
+                          "failed_predicate":"SOURCE_RECEIPT_COMMITTED_REQUEST_MATCHES_THE_COMMITTED_REQUEST",
+                          "detail":detail,
+                          "required_evidence_or_repair":("a source receipt whose committed_request equals the pair this run "
+                                                         "carries, or the sha256 of the file committed at its path"),
+                          "retry_entrypoint":"resident-runtime/aggregate_repo_transition.py (the same source receipt)",
+                          "owning_existing_goal":HB_EPOCH_OWNING_EXISTING_GOAL,
+                          "next_attempt":"none for this receipt: it is refused and nothing was copied",
+                          "terminal":True,"derived_from_clock":False,"consequence_committed":False})
+
+def verify_carried_committed_request(receipt:Any, repo_root:Path, env:dict[str,str]|None=None)->dict[str,Any]|None:
+    """The committed_request a source receipt carries, verified, or None when it carries none.
+
+    The claim must be exactly {path, sha256, hb_epoch_source: COMMITTED_REQUEST}.
+    When this run carries a committed request, the claim must equal it. With
+    none, the claim's sha256 must be the sha256 of the file at its
+    repository-relative path. Anything else raises CommittedRequestUnverified."""
+    if not isinstance(receipt,dict) or "committed_request" not in receipt:
+        return None
+    claim=receipt["committed_request"]
+    if (not isinstance(claim,dict) or set(claim)!={"path","sha256","hb_epoch_source"}
+            or claim.get("hb_epoch_source")!="COMMITTED_REQUEST"):
+        raise CommittedRequestUnverified("committed_request is not {path, sha256, hb_epoch_source: COMMITTED_REQUEST}")
+    try:
+        well_formed=committed_request({COMMITTED_REQUEST_PATH_ENV:claim["path"],COMMITTED_REQUEST_SHA256_ENV:claim["sha256"]}
+                                      if isinstance(claim["path"],str) and isinstance(claim["sha256"],str) else {})
+    except CommittedRequestInvalid as error:
+        raise CommittedRequestUnverified("committed_request is malformed: "+error.refusal["detail"]) from None
+    if well_formed is None:
+        raise CommittedRequestUnverified("committed_request names no path or digest")
+    current=committed_request(env)
+    if current is not None:
+        if claim!=current:
+            raise CommittedRequestUnverified("committed_request "+repr(claim["sha256"])+" is not this run's "+repr(current["sha256"]))
+        return claim
+    try:
+        actual="sha256:"+hashlib.sha256((Path(repo_root)/claim["path"]).read_bytes()).hexdigest()
+    except OSError as error:
+        raise CommittedRequestUnverified("committed request "+claim["path"]+" is unreadable: "+type(error).__name__) from None
+    if actual!=claim["sha256"]:
+        raise CommittedRequestUnverified("committed_request "+repr(claim["sha256"])+" is not the committed file's "+actual)
+    return claim
+
+
 # --- Run state root (B-P40) ---
 #: The repo-relative run root a store defaults to when its caller names none.
 #: The host home directory is never a default: a transition must not depend on
