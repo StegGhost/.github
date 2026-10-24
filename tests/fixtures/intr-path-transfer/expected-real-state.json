@@ -2,15 +2,15 @@
   "schema": "stegverse.intr-path-transfer-expected-real-state/v1",
   "rule": "real state of every declared path, computed by resident-runtime/intr_path_transfer.py verify over the organization ledger at ledger_tip; no path receipt exists yet, so every path is FAIL_CLOSED. Path receipts appear only once the transfer declaration lands on main and .github/workflows/intr-path-transfer.yml appends them; even then the destination half stays FAIL_CLOSED class B until a carrier and a TV/TVC read credential exist.",
   "ledger_ref": "refs/stegverse/organization-ledger",
-  "ledger_tip": "e9ee01335e757b5d179b71e889c99d9016bfce73",
-  "verified_transfer_commit": "98577b14fef5e337a1eac95dd8828d14767ad2ca",
+  "ledger_tip": "9ddff143116ba267bccaa182504697c255efcddb",
+  "verified_transfer_commit": "92d36b54d0f39fd942296aacb483a6e017da51b3",
   "verified_transfer_note": "a main merge whose main-merge transfer receipt the tests append to a temporary ledger copy (temp_merge_transfers); this organization's ledger has no main-merge transfer receipt yet",
-  "later_verified_transfer_commit": "78a5296a3c7bdc7c46c1f1cd35909e799a87c3fd",
-  "unledgered_commit": "cc264c5695869cda10da71f0215a814976a84eb6",
+  "later_verified_transfer_commit": "92d5905d0454cb46b09a032b97b5f5e23e605133",
+  "unledgered_commit": "df2ce7feea045b72859fc71e6ea8fc9c0daee1c8",
   "unledgered_note": "a main merge with no main-merge transfer receipt at ledger_tip and none appended in the tests",
   "temp_merge_transfers": [
-    "98577b14fef5e337a1eac95dd8828d14767ad2ca",
-    "78a5296a3c7bdc7c46c1f1cd35909e799a87c3fd"
+    "92d36b54d0f39fd942296aacb483a6e017da51b3",
+    "92d5905d0454cb46b09a032b97b5f5e23e605133"
   ],
   "temp_merge_transfers_note": "main merges whose main-merge transfer receipts the tests and the PR dry-run append to their temporary ledger copies first (for an organization whose ledger has no main-merge transfer receipt yet); those receipts are NOT LEDGERED and NOT AUTHENTIC",
   "authentic_receipt": false,
@@ -282,7 +282,7 @@
         "source": "FAIL_CLOSED",
         "destination": "FAIL_CLOSED"
       },
-      "classification": null
+      "classification": "B"
     },
     {
       "path_id": "SV-LLM->GCAT-BCAT-Engine:intr-destination",
@@ -294,7 +294,7 @@
         "source": "FAIL_CLOSED",
         "destination": "FAIL_CLOSED"
       },
-      "classification": null
+      "classification": "B"
     },
     {
       "path_id": "SV-LLM->SV-011:intr-destination",
@@ -306,7 +306,7 @@
         "source": "FAIL_CLOSED",
         "destination": "FAIL_CLOSED"
       },
-      "classification": null
+      "classification": "B"
     },
     {
       "path_id": "SV-LLM->StegGhost:intr-destination",
@@ -318,7 +318,7 @@
         "source": "FAIL_CLOSED",
         "destination": "FAIL_CLOSED"
       },
-      "classification": null
+      "classification": "B"
     },
     {
       "path_id": "SV-LLM->StegVerse-002:intr-destination",
@@ -330,7 +330,7 @@
         "source": "FAIL_CLOSED",
         "destination": "FAIL_CLOSED"
       },
-      "classification": null
+      "classification": "B"
     },
     {
       "path_id": "SV-LLM->StegVerse-Labs:intr-destination",
@@ -342,7 +342,7 @@
         "source": "FAIL_CLOSED",
         "destination": "FAIL_CLOSED"
       },
-      "classification": null
+      "classification": "B"
     },
     {
       "path_id": "SV-LLM->StegVerse-org:intr-destination",
@@ -354,7 +354,7 @@
         "source": "FAIL_CLOSED",
         "destination": "FAIL_CLOSED"
       },
-      "classification": null
+      "classification": "B"
     },
     {
       "path_id": "StegGhost->Admissible-Existence:intr-destination",
@@ -366,7 +366,7 @@
         "source": "FAIL_CLOSED",
         "destination": "FAIL_CLOSED"
       },
-      "classification": "B"
+      "classification": null
     },
     {
       "path_id": "StegGhost->GCAT-BCAT-Engine:intr-destination",
@@ -378,7 +378,7 @@
         "source": "FAIL_CLOSED",
         "destination": "FAIL_CLOSED"
       },
-      "classification": "B"
+      "classification": null
     },
     {
       "path_id": "StegGhost->SV-011:intr-destination",
@@ -390,7 +390,7 @@
         "source": "FAIL_CLOSED",
         "destination": "FAIL_CLOSED"
       },
-      "classification": "B"
+      "classification": null
     },
     {
       "path_id": "StegGhost->SV-LLM:intr-destination",
@@ -402,7 +402,7 @@
         "source": "FAIL_CLOSED",
         "destination": "FAIL_CLOSED"
       },
-      "classification": "B"
+      "classification": null
     },
     {
       "path_id": "StegGhost->StegVerse-002:intr-destination",
@@ -414,7 +414,7 @@
         "source": "FAIL_CLOSED",
         "destination": "FAIL_CLOSED"
       },
-      "classification": "B"
+      "classification": null
     },
     {
       "path_id": "StegGhost->StegVerse-Labs:intr-destination",
@@ -426,7 +426,7 @@
         "source": "FAIL_CLOSED",
         "destination": "FAIL_CLOSED"
       },
-      "classification": "B"
+      "classification": null
     },
     {
       "path_id": "StegGhost->StegVerse-org:intr-destination",
@@ -438,7 +438,7 @@
         "source": "FAIL_CLOSED",
         "destination": "FAIL_CLOSED"
       },
-      "classification": "B"
+      "classification": null
     },
     {
       "path_id": "StegVerse-002->Admissible-Existence:intr-destination",
