@@ -72,10 +72,11 @@ def main()->int:
         else:r=ingress(kernel.read_input_json(x.file,argument="--file",retry_entrypoint=EPOCH_RETRY_ENTRYPOINT),x.hb_epoch)
     except kernel.SuppliedEpochRefused as exc:
         print(json.dumps(exc.refusal,sort_keys=True)); return 1
-    except (RuntimeBoundaryError,AttributeError,TypeError,KeyError) as exc:
-        # A boundary refusal (schema, owner, authority, id, write-once), or a
-        # field of the wrong type in the envelope, is terminal and six-field,
-        # never a traceback.
+    except (RuntimeBoundaryError,AttributeError,TypeError,KeyError,ValueError) as exc:
+        # A boundary refusal (schema, owner, authority, id, write-once), a
+        # field of the wrong type in the envelope, or a value that is not
+        # canonical JSON (NaN or Infinity, which canon refuses), is terminal and
+        # six-field, never a traceback.
         print(json.dumps({"disposition":"FAIL_CLOSED","failure_code":"RUNTIME_BOUNDARY_REFUSED","failed_predicate":"RUNTIME_BOUNDARY_ADMITS_THE_REQUEST",
                           "detail":str(exc),"required_evidence_or_repair":"a request the organization runtime boundary admits",
                           "retry_entrypoint":"runtime/organization_runtime.py "+x.cmd,"owning_existing_goal":kernel.HB_EPOCH_OWNING_EXISTING_GOAL,
