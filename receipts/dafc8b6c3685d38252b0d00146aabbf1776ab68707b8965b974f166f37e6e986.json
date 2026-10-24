@@ -1,0 +1,38 @@
+{
+  "authority_effect": "NONE",
+  "boundary_evidence": {
+    "communication_id": "intr-path-v1:AdmittedCode->StegGhost",
+    "disposition": "ALLOW",
+    "operation": "ORGANIZATION_INTR_DESTINATION_INGRESS",
+    "path_id": "AdmittedCode->StegGhost:intr-destination",
+    "profile_id": "intr-destination",
+    "source_organization_receipt_sha256": "sha256:41fd1a79870ecb4399b3865c668e2700c644333b044d13468662f892cfd009f8",
+    "source_repository": "AdmittedCode/.github",
+    "source_repository_receipt_sha256": "sha256:fe5ba883ffb88faaca2ecf268570f65c55095d1a4ffd9147ff89c21645f8bf2d"
+  },
+  "canonical_state_transition_receipt_sha256": null,
+  "hb_reference": {
+    "authority_effect": "NONE",
+    "derived_from_clock": false,
+    "epoch": 469436465,
+    "frequency_hz": 100,
+    "generation": 469436465,
+    "heartbeat_id": "HB:469436465",
+    "phase_offset_ns": 0,
+    "progression_dependency": "OSCILLATOR_ONLY"
+  },
+  "org_transition_class": "REPO_STATE_PROPAGATION",
+  "organization": "StegGhost",
+  "predecessor_org_state_sha256": "sha256:3abf24267988be4e09474021dc351868ea5cdd7422113fc452f5ffc9750eca82",
+  "previous_receipt_sha256": "sha256:10b63d386e547f7131e612f4c3f6e64b8af8f9f7ad090d50173820aaede3313a",
+  "receipt_sha256": "sha256:dafc8b6c3685d38252b0d00146aabbf1776ab68707b8965b974f166f37e6e986",
+  "repo_receipt_sha256": "sha256:3d3c817d0a6eb38c45d29a4672891bcc2c72788168eb033f812fda593c806506",
+  "repo_transition_id": "INTR_MESH_PATH_INGRESS:AdmittedCode->StegGhost:intr-destination@intr-path-v1:AdmittedCode->StegGhost",
+  "schema": "stegverse.organization-transition-receipt/v1",
+  "source_receipt_schema": "stegverse.repo-transition-receipt/v1",
+  "source_repository": "StegGhost/.github",
+  "source_transition_id": "INTR_MESH_PATH_INGRESS:AdmittedCode->StegGhost:intr-destination@intr-path-v1:AdmittedCode->StegGhost",
+  "source_transition_sha256": "sha256:3d3c817d0a6eb38c45d29a4672891bcc2c72788168eb033f812fda593c806506",
+  "subject_or_correlation_id": null,
+  "successor_org_state_sha256": "sha256:c0cc565d53ec655422a1a3f5bb3164ab64a9071e465fd88f66d30e086157b628"
+}
