@@ -183,6 +183,15 @@ jobs:
           test "$(git rev-parse "$DRY_RUN_REF")" = "$tip"
           python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert all(x.get("replayed") is True for x in r), r' "$RUNNER_TEMP/results/replay.json"
           # A previously ledgered path replays without moving the scratch tip.
-          # The published ref must remain unchanged by this read-only dry run.
-          test "$(git ls-remote origin "$LEDGER_REF" | cut -f1)" = "$(cat "$RUNNER_TEMP/published-tip")"
+          # Read-only: nothing from the scratch ref reaches the published ref. The writer
+          # (organization-ledger-writer.yml, push to main) may append to the published ref while
+          # this runs, so the guard is append-only growth from the copied tip and no scratch
+          # commit on the published ref, not an unchanged published tip.
+          git fetch --no-tags origin "+$LEDGER_REF:refs/dry-run/published-now"
+          git merge-base --is-ancestor "$(cat "$RUNNER_TEMP/published-tip")" refs/dry-run/published-now
+          if git merge-base --is-ancestor "$(git rev-parse "$DRY_RUN_REF")" refs/dry-run/published-now \
+             && [ "$(git rev-parse "$DRY_RUN_REF")" != "$(cat "$RUNNER_TEMP/published-tip")" ]; then
+            echo '{"disposition":"DENY","failure_code":"DRY_RUN_SCRATCH_APPEND_PUBLISHED","failed_predicate":"SCRATCH_APPEND_NOT_ON_PUBLISHED_REF","required_evidence_or_repair":"the read-only dry run must not publish its scratch append","retry_entrypoint":".github/workflows/intr-path-transfer-validation.yml","owning_existing_goal":"StegVerse-org/.github#162","next_attempt":"remove any push from the dry-run job"}'
+            exit 1
+          fi
           python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print("INTR_PATH_DRY_RUN", json.dumps(r["counts"]))' "$RUNNER_TEMP/results/verify.json"
