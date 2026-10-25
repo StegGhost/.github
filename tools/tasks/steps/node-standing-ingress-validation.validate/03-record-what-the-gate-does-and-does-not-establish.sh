@@ -1,0 +1,8 @@
+echo 'NODE_STANDING_INGRESS_VALIDATION_PASS'
+echo 'kernel_version 1.3.1 and kernel_required 1.3.0 both name this gate. It is now'
+echo 'enforced at every ingress surface this organization exposes, not merely declared.'
+echo 'predecessor is a required key; null is explicit genesis only; an absent key is'
+echo 'FAIL_CLOSED. Standing is structural, not authenticated:'
+echo 'caller_editable_origin_established_identity=false and'
+echo 'structural_standing_is_authenticated_standing=false are recorded, not manufactured.'
+echo 'Standing grants no execution, route, credential, governance or transition authority.'
