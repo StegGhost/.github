@@ -3,7 +3,8 @@ name: Organization Ledger Writer
 # InTr mesh path writers of this organization's .github (Lane B, StegVerse-org/.github#162).
 # Jobs are taken unchanged from SV-LLM/.github#54 @a4653826 organization-ledger-writer.yml
 # (model: StegVerse-org/.github main 575c520d), minus `plan` and `ledger-transition`:
-# this repository keeps its existing organization-ledger-transition.yml for that.
+# the self-closure dispatch that organization-ledger-transition.yml carried is retired
+# (Rigel's rule, 2026-10-25: InTr paths exist only between distinct organizations).
 #   merge-transfer  every push to main
 #   path-transfer   after a successful merge-transfer (.stegverse/intr-path-transfer/transfers.json)
 #   path-ingress    after a successful merge-transfer (.stegverse/intr-path-transfer/inbound.json)
@@ -19,7 +20,7 @@ on:
 permissions:
   contents: read
 
-# ORGANIZATION_LEDGER_LOCK: one appender at a time, shared with organization-ledger-transition.yml.
+# ORGANIZATION_LEDGER_LOCK: one appender at a time.
 concurrency:
   group: organization-ledger
   cancel-in-progress: false
@@ -43,8 +44,7 @@ jobs:
   #
   # Writer only. The PR-facing checks are
   # .github/workflows/organization-ledger-merge-transfer-validation.yml.
-  # ORGANIZATION_LEDGER_LOCK: one appender at a time, shared with
-  # organization-ledger-transition.yml. The fast-forward push is the
+  # ORGANIZATION_LEDGER_LOCK: one appender at a time. The fast-forward push is the
   # compare-and-swap against the published ref.
   merge-transfer:
     runs-on: ubuntu-latest
