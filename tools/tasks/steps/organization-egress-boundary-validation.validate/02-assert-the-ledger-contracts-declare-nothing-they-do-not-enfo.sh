@@ -1,0 +1,107 @@
+set -eu
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+repo = json.loads(Path('.stegverse/transition-ledger/contract.json').read_text())
+org = json.loads(Path('.stegverse/transition-ledger/org-contract.json').read_text())
+assert repo['repository'] == 'StegGhost/.github', repo['repository']
+assert org['organization'] == 'StegGhost', org['organization']
+
+# The defect PEER_KERNEL_GENERATION_ADMISSION_APPLIED_002 recorded was a
+# declaration with nothing enforcing it. These two assertions keep the
+# ledger contracts from repeating it.
+# The original pair here asserted propagation_target was null and that
+# no submitter existed -- true until ORGANIZATION_BATCH_RELEASE_008
+# built one, and the right thing to have failed when it did. The
+# invariant they were protecting is not the null; it is that a
+# declaration must have something enforcing it. So it is now checked
+# in both directions, which is what the original second assertion was
+# reaching for.
+target = org['propagation_target']
+implemented = org['organization_batch_propagation_implemented']
+surface = org.get('organization_batch_release_surface')
+assert (target is None) == (implemented is False), \
+    'propagation_target and organization_batch_propagation_implemented ' \
+    'must agree; one without the other is a declaration with nothing ' \
+    'enforcing it, or a surface nothing addresses'
+if target is not None:
+    assert isinstance(surface, str) and surface, \
+        'a propagation target must name the surface that performs it'
+    assert Path(surface).is_file(), \
+        'the declared release surface is absent: ' + surface
+    # Declared and present is not enough -- the surface has to be the
+    # one that actually releases, or the contract names a file that
+    # happens to exist.
+    source = Path(surface).read_text(encoding='utf-8')
+    assert 'def release(' in source and 'def submit(' in source, \
+        surface + ' does not release and submit'
+    # And the recorder must not be able to gate this organization.
+    assert org['propagation_gates_organization_runtime_reality'] is False
+    assert org['always_on_receiver_required'] is False
+else:
+    assert surface is None, \
+        'a release surface is declared with no propagation target'
+
+# The organization ledger admits only schemas something here emits.
+assert org['consumes'] == ['stegverse.repo-transition-receipt/v1'], org['consumes']
+
+boundary = Path('resident-runtime/organization_egress_boundary.py').read_text()
+# Standing resolves through this organization's own ingress contract
+# before anything is published, or the boundary emits outbound what it
+# would refuse inbound.
+assert 'def resolve_standing(' in boundary
+assert boundary.index('standing_refused, standing_disposition = resolve_standing(') \
+     < boundary.index('published = kernel.publish_packet('), \
+    'standing must resolve before the frame is published'
+# Closability is decided by the kernel, not restated here.
+assert 'kernel.closability_refusal(' in boundary
+# The far side is recomputed from the kernel's own derivation.
+assert 'kernel.far_side_receipt_chain(' in boundary
+# Attestation: the seam exists and the ceiling is declared. These
+# assertions replaced an earlier pair that asserted no path to PROVEN
+# existed -- true until the seam was built, and the right thing to
+# have failed when it was.
+assert 'credential_authority: Mapping[str, Any] | None = None' in boundary, \
+    'emit must take a credential authority'
+# Signed after the packet exists (the statement binds the packet id)
+# and before it is published (the signature travels inside it).
+assert boundary.index('attestation_module.attest(') \
+     < boundary.index('published = kernel.publish_packet('), \
+    'the statement must be attested before the frame is published'
+# An offered attestation that fails refuses the emission rather than
+# recording it as an ordinary unattested crossing.
+assert 'raise EgressRefused(refused.failed_predicate, refused.reason)' in boundary
+# Which case an unattested record is: no signer, not a failed attempt.
+assert '"signer_supplied": True' in boundary and '"signer_supplied": False' in boundary
+# The unattested record is the authority module's own, so the boundary
+# cannot drift from its vocabulary about its own absence.
+assert 'attestation_module.unattested_record()' in boundary
+
+# No credential algorithm anywhere here: a second implementation would
+# make this organization a second credential authority, which the
+# TV/TVC split exists to prevent.
+for relative in ('org-boundary/runtime/origin_attestation.py',
+                 'resident-runtime/organization_egress_boundary.py',
+                 'org-kernel/kernel.py'):
+    text = Path(relative).read_text(encoding='utf-8')
+    for token in ('import hmac', 'hmac.new', 'compare_digest'):
+        assert token not in text, (relative, token)
+
+# The ceiling is declared in the overlay, not left to be inferred, and
+# the boundary validator holds it.
+overlay = json.loads(Path('org-runtime/interlock-intr.json').read_text())
+attest = (overlay.get('egress') or {}).get('origin_attestation')
+assert isinstance(attest, dict), 'the overlay must declare the attestation binding'
+assert attest['credential_authority_resident_host_available_to_this_organization'] is False
+assert attest['signer_is_supplied_by_the_operator_not_held_here'] is True
+assert attest['every_crossing_emitted_here_today_is_unattested'] is True
+assert attest['boundary_holds_key_material'] is False
+assert attest['verification_algorithm_implemented_here'] is False
+# The overclaim the record refuses: signing is not authenticating.
+assert attest['proves_the_authority_authenticated_the_asker'] is False
+# An absence is not a transition.
+assert 'absence_is_not_a_transition' in boundary
+print('EGRESS_LEDGER_CONTRACTS_DECLARE_ONLY_WHAT_IS_ENFORCED=PASS')
+print('EGRESS_BOUNDARY_STRUCTURE_PASS')
+PY
