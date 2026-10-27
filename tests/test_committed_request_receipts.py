@@ -33,6 +33,9 @@ DEEP = '{"a":' + "[" * 200000
 REQUEST_ENV = ("STEGVERSE_COMMITTED_REQUEST_PATH", "STEGVERSE_COMMITTED_REQUEST_SHA256")
 PAIR = {"STEGVERSE_COMMITTED_REQUEST_PATH": ".stegverse/organization-ledger-transition/request.json",
         "STEGVERSE_COMMITTED_REQUEST_SHA256": "sha256:" + "a" * 64}
+#: The repository ledger's namespace in the organization ledger (B-P40: emit.py lr()).
+REPOSITORY_NAMESPACE = json.loads((ROOT / ".stegverse/transition-ledger/contract.json").read_text())[
+    "repository_ledger_location"]["namespace"]
 SIX_FIELDS = ("failure_code", "failed_predicate", "required_evidence_or_repair",
               "retry_entrypoint", "owning_existing_goal", "next_attempt")
 
@@ -70,7 +73,7 @@ class Scratch(unittest.TestCase):
     def env(self, **extra):
         env = {k: v for k, v in os.environ.items()
                if k not in REQUEST_ENV + ("HB_EPOCH", "GITHUB_ENV", "GITHUB_SHA")}
-        env.update(STEGVERSE_REPO_LEDGER_ROOT=str(self.tmp / "repo-ledger"),
+        env.update(STEGVERSE_REPO_LEDGER_ROOT=str(self.repo_ledger()),
                    STEGVERSE_ORG_LEDGER_ROOT=str(self.tmp / "org-ledger"),
                    STEGVERSE_ORG_FEDERATION_ROOT=str(self.tmp / "mesh"),
                    XDG_STATE_HOME=str(self.tmp / "state"))
@@ -92,8 +95,20 @@ class Scratch(unittest.TestCase):
         self.assertIs(refusal["consequence_committed"], False)
         return refusal
 
+    def repo_ledger(self):
+        """This repository's ledger: the designated subtree of the organization
+        ledger (contract.json repository_ledger_location; emit.py lr(), B-P40)."""
+        return self.tmp / "org-ledger" / REPOSITORY_NAMESPACE
+
     def files_under(self, *names):
-        return [p for name in names for p in (self.tmp / name).rglob("*") if p.is_file()]
+        # "repo-ledger" is the repository subtree of the organization ledger;
+        # "org-ledger" is the organization ledger's own files, without it.
+        found = []
+        for name in names:
+            root = self.repo_ledger() if name == "repo-ledger" else self.tmp / name
+            found += [p for p in root.rglob("*") if p.is_file()
+                      and not (name == "org-ledger" and "repository-ledger" in p.relative_to(root).parts)]
+        return found
 
 
 class CommittedRequestGateRow1(Scratch):
@@ -325,74 +340,89 @@ class OffLedgerSourceWithoutBindingIsRefused(Scratch):
         self.assertTrue(self.files_under("org-ledger"))
 
 class SourceLedgerIsNotTheCallersChoiceRow8(Scratch):
-    """V-P11 @b28cb64 row 8 SOURCE_LEDGER_OVERRIDE_LAUNDERS_FABRICATED_RECEIPT:
-    a receipt minted with the real emit.py into an attacker's ledger is not
-    accepted by naming that ledger. --source-ledger is gone from the CLI, and
-    source_ledger= must resolve (realpath) to this repository's store or the
-    receipt repository's directory under the repository ledger home."""
+    """V-P11 rows 8 and SOURCE_LEDGER_REDIRECTED_BY_ENV_VIA_EMIT_LR, lead rulings
+    20:57Z/20:59Z. The repository ledger is the designated subtree
+    (repository-ledger/<repository>) of the organization ledger; nothing a
+    caller names, and no STEGVERSE_REPO_LEDGER_ROOT that differs from it,
+    redirects aggregate or emit. A receipt minted with the real emit.py into an
+    attacker's ledger is never laundered into the organization ledger."""
 
     def setUp(self):
         super().setUp()
         self.saved = {k: os.environ.get(k) for k in ("STEGVERSE_REPO_LEDGER_ROOT", "STEGVERSE_ORG_LEDGER_ROOT",
                                                     "STEGVERSE_REPO_LEDGER_HOME")}
         self.addCleanup(self.restore)
-        os.environ.update(STEGVERSE_ORG_LEDGER_ROOT=str(self.tmp / "org-ledger"),
-                          STEGVERSE_REPO_LEDGER_HOME=str(self.tmp / "ledger-home"))
+        self.use_real_ledger()
+        os.environ["STEGVERSE_REPO_LEDGER_HOME"] = str(self.tmp / "ledger-home")
         self.aggregate = load("b_p40_row8_aggregate", "resident-runtime/aggregate_repo_transition.py")
 
     def restore(self):
         for key, value in self.saved.items():
             os.environ.pop(key, None) if value is None else os.environ.__setitem__(key, value)
 
-    def minted_into(self, root):
-        # The attacker runs the real writer against a ledger root of their own.
-        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(root)
-        emit = load("b_p40_row8_emit_" + root.name, ".stegverse/transition-ledger/emit.py")
-        return emit.append("fabricated", "T", "sha256:" + "1" * 64, "sha256:" + "2" * 64, {}, hb_epoch=4096)
+    def use_real_ledger(self):
+        os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(self.tmp / "org-ledger")
+        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(self.repo_ledger())
+
+    def minted_into(self, organization):
+        """The attacker runs the real writer against an organization ledger of their own."""
+        os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(organization)
+        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(organization / REPOSITORY_NAMESPACE)
+        emit = load("b_p40_row8_emit_" + organization.name, ".stegverse/transition-ledger/emit.py")
+        receipt = emit.append("fabricated", "T", "sha256:" + "1" * 64, "sha256:" + "2" * 64, {}, hb_epoch=4096)
+        self.use_real_ledger()
+        return receipt, organization / REPOSITORY_NAMESPACE
+
+    def append(self, receipt, source_ledger=None):
+        return self.aggregate.append(receipt, "REPO_STATE_PROPAGATION", "sha256:" + "3" * 64, "sha256:" + "4" * 64,
+                                     {}, "NONE", hb_epoch=4096, source_ledger=source_ledger)
 
     def assert_refused(self, receipt, source_ledger, code="LEDGER_ROOT_NOT_CONTRACT_DESIGNATED"):
         # aggregate loads its own kernel copy: recognise the refusal by its record.
         with self.assertRaises(Exception) as refused:
-            self.aggregate.append(receipt, "REPO_STATE_PROPAGATION", "sha256:" + "3" * 64, "sha256:" + "4" * 64,
-                                  {}, "NONE", hb_epoch=4096, source_ledger=source_ledger)
-        self.assertEqual(refused.exception.refusal["failure_code"], code)
+            self.append(receipt, source_ledger)
+        self.assertEqual(getattr(refused.exception, "refusal", {}).get("failure_code"), code, refused.exception)
         for field in SIX_FIELDS:
             self.assertTrue(refused.exception.refusal.get(field), field)
         self.assertEqual(self.files_under("org-ledger"), [])
 
     def test_an_attacker_ledger_is_refused(self):
-        attacker = self.tmp / "attacker"
-        receipt = self.minted_into(attacker)
-        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(self.tmp / "repo-ledger")
+        receipt, attacker = self.minted_into(self.tmp / "attacker")
         self.assert_refused(receipt, attacker)
         self.assert_refused(receipt, str(attacker))
         self.assert_refused(receipt, "git+" + str(attacker) + "#refs/stegverse/organization-ledger")
+        # Read from the designated ledger, where it was never appended.
+        self.assert_refused(receipt, None, code="SOURCE_RECEIPT_NOT_ON_LEDGER")
+
+    def test_an_attacker_env_kept_set_redirects_neither_aggregate_nor_emit(self):
+        # V-P11 final @a9893aa row 1: the attacker's STEGVERSE_REPO_LEDGER_ROOT
+        # stays set while aggregate runs; aggregate still reads the designated
+        # ledger, and emit refuses the diverging root.
+        receipt, attacker = self.minted_into(self.tmp / "attacker")
+        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(attacker)
+        self.assert_refused(receipt, None, code="SOURCE_RECEIPT_NOT_ON_LEDGER")
+        emit = load("b_p40_row1_emit", ".stegverse/transition-ledger/emit.py")
+        with self.assertRaises(Exception) as refused:
+            emit.append("redirected", "T", "sha256:" + "1" * 64, "sha256:" + "2" * 64, {}, hb_epoch=4096)
+        self.assertEqual(refused.exception.refusal["failure_code"], "LEDGER_ROOT_NOT_CONTRACT_DESIGNATED")
+        self.assertEqual(self.files_under("repo-ledger", "org-ledger"), [])
 
     def test_a_symlink_to_an_attacker_ledger_is_refused(self):
-        attacker = self.tmp / "attacker"
-        receipt = self.minted_into(attacker)
-        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(self.tmp / "repo-ledger")
-        # A symlink placed where another repository's ledger would live, named
-        # for this repository: the real path is the attacker's, not this store.
-        (self.tmp / "ledger-home" / "StegGhost").mkdir(parents=True)
-        link = self.tmp / "ledger-home" / "StegGhost" / "elsewhere"
+        receipt, attacker = self.minted_into(self.tmp / "attacker")
+        link = self.tmp / "looks-designated"
         link.symlink_to(attacker, target_is_directory=True)
         self.assert_refused(receipt, link)
 
     def test_another_repositorys_ledger_is_refused_for_this_repositorys_receipt(self):
-        other = self.tmp / "ledger-home" / "StegGhost" / "elsewhere"
-        receipt = self.minted_into(other)
-        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(self.tmp / "repo-ledger")
-        self.assert_refused(receipt, other)
+        receipt, _ = self.minted_into(self.tmp / "attacker")
+        self.assert_refused(receipt, self.tmp / "org-ledger" / "repository-ledger" / "StegGhost" / "elsewhere")
 
-    def test_this_repositorys_store_is_accepted_by_its_real_path(self):
-        store = self.tmp / "repo-ledger"
-        receipt = self.minted_into(store)
+    def test_this_repositorys_ledger_is_accepted_by_its_real_path(self):
+        emit = load("b_p40_row8_real_emit", ".stegverse/transition-ledger/emit.py")
+        receipt = emit.append("real", "T", "sha256:" + "1" * 64, "sha256:" + "2" * 64, {}, hb_epoch=4096)
         link = self.tmp / "store-link"
-        link.symlink_to(store, target_is_directory=True)
-        organization = self.aggregate.append(receipt, "REPO_STATE_PROPAGATION", "sha256:" + "3" * 64,
-                                             "sha256:" + "4" * 64, {}, "NONE", hb_epoch=4096, source_ledger=link)
-        self.assertEqual(organization["repo_receipt_sha256"], receipt["receipt_sha256"])
+        link.symlink_to(self.repo_ledger(), target_is_directory=True)
+        self.assertEqual(self.append(receipt, link)["repo_receipt_sha256"], receipt["receipt_sha256"])
 
     def test_the_repository_ledger_home_is_not_ledger_evidence(self):
         # REPO_LEDGER_HOME_DEFAULT_INSIDE_CHECKOUT (lead 20:57Z): an attacker's
@@ -413,14 +443,14 @@ class SourceLedgerIsNotTheCallersChoiceRow8(Scratch):
         store.append_transaction(store_module.receipt_key(receipt["receipt_sha256"]), receipt, None,
                                  {"receipt_sha256": receipt["receipt_sha256"]})
         self.assert_refused(receipt, root)
-        # Read from its designated ledger instead, where it was never appended.
         self.assert_refused(receipt, None, code="SOURCE_RECEIPT_NOT_ON_LEDGER")
 
     def checkout(self):
         """A scratch git checkout standing in for this repository's tree."""
         tree = self.tmp / "checkout"
-        for relative in (".stegverse/transition-ledger/contract.json", ".stegverse/transition-ledger/emit.py",
-                         "org-kernel/kernel.py", "resident-runtime/ledger_store.py"):
+        for relative in (".stegverse/transition-ledger/contract.json", ".stegverse/transition-ledger/org-contract.json",
+                         ".stegverse/transition-ledger/emit.py", "org-kernel/kernel.py",
+                         "resident-runtime/ledger_store.py"):
             (tree / relative).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / relative, tree / relative)
         for args in (["init", "-q"], ["config", "user.email", "probe@example.invalid"], ["config", "user.name", "probe"]):
@@ -430,29 +460,112 @@ class SourceLedgerIsNotTheCallersChoiceRow8(Scratch):
 
     def test_a_ledger_committed_into_the_checkout_is_refused(self):
         tree = self.checkout()
-        fake = tree / ".stegverse-run/state/stegverse/repo-ledgers/StegGhost/.github"
-        receipt = self.minted_into(fake)
+        organization = tree / ".stegverse-run/state/stegverse/org-ledgers/StegGhost"
+        receipt, _ = self.minted_into(organization)
         subprocess.run(["git", "-C", str(tree), "add", "-f", "."], check=True)
         subprocess.run(["git", "-C", str(tree), "commit", "-q", "-m", "fake ledger"], check=True)
-        # It is this run's emit store, but its files are tracked: not evidence.
-        self.assert_refused(receipt, None)
-        self.assert_refused(receipt, fake)
+        # The organization ledger this run would use is inside the checkout and
+        # its files are tracked: not evidence.
+        os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(organization)
+        os.environ.pop("STEGVERSE_REPO_LEDGER_ROOT", None)
+        with self.assertRaises(Exception) as refused:
+            self.append(receipt)
+        self.assertEqual(refused.exception.refusal["failure_code"], "LEDGER_ROOT_NOT_CONTRACT_DESIGNATED")
 
     def test_the_designated_ledger_is_accepted(self):
         tree = self.checkout()
         location = json.loads((ROOT / ".stegverse/transition-ledger/contract.json").read_text())["repository_ledger_location"]
-        designated = "git+" + str(tree) + "#" + location["ref"] + ":repository-ledger/StegGhost/other"
-        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = designated
+        os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = "git+" + str(tree) + "#" + location["ref"]
+        os.environ.pop("STEGVERSE_REPO_LEDGER_ROOT", None)
         emit = load("b_p40_designated_emit", ".stegverse/transition-ledger/emit.py")
         emit.C = {**emit.C, "repository": "StegGhost/other"}
         receipt = emit.append("designated", "T", "sha256:" + "1" * 64, "sha256:" + "2" * 64, {}, hb_epoch=4096)
-        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(self.tmp / "repo-ledger")
-        organization = self.aggregate.append(receipt, "REPO_STATE_PROPAGATION", "sha256:" + "3" * 64,
-                                             "sha256:" + "4" * 64, {}, "NONE", hb_epoch=4096)
+        organization = self.append(receipt)
         self.assertEqual(organization["repo_receipt_sha256"], receipt["receipt_sha256"])
 
     def test_the_cli_has_no_source_ledger_flag(self):
         self.assertNotIn("--source-ledger", (ROOT / "resident-runtime/aggregate_repo_transition.py").read_text())
+
+
+class CrossRepositoryPropagationRow2(Scratch):
+    """V-P11 final @a9893aa CROSS_REPO_PROPAGATE_BROKEN: propagate reads another
+    repository's receipts from its contract-designated ledger, on a git
+    organization ledger and a POSIX one alike."""
+
+    def setUp(self):
+        super().setUp()
+        saved = {k: os.environ.get(k) for k in ("STEGVERSE_REPO_LEDGER_ROOT", "STEGVERSE_ORG_LEDGER_ROOT")}
+        self.addCleanup(lambda: [os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+                                 for k, v in saved.items()])
+        os.environ.pop("STEGVERSE_REPO_LEDGER_ROOT", None)
+
+    def propagate_other(self, organization):
+        os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = organization
+        emit = load("b_p40_row2_emit_" + str(abs(hash(organization))), ".stegverse/transition-ledger/emit.py")
+        emit.C = {**emit.C, "repository": "StegGhost/other"}
+        first = emit.append("other-1", "T", "sha256:" + "1" * 64, "sha256:" + "2" * 64, {}, hb_epoch=4096)
+        second = emit.append("other-2", "T", "sha256:" + "2" * 64, "sha256:" + "3" * 64, {}, hb_epoch=4096)
+        propagation = load("b_p40_row2_propagate_" + str(abs(hash(organization))),
+                           "resident-runtime/propagate_repository_receipts.py")
+        result = propagation.propagate("StegGhost/other", hb_epoch=4096)
+        self.assertEqual([p["repository_receipt_sha256"] for p in result["propagated"]],
+                         [first["receipt_sha256"], second["receipt_sha256"]])
+        again = propagation.propagate("StegGhost/other", hb_epoch=4096)
+        self.assertEqual((again["propagated"], len(again["skipped"])), ([], 2))
+
+    def test_a_git_organization_ledger(self):
+        repository = self.tmp / "ledger.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(repository)], check=True)
+        self.propagate_other("git+" + str(repository) + "#refs/stegverse/organization-ledger")
+
+    def test_a_posix_organization_ledger(self):
+        self.propagate_other(str(self.tmp / "org-ledger"))
+
+
+class CorruptPredecessorIsRefusedRow3(Scratch):
+    """V-P11 final @a9893aa: a source receipt on a chain whose predecessor is
+    corrupt or missing is refused six-field; nothing is aggregated."""
+
+    def chain(self):
+        receipts = []
+        for index in (1, 2):
+            result = self.run_cli(".stegverse/transition-ledger/emit.py", "--transition-id", "t-" + str(index),
+                                  "--transition-class", "T", "--predecessor-state-sha256", "sha256:" + "1" * 64,
+                                  "--successor-state-sha256", "sha256:" + "2" * 64, "--hb-epoch", "4096")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            receipts.append(json.loads(result.stdout))
+        self.assertEqual(receipts[1]["previous_receipt_sha256"], receipts[0]["receipt_sha256"])
+        return receipts
+
+    def stored(self, receipt):
+        return self.repo_ledger() / ("receipts/" + receipt["receipt_sha256"].split(":", 1)[1] + ".json")
+
+    def aggregate(self, receipt):
+        source = self.tmp / "source.json"
+        source.write_text(json.dumps(receipt))
+        return self.run_cli("resident-runtime/aggregate_repo_transition.py", "--repo-receipt", str(source),
+                            "--predecessor-org-state-sha256", "sha256:" + "3" * 64,
+                            "--successor-org-state-sha256", "sha256:" + "4" * 64, "--hb-epoch", "4096")
+
+    def test_a_tampered_predecessor_is_refused(self):
+        first, second = self.chain()
+        tampered = dict(json.loads(self.stored(first).read_text()), transition_class="FORGED")
+        self.stored(first).write_text(json.dumps(tampered))
+        for receipt in (second, first):
+            with self.subTest(receipt=receipt["transition_id"]):
+                self.assert_six_field(self.aggregate(receipt), "SOURCE_RECEIPT_NOT_ON_LEDGER", 2)
+        self.assertEqual(self.files_under("org-ledger"), [])
+
+    def test_a_missing_predecessor_is_refused(self):
+        first, second = self.chain()
+        self.stored(first).unlink()
+        self.assert_six_field(self.aggregate(second), "SOURCE_RECEIPT_NOT_ON_LEDGER", 2)
+        self.assertEqual(self.files_under("org-ledger"), [])
+
+    def test_an_intact_chain_is_accepted(self):
+        _, second = self.chain()
+        result = self.aggregate(second)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 class CorruptSourceLedgerIsRefusedRow9(Scratch):
@@ -466,7 +579,7 @@ class CorruptSourceLedgerIsRefusedRow9(Scratch):
                               "--successor-state-sha256", "sha256:" + "2" * 64, "--hb-epoch", "4096")
         self.assertEqual(result.returncode, 0, result.stderr)
         receipt = json.loads(result.stdout)
-        stored = self.tmp / "repo-ledger" / ("receipts/" + receipt["receipt_sha256"].split(":", 1)[1] + ".json")
+        stored = self.repo_ledger() / ("receipts/" + receipt["receipt_sha256"].split(":", 1)[1] + ".json")
         self.assertTrue(stored.is_file())
         damage(stored)
         source = self.tmp / "source.json"
@@ -483,11 +596,11 @@ class CorruptSourceLedgerIsRefusedRow9(Scratch):
                 refusal = self.assert_six_field(self.corrupted(damage), "SOURCE_RECEIPT_NOT_ON_LEDGER", 2)
                 self.assertIs(refusal["terminal"], True)
                 self.assertEqual(self.files_under("org-ledger"), [])
-                shutil.rmtree(self.tmp / "repo-ledger")
+                shutil.rmtree(self.repo_ledger())
 
     def test_an_unreadable_receipt_is_a_non_terminal_retry(self):
         saved = {k: os.environ.get(k) for k in ("STEGVERSE_REPO_LEDGER_ROOT", "STEGVERSE_ORG_LEDGER_ROOT")}
-        os.environ.update(STEGVERSE_REPO_LEDGER_ROOT=str(self.tmp / "repo-ledger"),
+        os.environ.update(STEGVERSE_REPO_LEDGER_ROOT=str(self.repo_ledger()),
                           STEGVERSE_ORG_LEDGER_ROOT=str(self.tmp / "org-ledger"))
         try:
             emit = load("b_p40_row9_emit", ".stegverse/transition-ledger/emit.py")
@@ -545,11 +658,11 @@ class CallerEvidenceCannotSetCommittedRequestRow5(Scratch):
                                           "--boundary-evidence-json", json.dumps(evidence), **extra)
                     self.assert_six_field(result, "COMMITTED_REQUEST_FORGED", 2)
                     self.assertEqual(self.files_under("org-ledger"), [])
-                    shutil.rmtree(self.tmp / "repo-ledger")
+                    shutil.rmtree(self.repo_ledger())
 
     def test_in_process_append_refuses_forged_evidence(self):
         saved = {k: os.environ.get(k) for k in ("STEGVERSE_REPO_LEDGER_ROOT", "STEGVERSE_ORG_LEDGER_ROOT")}
-        os.environ.update(STEGVERSE_REPO_LEDGER_ROOT=str(self.tmp / "repo-ledger"),
+        os.environ.update(STEGVERSE_REPO_LEDGER_ROOT=str(self.repo_ledger()),
                           STEGVERSE_ORG_LEDGER_ROOT=str(self.tmp / "org-ledger"))
         try:
             emit = load("b_p40_row5_emit", ".stegverse/transition-ledger/emit.py")

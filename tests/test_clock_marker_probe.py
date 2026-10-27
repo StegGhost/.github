@@ -69,6 +69,11 @@ def provision(root: Path, organization: str, role: str, service: str) -> None:
         json.dumps({"organization": organization, "services": [row]}))
 
 
+#: The repository ledger's namespace in the organization ledger (B-P40: emit.py lr()).
+REPOSITORY_NAMESPACE = json.loads((TREE / ".stegverse/transition-ledger/contract.json").read_text())[
+    "repository_ledger_location"]["namespace"]
+
+
 def on_repository_ledger(receipt, root: Path) -> Path:
     """Make `receipt` the HEAD of a scratch repository ledger at `root`.
 
@@ -85,9 +90,16 @@ def on_repository_ledger(receipt, root: Path) -> Path:
     return root
 
 
-def repository_ledger_root(test, root: Path) -> Path:
-    """Point STEGVERSE_REPO_LEDGER_ROOT (this repository's emit store) at `root`."""
+def repository_ledger_root(test, organization: Path) -> Path:
+    """This repository's ledger: the designated subtree of the organization
+    ledger at STEGVERSE_ORG_LEDGER_ROOT (set to `organization` when unset).
+    STEGVERSE_REPO_LEDGER_ROOT is pointed at it (B-P40, emit.py lr())."""
     import os
+    previous_org = os.environ.get("STEGVERSE_ORG_LEDGER_ROOT")
+    if previous_org is None:
+        os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(organization)
+        test.addCleanup(os.environ.pop, "STEGVERSE_ORG_LEDGER_ROOT", None)
+    root = Path(os.environ["STEGVERSE_ORG_LEDGER_ROOT"]) / REPOSITORY_NAMESPACE
     previous = os.environ.get("STEGVERSE_REPO_LEDGER_ROOT")
     os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(root)
     test.addCleanup(lambda: os.environ.__setitem__("STEGVERSE_REPO_LEDGER_ROOT", previous)
@@ -337,7 +349,10 @@ class SharedRuleAndSourceProvenance(unittest.TestCase):
                                {}, "NONE", hb_epoch="4096", **kw)
 
     def files(self):
-        return sorted(p for p in self.ledger.rglob("*") if p.is_file()) if self.ledger.exists() else []
+        # The organization ledger's own files; its repository-ledger subtree
+        # holds the probe's source receipts (B-P40).
+        return sorted(p for p in self.ledger.rglob("*") if p.is_file()
+                      and "repository-ledger" not in p.relative_to(self.ledger).parts) if self.ledger.exists() else []
 
     def test_clock_provenance_source_is_refused_and_writes_nothing(self):
         k = self.org.kernel
@@ -1068,7 +1083,7 @@ class WritersVerifyACarriedClaim(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp)
         saved = {key: os.environ.get(key) for key in ("STEGVERSE_ORG_LEDGER_ROOT", "STEGVERSE_REPO_LEDGER_ROOT")}
         os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(self.tmp / "org")
-        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(self.tmp / "repo")
+        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(self.tmp / "org" / REPOSITORY_NAMESPACE)
 
         def restore():
             for key, value in saved.items():
@@ -1237,7 +1252,7 @@ class WriterEntryPointsReportFaultsSixField(unittest.TestCase):
         for key in saved:
             os.environ.pop(key, None)
         os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(self.tmp / "org")
-        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(self.tmp / "repo")
+        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(self.tmp / "org" / REPOSITORY_NAMESPACE)
         os.environ["STEGVERSE_ORG_FEDERATION_ROOT"] = str(self.tmp / "mesh")
 
         def restore():
@@ -1290,7 +1305,7 @@ class WriterEntryPointsReportFaultsSixField(unittest.TestCase):
         argv = ["--transition-id", "t:cli", "--transition-class", "T", "--predecessor-state-sha256",
                 "sha256:" + "0" * 64, "--successor-state-sha256", "sha256:" + "1" * 64, "--hb-epoch", "4096"]
         self.assert_fault_then_once(emit, argv)
-        receipts = list((self.tmp / "repo" / "receipts").glob("*.json"))
+        receipts = list((self.tmp / "org" / REPOSITORY_NAMESPACE / "receipts").glob("*.json"))
         self.assertEqual(len(receipts), 1)
 
     def test_aggregate_cli(self):
@@ -1313,7 +1328,7 @@ class WriterEntryPointsReportFaultsSixField(unittest.TestCase):
         argv = ["--self-close", "--hb-epoch", "4096", "--communication-id", "cli-close", "--packet-id", "cli-close"]
         self.assert_fault_then_once(ingress, argv)
         self.assertEqual(len(list((self.tmp / "org" / "receipts").glob("*.json"))), 1)
-        self.assertEqual(len(list((self.tmp / "repo" / "receipts").glob("*.json"))), 1)
+        self.assertEqual(len(list((self.tmp / "org" / REPOSITORY_NAMESPACE / "receipts").glob("*.json"))), 1)
 
     def test_organization_runtime_cli(self):
         runtime = load("probe_runtime_cli", "runtime/organization_runtime.py")

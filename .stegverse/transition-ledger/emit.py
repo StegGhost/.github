@@ -16,13 +16,29 @@ ledger_store=importlib.util.module_from_spec(_sspec);_sspec.loader.exec_module(l
 # allow_nan=False: a non-finite number never reaches a receipt (B-P40 row 2).
 def canon(v):return json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=False,allow_nan=False).encode()
 def sha(v):return "sha256:"+hashlib.sha256(v if isinstance(v,(bytes,bytearray)) else canon(v)).hexdigest()
-def lr():
- o=os.getenv("STEGVERSE_REPO_LEDGER_ROOT")
- # A git+<repository>#<ref>[:namespace] locator is the designated durable root.
- # A plain path stays a filesystem root. With neither supplied, XDG_STATE_HOME
- # as the caller set it, else the repo-relative run root; never the host home.
+ORGANIZATION=json.loads((ROOT/".stegverse/transition-ledger/org-contract.json").read_text())["organization"]
+def organization_root():
+ """The organization ledger this execution appends to (as aggregate_repo_transition.ledger_root)."""
+ o=os.getenv("STEGVERSE_ORG_LEDGER_ROOT")
  if o:return ledger_store.parse_locator(o)
- return (kernel.state_home()/"stegverse/repo-ledgers"/C["repository"]).resolve()
+ return (kernel.state_home()/"stegverse/org-ledgers"/ORGANIZATION).resolve()
+def lr():
+ """This repository's ledger: the contract-designated subtree of the organization ledger.
+
+ contract.json repository_ledger_location keeps the repository chain in its
+ own namespace of the organization ledger ref, so the repository ledger is
+ never chosen apart from the organization ledger (B-P40,
+ SOURCE_LEDGER_REDIRECTED_BY_ENV_VIA_EMIT_LR). STEGVERSE_REPO_LEDGER_ROOT is
+ accepted only when it names that same ledger, compared by real path; any
+ other value is refused (kernel.LedgerRootNotContractDesignated)."""
+ # repository-ledger/<repository>: contract.json's namespace, by the one rule
+ # aggregate_repo_transition.designated_repository_ledger applies to every repository.
+ designated=ledger_store.subtree(organization_root(),"repository-ledger/"+C["repository"])
+ o=os.getenv("STEGVERSE_REPO_LEDGER_ROOT")
+ if o and ledger_store.canonical_location(ledger_store.parse_locator(o))!=ledger_store.canonical_location(designated):
+  raise kernel.LedgerRootNotContractDesignated(
+   "STEGVERSE_REPO_LEDGER_ROOT "+o+" is not the designated repository ledger "+str(designated))
+ return designated
 # A transition occurring in this repository emits its receipt here. An
 # in-process caller needs the same append the CLI performs, with the same lock
 # and the same HEAD publication -- a second implementation of this would be a

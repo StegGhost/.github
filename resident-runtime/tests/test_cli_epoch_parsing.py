@@ -45,7 +45,8 @@ def written(base):
 
 def run(script, args, epoch, base):
     env = dict(os.environ,
-               STEGVERSE_REPO_LEDGER_ROOT=str(base / "repo-ledger"),
+               # the designated subtree of the organization ledger (emit.py lr(), B-P40)
+               STEGVERSE_REPO_LEDGER_ROOT=str(base / "org-ledger" / "repository-ledger/StegGhost/.github"),
                STEGVERSE_ORG_LEDGER_ROOT=str(base / "org-ledger"),
                STEGVERSE_REPO_LEDGER_HOME=str(base / "ledger-home"))
     argv = [sys.executable, str(TREE / script)] + [

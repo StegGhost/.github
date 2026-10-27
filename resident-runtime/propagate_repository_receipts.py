@@ -45,7 +45,7 @@ from typing import Any, Mapping
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from ledger_store import HEAD_KEY, RECEIPT_PREFIX, PosixLedgerStore  # noqa: E402
+from ledger_store import HEAD_KEY, RECEIPT_PREFIX, open_store, parse_locator  # noqa: E402
 
 REGISTRY = ROOT / "org-boundary/registry/services.json"
 REPOSITORY_RECEIPT_SCHEMA = "stegverse.repo-transition-receipt/v1"
@@ -92,7 +92,7 @@ def declared_repositories() -> list[str]:
     })
 
 
-def repository_chain(root: Path) -> list[dict[str, Any]]:
+def repository_chain(root: Any) -> list[dict[str, Any]]:
     """A repository's receipts in chain order, genesis first, each verified.
 
     The chain is walked from the published head backwards and reversed, so the
@@ -101,7 +101,7 @@ def repository_chain(root: Path) -> list[dict[str, Any]]:
     the organization chain, and the ones before it in the chain are not made
     trustworthy by it.
     """
-    store = PosixLedgerStore(root)
+    store = open_store(root)
     head = store.get(HEAD_KEY)
     if head is None:
         return []
@@ -126,9 +126,10 @@ def repository_chain(root: Path) -> list[dict[str, Any]]:
     return chain
 
 
-def already_propagated(organization_root: Path) -> set[str]:
+def already_propagated(organization_root: Any) -> set[str]:
     """The repository receipts the organization chain already carries."""
-    store = PosixLedgerStore(organization_root)
+    # open_store, so a git organization ledger works as a POSIX one does.
+    store = open_store(organization_root)
     carried: set[str] = set()
     for key in store.list_prefix(RECEIPT_PREFIX):
         receipt = store.get(key) or {}
@@ -154,9 +155,13 @@ def _no_prior_repository_receipt(repository: str) -> str:
 def propagate(repository: str, *, repository_root: Path | None = None,
               hb_epoch: int | None = None) -> dict[str, Any]:
     """Record this repository's unpropagated transitions on the organization chain."""
-    root = Path(repository_root) if repository_root else repository_ledger_home() / repository
+    # The repository's contract-designated ledger (lead ruling 20:59Z): its
+    # namespace of the organization ledger, git ref or POSIX root alike. An
+    # explicit repository_root is still checked against it by aggregate.
+    root = (parse_locator(str(repository_root)) if repository_root
+            else organization_ledger.designated_repository_ledger(repository))
     organization_root = organization_ledger.ledger_root()
-    if not (root / HEAD_KEY).is_file():
+    if open_store(root).get(HEAD_KEY) is None:
         # The capability holding that ledger did not materialize on this node.
         # Nothing is missing; there is nothing of it here to carry.
         return {"schema": RESULT_SCHEMA, "repository": repository,

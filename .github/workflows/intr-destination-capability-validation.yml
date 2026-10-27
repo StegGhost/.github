@@ -69,7 +69,8 @@ jobs:
       # show a live peer installed the capability, and it is not an authentic receipt.
       - name: Validate advertise, address, resolve, emit, and close
         env:
-          STEGVERSE_REPO_LEDGER_ROOT: ${{ runner.temp }}/repo-ledger
+          # The designated subtree of the organization ledger (emit.py lr(), B-P40).
+          STEGVERSE_REPO_LEDGER_ROOT: ${{ runner.temp }}/org-ledger/repository-ledger/StegGhost/.github
           STEGVERSE_ORG_LEDGER_ROOT: ${{ runner.temp }}/org-ledger
         run: python -m unittest tests.test_intr_destination_capability -v
 

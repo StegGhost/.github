@@ -163,6 +163,28 @@ def parse_locator(value):
     return Path(value).expanduser().resolve()
 
 
+def subtree(location, namespace):
+    """The ledger kept under `namespace` in the store at `location`.
+
+    A repository's chain lives in its own subtree of the organization ledger
+    (contract.json repository_ledger_location): on a git ref, the namespace of
+    that ref; on a POSIX root, the directory of that name inside it."""
+    if isinstance(location, GitLocator):
+        joined = location.namespace + "/" + namespace if location.namespace else namespace
+        return GitLocator(location.repository, location.ref, _require_namespace(joined, str(location)))
+    return Path(location) / _require_namespace(namespace, str(location))
+
+
+def canonical_location(location):
+    """A ledger location as it resolves: a git locator by real repository path,
+    ref and namespace, a POSIX root by real path (symlinks followed)."""
+    if not isinstance(location, (GitLocator, PurePath)) and str(location).startswith(GIT_SCHEME):
+        location = parse_locator(location)
+    if isinstance(location, GitLocator):
+        return ("git", os.path.realpath(str(location.repository)), location.ref, location.namespace)
+    return ("posix", os.path.realpath(str(location)))
+
+
 def open_store(location):
     """The store at a supplied location: a git ref for a git locator, else POSIX.
 

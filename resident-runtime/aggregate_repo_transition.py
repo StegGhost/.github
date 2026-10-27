@@ -22,8 +22,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from ledger_store import (HEAD_KEY, RECEIPT_PREFIX, SOURCE_PREFIX, open_store,  # noqa: E402
-                          parse_locator, receipt_key, source_key)
+from ledger_store import (HEAD_KEY, RECEIPT_PREFIX, SOURCE_PREFIX, canonical_location,  # noqa: E402
+                          open_store, parse_locator, receipt_key, source_key, subtree)
 
 ROOT = Path(__file__).resolve().parents[1]
 C = json.loads((ROOT / ".stegverse/transition-ledger/org-contract.json").read_text())
@@ -314,22 +314,17 @@ def source_clock_refusal(source_receipt):
 
 
 def _canonical_ledger(location):
-    """A ledger location compared by what it resolves to: a git locator by its
-    real repository path, ref and namespace, a POSIX root by its real path."""
-    text = str(location)
-    if not isinstance(location, Path) and text.startswith("git+"):
-        locator = parse_locator(text)
-        return ("git", os.path.realpath(str(locator.repository)), locator.ref, locator.namespace)
-    return ("posix", os.path.realpath(text))
+    """A ledger location compared by what it resolves to (ledger_store.canonical_location)."""
+    return canonical_location(location)
 
 
 def designated_repository_ledger(repository):
     """The contract-designated ledger of an organization repository.
 
-    contract.json repository_ledger_location: the organization ledger ref in
-    this checkout, namespace repository-ledger/<repository>."""
-    location = json.loads((ROOT / ".stegverse/transition-ledger/contract.json").read_text())["repository_ledger_location"]
-    return parse_locator("git+" + str(ROOT) + "#" + location["ref"] + ":repository-ledger/" + repository)
+    contract.json repository_ledger_location: the repository's chain is kept
+    in its own subtree, namespace repository-ledger/<repository>, of the
+    organization ledger this execution appends to."""
+    return subtree(ledger_root(), "repository-ledger/" + repository)
 
 
 def _tracked_in_checkout(location):
@@ -356,14 +351,14 @@ def require_on_repository_ledger(receipt, source_ledger=None):
     never appended, or that differs from the stored copy, would launder a
     fabricated transition into the organization ledger.
 
-    The ledger is never the caller's choice (B-P40 row 8, lead ruling 20:57Z).
-    It is the receipt repository's contract-designated ledger
-    (designated_repository_ledger) or, for this repository's receipts, its own
-    emit.py store. A `source_ledger` must resolve (realpath, symlinks followed;
-    git locators by real repository, ref and namespace) to one of them, and a
-    POSIX root may hold no file tracked in the checkout. The repository ledger
-    home is scratch space and is not accepted. Otherwise
-    LEDGER_ROOT_NOT_CONTRACT_DESIGNATED.
+    The ledger is never the caller's choice (B-P40 row 8, lead rulings
+    20:57Z/20:59Z): it is the receipt repository's contract-designated ledger,
+    the namespace repository-ledger/<repository> of the organization ledger
+    this execution appends to (designated_repository_ledger; emit.py's lr() is
+    the same ledger for this repository). A `source_ledger` must resolve
+    (realpath, symlinks followed; git locators by real repository, ref and
+    namespace) to it, and a POSIX root may hold no file tracked in the
+    checkout. Otherwise LEDGER_ROOT_NOT_CONTRACT_DESIGNATED.
 
     A receipt not on the ledger, or a ledger whose stored receipt is
     unreadable, is refused SOURCE_RECEIPT_NOT_ON_LEDGER, terminal. An OSError
@@ -375,13 +370,7 @@ def require_on_repository_ledger(receipt, source_ledger=None):
     if (receipt.get("schema") != "stegverse.repo-transition-receipt/v1" or not isinstance(repository, str)
             or not repository.startswith(C["organization"] + "/") or ".." in repository.split("/")):
         raise refusal("source receipt is not a repo-transition receipt naming an organization repository")
-    spec = importlib.util.spec_from_file_location("aggregate_repo_emit",
-                                                  ROOT / ".stegverse/transition-ledger/emit.py")
-    repo_ledger = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(repo_ledger)
     allowed = [designated_repository_ledger(repository)]
-    if repository == repo_ledger.C["repository"]:
-        allowed.insert(0, repo_ledger.lr())
     if source_ledger is None:
         source_ledger = allowed[0]
     if _canonical_ledger(source_ledger) not in {_canonical_ledger(location) for location in allowed}:
@@ -397,17 +386,30 @@ def require_on_repository_ledger(receipt, source_ledger=None):
             head = store.get(HEAD_KEY)
             cursor = head.get("receipt_sha256") if isinstance(head, dict) else None
             seen = set()
-            while isinstance(cursor, str) and cursor not in seen:
+            found = False
+            # The whole chain is walked, HEAD to genesis, and each link verified:
+            # the source receipt is accepted only on a chain whose every receipt,
+            # its predecessors included, is present, hash-consistent and a
+            # repository receipt of this repository (B-P40, corrupt predecessor).
+            while cursor is not None:
+                if not isinstance(cursor, str) or cursor in seen:
+                    raise refusal("repository ledger chain is broken or cyclic at " + repr(cursor))
                 seen.add(cursor)
                 stored = store.get(receipt_key(cursor))
-                if not isinstance(stored, dict):
-                    break
+                body = {k: v for k, v in stored.items() if k != "receipt_sha256"} if isinstance(stored, dict) else None
+                if (body is None or stored.get("receipt_sha256") != cursor or sha(body) != cursor
+                        or stored.get("schema") != "stegverse.repo-transition-receipt/v1"
+                        or stored.get("repository") != repository):
+                    raise refusal("repository ledger receipt " + cursor + " is missing, corrupt or not "
+                                  + repr(repository) + "'s")
                 if cursor == claimed:
                     if stored != receipt:
                         raise refusal("source receipt " + str(claimed)
                                       + " differs from the one on its repository ledger")
-                    return
+                    found = True
                 cursor = stored.get("previous_receipt_sha256")
+            if found:
+                return
         except ValueError as error:
             # A corrupt stored document (truncated, garbage) is not a receipt this
             # ledger holds: refused, never a traceback (B-P40 row 9).
