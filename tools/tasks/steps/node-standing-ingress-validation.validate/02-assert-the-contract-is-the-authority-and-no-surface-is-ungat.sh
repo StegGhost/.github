@@ -50,18 +50,18 @@ assert kernel.count('"ecosystem.monitor.request":"ecosystem.monitor.response"') 
 # map declared four and the responder answered three, so a crossing
 # the closability gate admitted was consumed and never answered. Every
 # surface that decides what is answered reads the map.
-gateway = Path('resident-runtime/federation_gateway_transport.py').read_text(encoding='utf-8')
-for name, source in (('kernel', kernel), ('gateway', gateway)):
+# The gateway lane is gone (B-P40): the kernel is the one responder.
+for name, source in (('kernel', kernel),):
     literal = '"ecosystem.monitor.request", "ecosystem.work.request"'
     compact = '"ecosystem.monitor.request","ecosystem.work.request"'
     assert literal not in source and compact not in source, \
         name + ' restates the answered-class set instead of reading the map'
 assert 'message_class in RESPONDED_REQUEST_CLASSES' in kernel, \
     'the responder must read the map'
-assert 'K.RESPONDED_REQUEST_CLASSES' in gateway, \
-    'the gateway lane must read the map'
+assert not Path('resident-runtime/federation_gateway_transport.py').exists(), \
+    'no hosted-gateway lane: the repo-local spool is the only route (B-P40)'
 # Likewise the acknowledgement set.
-for name, source in (('kernel', kernel), ('gateway', gateway)):
+for name, source in (('kernel', kernel),):
     assert '"ecosystem.monitor.response","ecosystem.work.ack"' not in source, name
     assert '"ecosystem.monitor.response", "ecosystem.work.ack"' not in source, name
 assert kernel.index('unclosable=closability_refusal(payload)') \
@@ -71,10 +71,6 @@ assert 'def far_side_receipt_chain(' in kernel
 assert 'FAR_SIDE_TERMINAL_RECEIPT_DOES_NOT_RECOMPUTE' in kernel
 assert 'far_side_receipts_recomputed_here' in kernel, \
     'a collection that recomputed nothing must say so'
-gateway = Path('resident-runtime/federation_gateway_transport.py').read_text(encoding='utf-8')
-assert 'K.persist_outbox(repo_root, frame)' in gateway, \
-    'the gateway lane must record its emissions or it cannot recompute'
-assert 'K.far_side_receipt_chain(' in gateway
 
 print('NODE_STANDING_CONTRACT_IS_THE_AUTHORITY=PASS')
 print('EVERY_INGRESS_SURFACE_GATED=PASS')

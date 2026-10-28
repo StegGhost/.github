@@ -54,16 +54,16 @@
    "path": ".github/workflows/resident-federation-cycle.yml",
    "classification": "KEEP_EXISTING_SURFACE_UNCHANGED",
    "triggers": [
-    "workflow_dispatch"
+    "push"
    ],
    "permissions": {
     "contents": "read"
    },
-   "reason": "KEEP_EXISTING_SURFACE_UNCHANGED (documented exception, contract-pinned entrypoint): `resident-runtime/activation-manifest.json` names this file as the in-tree dispatcher of the manifest's `resident_cycle_entrypoint` (epoch_bindings, B-P36n), and the epoch is a dispatch input that is never read from a clock. Eliminating it would break that manifest contract, and this lane does not dispatch it. Byte-unchanged.",
-   "verbatim_sha256": "c5c65d0cd5dca7529c251f493063388f205d66bd0c7cdd76118edca529126e22",
+   "reason": "KEEP_EXISTING_SURFACE_UNCHANGED (documented exception, contract-pinned entrypoint): `resident-runtime/activation-manifest.json` names this file as the in-tree dispatcher of the manifest's `resident_cycle_entrypoint` (epoch_bindings, B-P36n). Under B-P40 (StegGhost/.github#28) it is a COMMITTED_REQUEST surface: it runs only on a push to main that commits `.stegverse/federation-cycle/request.json`, takes no inputs, and reads the epoch from that request through the kernel gate, never from a clock. Eliminating it would break that manifest contract. Pinned at #28's bytes.",
+   "verbatim_sha256": "eb9d719e30bd5b7900d7488bc6b18e0599210f493f83de443ae7a34f32e09798",
    "exception": {
     "lifecycle": "activation-manifest resident_cycle_entrypoint dispatcher",
-    "justification": "KEEP_EXISTING_SURFACE_UNCHANGED (documented exception, contract-pinned entrypoint): `resident-runtime/activation-manifest.json` names this file as the in-tree dispatcher of the manifest's `resident_cycle_entrypoint` (epoch_bindings, B-P36n), and the epoch is a dispatch input that is never read from a clock. Eliminating it would break that manifest contract, and this lane does not dispatch it. Byte-unchanged.",
+    "justification": "KEEP_EXISTING_SURFACE_UNCHANGED (documented exception, contract-pinned entrypoint): `resident-runtime/activation-manifest.json` names this file as the in-tree dispatcher of the manifest's `resident_cycle_entrypoint` (epoch_bindings, B-P36n). Under B-P40 (StegGhost/.github#28) it is a COMMITTED_REQUEST surface: it runs only on a push to main that commits `.stegverse/federation-cycle/request.json`, takes no inputs, and reads the epoch from that request through the kernel gate, never from a clock. Eliminating it would break that manifest contract. Pinned at #28's bytes.",
     "within_exception_ceiling": true
    }
   }
