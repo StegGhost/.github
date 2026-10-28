@@ -4,6 +4,7 @@ on:
     paths: ['org-boundary/**','.github/workflows/org-boundary-execution.yml']
   push:
     paths: ['org-boundary/**','.github/workflows/org-boundary-execution.yml']
+  workflow_dispatch:
 jobs:
   execute:
     runs-on: ubuntu-latest

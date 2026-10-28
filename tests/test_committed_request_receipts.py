@@ -112,12 +112,11 @@ class Scratch(unittest.TestCase):
 
 
 class CommittedRequestGateRow1(Scratch):
-    GATES = (("organization-ledger-transition.yml",
-              "Refuse an absent, invalid or stale committed request before any append",
-              "LEDGER_TRANSITION_REQUEST_INVALID"),
-             ("resident-federation-cycle.yml",
+    # organization-ledger-transition.yml is retired on main (#34, Rigel's rule
+    # 2026-10-25: no InTr hop inside one organization), so its gate left with it.
+    GATES = (("resident-federation-cycle.yml",
               "Refuse an absent, invalid or stale committed request before the cycle",
-              "FEDERATION_CYCLE_REQUEST_INVALID"))
+              "FEDERATION_CYCLE_REQUEST_INVALID"),)
 
     def run_gate(self, workflow, step, raw):
         request = self.tmp / "request.json"
@@ -817,7 +816,7 @@ class EcosystemControlEpochRow5(Scratch):
 class InTrFilesAreUntouchedRowRuling(unittest.TestCase):
     """INTR_PATH_FILE_BYTE_IDENTICAL_TO_MAIN_MODULO_GRADED_EXCEPTION_FIXES
     (lead ruling 20:08Z, amended 20:16Z). Each InTr file may differ from
-    main@79a0ea8 only by exception-fix commits that V-P11 graded ALLOW and the
+    main (re-pinned at main@1326f17) only by exception-fix commits that V-P11 graded ALLOW and the
     PR body lists with their sha and row. No such fix is carried here, so the
     list is explicitly empty and each file is pinned at main's sha256. The
     committed request reaches the self-closure's receipts only through
@@ -830,7 +829,7 @@ class InTrFilesAreUntouchedRowRuling(unittest.TestCase):
         "resident-runtime/intr_destination_ingress.py":
             "35c212e029a65033cb5ac5b1acbd8379d8fd63721ab8ea66dede1a1648c1042c",
         "resident-runtime/intr_path_ingress.py":
-            "2607a18a9c55beaab1dd5cdfa6fc22815e030547b869eecab1e9d4f35a301f4b",
+            "30a9c99fb505ac2fcecc978ac4689017d03cdb9d2aa9da16be5189fc4c161d49",
         "resident-runtime/intr_path_transfer.py":
             "2909ec9480467ad8622726686b1808b87e3f794bc477566806cd86376db7592d",
         "resident-runtime/intr_path_tvc_read.py":

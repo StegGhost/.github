@@ -1,0 +1,559 @@
+{
+ "schema": "stegverse.task-catalog/v1",
+ "repository": "StegGhost/.github",
+ "goal_id": "G17-WORKFLOW-SURFACE-MINIMIZATION",
+ "authority": "Rigel 2026-10-24 retroactive G17 enforcement (StegVerse-org/.github#166); pattern StegVerse-Labs/StegDB#60 (eab2e773)",
+ "dispatcher": ".github/workflows/validation-dispatcher.yml",
+ "runner": "tools/tasks/run_catalog.py",
+ "runner_source": "StegVerse-Labs/StegDB tools/tasks/run_catalog.py @ eab2e773271f3e63466a710f1b4555f677882848 (sha256 f741f30557888fd8e4852a52adfc65736a08898d49ade7519f6bcc2672921e9b), copied unmodified",
+ "rule": "Every check a folded workflow job ran is one group here; its step bodies are the original run blocks byte for byte, pinned by sha256, except the repairs listed. A new check is a new group (or a step in one), never a new workflow file.",
+ "path_filters": "Dropped: every group runs on every pull_request and push to main (a superset of the original path-filtered runs). workflow_dispatch/schedule triggers are not carried (no manual dispatch, no cron).",
+ "repairs": [
+  "Path filters and workflow_dispatch are not carried. Each group runs on its declared pull_request and push events.",
+  "Each folded workflow declared `permissions: contents: read` (the repository is internal, so checkout needs that read). The dispatcher holds the same contents: read.",
+  "No code or test reads a folded path. `docs/CANONICAL_NODE_INGRESS_CONTRACT_001.json` names node-standing-ingress-validation.yml as a record; the tests read only the contract's other fields and are unaffected. The workflow-directory scans in `tests/test_clock_marker_probe.py` and `tests/test_intr_destination_capability.py` still pass over the remaining files."
+ ],
+ "folded_from_commit": "99311bb4ea4cc431b5d8d5032ebf60e629e9af38",
+ "groups": [
+  {
+   "id": "bilateral-match-validation.validate",
+   "source": {
+    "workflow": ".github/workflows/bilateral-match-validation.yml",
+    "workflow_name": "Bilateral Match Validation",
+    "job": "validate",
+    "job_name": null,
+    "commit": "99311bb",
+    "triggers_before": [
+     "pull_request",
+     "push",
+     "workflow_dispatch"
+    ],
+    "permissions_before": {
+     "contents": "read"
+    }
+   },
+   "events": [
+    "pull_request",
+    "push"
+   ],
+   "env": {},
+   "steps": [
+    {
+     "name": "Prove both halves of the bilateral match",
+     "run_file": "tools/tasks/steps/bilateral-match-validation.validate/01-prove-both-halves-of-the-bilateral-match.sh",
+     "run_sha256": "ebd69bb9d93ace0804368edaccb4a3afcfb007f7a319b6071331d905a22f5230"
+    },
+    {
+     "name": "Assert the disclosure stays narrow and never passes on silence",
+     "run_file": "tools/tasks/steps/bilateral-match-validation.validate/02-assert-the-disclosure-stays-narrow-and-never-passes-on-silen.sh",
+     "run_sha256": "3de3ef8fa60b76a72ba8bc29a4878befc6d38a5d6c889b8e8b34841397d45f10"
+    },
+    {
+     "name": "Record what the match establishes and what it leaves open",
+     "run_file": "tools/tasks/steps/bilateral-match-validation.validate/03-record-what-the-match-establishes-and-what-it-leaves-open.sh",
+     "run_sha256": "905824e23c294d61109adb740e786f0b1359661ce11043d9e514f16f5923354b"
+    }
+   ],
+   "artifacts": [],
+   "runner": {
+    "fetch_depth": "1",
+    "persist_credentials": "true",
+    "timeout_minutes": 30
+   }
+  },
+  {
+   "id": "clock-marker-probe-validation.validate",
+   "source": {
+    "workflow": ".github/workflows/clock-marker-probe-validation.yml",
+    "workflow_name": "Validate Clock Marker Probe",
+    "job": "validate",
+    "job_name": null,
+    "commit": "99311bb",
+    "triggers_before": [
+     "pull_request",
+     "push",
+     "workflow_dispatch"
+    ],
+    "permissions_before": {
+     "contents": "read"
+    }
+   },
+   "events": [
+    "pull_request",
+    "push"
+   ],
+   "env": {},
+   "steps": [
+    {
+     "name": "Fixed-clock probe of every route",
+     "run_file": "tools/tasks/steps/clock-marker-probe-validation.validate/01-fixed-clock-probe-of-every-route.sh",
+     "run_sha256": "0d4e3188feced385592ddffc38c0706a07e8dbc2a168e1dce8b8fe44930454e8"
+    }
+   ],
+   "artifacts": [],
+   "runner": {
+    "fetch_depth": "1",
+    "persist_credentials": "false",
+    "timeout_minutes": 30
+   }
+  },
+  {
+   "id": "intr-destination-capability-validation.validate-intr-destination",
+   "source": {
+    "workflow": ".github/workflows/intr-destination-capability-validation.yml",
+    "workflow_name": "Validate InTr Destination Capability",
+    "job": "validate-intr-destination",
+    "job_name": null,
+    "commit": "99311bb",
+    "triggers_before": [
+     "pull_request",
+     "push",
+     "workflow_dispatch"
+    ],
+    "permissions_before": {
+     "contents": "read"
+    }
+   },
+   "events": [
+    "pull_request",
+    "push"
+   ],
+   "env": {},
+   "steps": [
+    {
+     "name": "The boundary enforces the advertised address and the served set",
+     "run_file": "tools/tasks/steps/intr-destination-capability-validation.validate-intr-destination/01-the-boundary-enforces-the-advertised-address-and-the-served-.sh",
+     "run_sha256": "4dce65e005b4b1072916d45b3e756af575b361ace8790363a73309c9ed384ad3"
+    },
+    {
+     "name": "Validate advertise, address, resolve, emit, and close",
+     "run_file": "tools/tasks/steps/intr-destination-capability-validation.validate-intr-destination/02-validate-advertise-address-resolve-emit-and-close.sh",
+     "run_sha256": "fa5d3b43d4155d01f7c9f699483ad195165460db950e22b9b4364315f4135250",
+     "env": {
+      "STEGVERSE_REPO_LEDGER_ROOT": "${{ runner.temp }}/repo-ledger",
+      "STEGVERSE_ORG_LEDGER_ROOT": "${{ runner.temp }}/org-ledger"
+     }
+    },
+    {
+     "name": "Every workflow action is pinned to a full commit sha",
+     "run_file": "tools/tasks/steps/intr-destination-capability-validation.validate-intr-destination/03-every-workflow-action-is-pinned-to-a-full-commit-sha.sh",
+     "run_sha256": "adeb09c4684f6d52d636436fe36e864ca49ba6c3abc654b128db029dcedf9f22"
+    }
+   ],
+   "artifacts": [],
+   "runner": {
+    "fetch_depth": "1",
+    "persist_credentials": "false",
+    "timeout_minutes": 30
+   }
+  },
+  {
+   "id": "intr-path-transfer-validation.unit",
+   "source": {
+    "workflow": ".github/workflows/intr-path-transfer-validation.yml",
+    "workflow_name": "Validate InTr Mesh Path Transfer",
+    "job": "unit",
+    "job_name": null,
+    "commit": "99311bb",
+    "triggers_before": [
+     "pull_request",
+     "push"
+    ],
+    "permissions_before": {
+     "contents": "read"
+    }
+   },
+   "events": [
+    "pull_request",
+    "push"
+   ],
+   "env": {
+    "LEDGER_REF": "refs/stegverse/organization-ledger",
+    "DRY_RUN_REF": "refs/dry-run/organization-ledger"
+   },
+   "steps": [
+    {
+     "name": "Fetch the ledger ref read-only (the fixtures pin a commit on it)",
+     "run_file": "tools/tasks/steps/intr-path-transfer-validation.unit/01-fetch-the-ledger-ref-read-only-the-fixtures-pin-a-commit-on-.sh",
+     "run_sha256": "23d3ba4d4667391d4c731e9630fbf7fda623b69e7164369665c88cf283b947cc"
+    },
+    {
+     "name": "Declared paths, append, two-half verify, refusals (temp ledgers from the pinned tip)",
+     "run_file": "tools/tasks/steps/intr-path-transfer-validation.unit/02-declared-paths-append-two-half-verify-refusals-temp-ledgers-.sh",
+     "run_sha256": "0f0b28a1e08f534b19a6e74dffe6dfe6a18fbb2b9261e5f4118802af44b7c952"
+    },
+    {
+     "name": "Destination carrier, ingress append, link and end-to-end checks (synthetic source receipts, temp ledgers)",
+     "run_file": "tools/tasks/steps/intr-path-transfer-validation.unit/03-destination-carrier-ingress-append-link-and-end-to-end-check.sh",
+     "run_sha256": "c4e0e9ab634dfdb4a905a999ff13a486474827dfe7a9b7d994dad0fc53fcef95"
+    },
+    {
+     "name": "Cross-organization pair check through TV/TVC (TVC#528 fixture receipts; no token; real state FAIL_CLOSED at the TVC transition)",
+     "run_file": "tools/tasks/steps/intr-path-transfer-validation.unit/04-cross-organization-pair-check-through-tv-tvc-tvc-528-fixture.sh",
+     "run_sha256": "0e3b1fa362aba98b2925df1869a908189a6f8cb0e9b4a91988ea256c898865f5"
+    },
+    {
+     "name": "Public-ledger route of the cross-org read (E0, no credential); inbound rows dry-run end to end on a scratch ref",
+     "run_file": "tools/tasks/steps/intr-path-transfer-validation.unit/05-public-ledger-route-of-the-cross-org-read-e0-no-credential-i.sh",
+     "run_sha256": "15779fc4996462d5255ec566c7abbde2d2e838f745ba0bd039de83f25bc00108"
+    }
+   ],
+   "artifacts": [],
+   "runner": {
+    "fetch_depth": "0",
+    "persist_credentials": "true",
+    "timeout_minutes": 30
+   }
+  },
+  {
+   "id": "intr-path-transfer-validation.dry-run",
+   "source": {
+    "workflow": ".github/workflows/intr-path-transfer-validation.yml",
+    "workflow_name": "Validate InTr Mesh Path Transfer",
+    "job": "dry-run",
+    "job_name": null,
+    "commit": "99311bb",
+    "triggers_before": [
+     "pull_request",
+     "push"
+    ],
+    "permissions_before": {
+     "contents": "read"
+    }
+   },
+   "events": [
+    "pull_request",
+    "push"
+   ],
+   "env": {
+    "LEDGER_REF": "refs/stegverse/organization-ledger",
+    "DRY_RUN_REF": "refs/dry-run/organization-ledger"
+   },
+   "steps": [
+    {
+     "name": "Copy the published ledger to a scratch ref",
+     "run_file": "tools/tasks/steps/intr-path-transfer-validation.dry-run/01-copy-the-published-ledger-to-a-scratch-ref.sh",
+     "run_sha256": "3127ce8dcd732fe6e0a4e52018ab4e8fd862af9b57113ce7357fb6c95d982233"
+    },
+    {
+     "name": "Real state, read-only: inspect actual source halves without assuming absent receipts",
+     "run_file": "tools/tasks/steps/intr-path-transfer-validation.dry-run/02-real-state-read-only-inspect-actual-source-halves-without-as.sh",
+     "run_sha256": "d0316b97675529c216446cb534367b0d179b41eb5cb51343d71274da977bde22"
+    },
+    {
+     "name": "The writer's append on the scratch ref, linked to the last ledgered main merge",
+     "run_file": "tools/tasks/steps/intr-path-transfer-validation.dry-run/03-the-writer-s-append-on-the-scratch-ref-linked-to-the-last-le.sh",
+     "run_sha256": "9f263a51f49913c78ca27911c2047eb94f536a7c6bac1cb0b040d1d54bed7192"
+    }
+   ],
+   "artifacts": [],
+   "runner": {
+    "fetch_depth": "0",
+    "persist_credentials": "true",
+    "timeout_minutes": 30
+   }
+  },
+  {
+   "id": "manifest-bound-conformance-validation.validate",
+   "source": {
+    "workflow": ".github/workflows/manifest-bound-conformance-validation.yml",
+    "workflow_name": "Manifest-Bound Conformance Validation",
+    "job": "validate",
+    "job_name": null,
+    "commit": "99311bb",
+    "triggers_before": [
+     "pull_request",
+     "push",
+     "workflow_dispatch"
+    ],
+    "permissions_before": {
+     "contents": "read"
+    }
+   },
+   "events": [
+    "pull_request",
+    "push"
+   ],
+   "env": {},
+   "steps": [
+    {
+     "name": "Hold the declaration and the register to the standard they cite",
+     "run_file": "tools/tasks/steps/manifest-bound-conformance-validation.validate/01-hold-the-declaration-and-the-register-to-the-standard-they-c.sh",
+     "run_sha256": "f92bcfacdf4b50563a68148cd1821904705ee6a3af10072ad9f4cf295fb52430"
+    },
+    {
+     "name": "Prove the register is not optional paperwork",
+     "run_file": "tools/tasks/steps/manifest-bound-conformance-validation.validate/02-prove-the-register-is-not-optional-paperwork.sh",
+     "run_sha256": "495755ba98f40b7d84c864e8fcbc53f2c7c55a5c76921902bf7a7a3dbe44094b"
+    },
+    {
+     "name": "Assert no surface claims conformance it has not got",
+     "run_file": "tools/tasks/steps/manifest-bound-conformance-validation.validate/03-assert-no-surface-claims-conformance-it-has-not-got.sh",
+     "run_sha256": "2cafd6fc016defd31cb0c274739a478940c24a37c0acda08d3a86cf7b8fa016a"
+    },
+    {
+     "name": "Record what this validation establishes and what it leaves open",
+     "run_file": "tools/tasks/steps/manifest-bound-conformance-validation.validate/04-record-what-this-validation-establishes-and-what-it-leaves-o.sh",
+     "run_sha256": "5c3cb19935b4a5bccb4bcde72b56d9229c0f538f90dbe3d04077f2b4ebc5cbe3"
+    }
+   ],
+   "artifacts": [],
+   "runner": {
+    "fetch_depth": "1",
+    "persist_credentials": "true",
+    "timeout_minutes": 30
+   }
+  },
+  {
+   "id": "node-standing-ingress-validation.validate",
+   "source": {
+    "workflow": ".github/workflows/node-standing-ingress-validation.yml",
+    "workflow_name": "Node Standing Ingress Validation",
+    "job": "validate",
+    "job_name": null,
+    "commit": "99311bb",
+    "triggers_before": [
+     "pull_request",
+     "push",
+     "workflow_dispatch"
+    ],
+    "permissions_before": {
+     "contents": "read"
+    }
+   },
+   "events": [
+    "pull_request",
+    "push"
+   ],
+   "env": {},
+   "steps": [
+    {
+     "name": "Prove the gate on every ingress surface",
+     "run_file": "tools/tasks/steps/node-standing-ingress-validation.validate/01-prove-the-gate-on-every-ingress-surface.sh",
+     "run_sha256": "b3f6606630bf32973906b7105186464add1b8e5e8efe0031084f1323a7490f35"
+    },
+    {
+     "name": "Assert the contract is the authority and no surface is ungated",
+     "run_file": "tools/tasks/steps/node-standing-ingress-validation.validate/02-assert-the-contract-is-the-authority-and-no-surface-is-ungat.sh",
+     "run_sha256": "4b8ca01ee5b06e90527863e6a4ea55407c453d1ac1a8bd96f5aecd5d0bdbb0f3"
+    },
+    {
+     "name": "Record what the gate does and does not establish",
+     "run_file": "tools/tasks/steps/node-standing-ingress-validation.validate/03-record-what-the-gate-does-and-does-not-establish.sh",
+     "run_sha256": "a0d001d5e5df500460a32a419f72af8892d9e02fa346e47062d8918994bf131f"
+    }
+   ],
+   "artifacts": [],
+   "runner": {
+    "fetch_depth": "1",
+    "persist_credentials": "true",
+    "timeout_minutes": 30
+   }
+  },
+  {
+   "id": "org-boundary-execution.execute",
+   "source": {
+    "workflow": ".github/workflows/org-boundary-execution.yml",
+    "workflow_name": "Org Boundary Execution",
+    "job": "execute",
+    "job_name": null,
+    "commit": "99311bb",
+    "triggers_before": [
+     "pull_request",
+     "push",
+     "workflow_dispatch"
+    ],
+    "permissions_before": null
+   },
+   "events": [
+    "pull_request",
+    "push"
+   ],
+   "env": {},
+   "steps": [
+    {
+     "name": "step 1",
+     "run_file": "tools/tasks/steps/org-boundary-execution.execute/01-step-1.sh",
+     "run_sha256": "1329c4923783d430df6bff291e2157c1082d9b25cbe7fd0f2b3c4d579b50e527"
+    }
+   ],
+   "artifacts": [],
+   "runner": {
+    "fetch_depth": "1",
+    "persist_credentials": "true",
+    "timeout_minutes": 30
+   }
+  },
+  {
+   "id": "org-runtime-boundary.validate",
+   "source": {
+    "workflow": ".github/workflows/org-runtime-boundary.yml",
+    "workflow_name": "Validate Organization Resident Runtime and Interlock-InTr Boundary",
+    "job": "validate",
+    "job_name": null,
+    "commit": "99311bb",
+    "triggers_before": [
+     "pull_request",
+     "push",
+     "workflow_dispatch"
+    ],
+    "permissions_before": {
+     "contents": "read"
+    }
+   },
+   "events": [
+    "pull_request",
+    "push"
+   ],
+   "env": {},
+   "steps": [
+    {
+     "name": "Validate organization boundary",
+     "run_file": "tools/tasks/steps/org-runtime-boundary.validate/01-validate-organization-boundary.sh",
+     "run_sha256": "c9c2fd2dfe2c5d29536cc797227f7bbfa4e717660d99b88410cbd839f9899cfe"
+    },
+    {
+     "name": "Validate activation request generation",
+     "run_file": "tools/tasks/steps/org-runtime-boundary.validate/02-validate-activation-request-generation.sh",
+     "run_sha256": "bd504d8d215c130fb9b5f823c4851682ac89ebdfc1515de16017138e9d4603b7"
+    },
+    {
+     "name": "Validate Interlock/InTr ingress generation",
+     "run_file": "tools/tasks/steps/org-runtime-boundary.validate/03-validate-interlock-intr-ingress-generation.sh",
+     "run_sha256": "1e839eaf709caf91c71c5ffc27049b8590735ad5bf13e46492805caa709661a8"
+    },
+    {
+     "name": "Validate Interlock/InTr egress generation",
+     "run_file": "tools/tasks/steps/org-runtime-boundary.validate/04-validate-interlock-intr-egress-generation.sh",
+     "run_sha256": "153882a73b231e18f324f59519bb2e13cdda510de9a998665392fa46b829401c"
+    }
+   ],
+   "artifacts": [],
+   "runner": {
+    "fetch_depth": "1",
+    "persist_credentials": "true",
+    "timeout_minutes": 30
+   }
+  },
+  {
+   "id": "organization-batch-release-validation.validate",
+   "source": {
+    "workflow": ".github/workflows/organization-batch-release-validation.yml",
+    "workflow_name": "Organization Batch Release Validation",
+    "job": "validate",
+    "job_name": null,
+    "commit": "99311bb",
+    "triggers_before": [
+     "pull_request",
+     "push",
+     "workflow_dispatch"
+    ],
+    "permissions_before": {
+     "contents": "read"
+    }
+   },
+   "events": [
+    "pull_request",
+    "push"
+   ],
+   "env": {},
+   "steps": [
+    {
+     "name": "Record at the organization level, then batch",
+     "run_file": "tools/tasks/steps/organization-batch-release-validation.validate/01-record-at-the-organization-level-then-batch.sh",
+     "run_sha256": "c5acdc5b215d008db96e1aff4ae244849a09aa2fb7c6036c7ddeeebb33232872"
+    },
+    {
+     "name": "Assert the recorder cannot gate this organization",
+     "run_file": "tools/tasks/steps/organization-batch-release-validation.validate/02-assert-the-recorder-cannot-gate-this-organization.sh",
+     "run_sha256": "96d0fe1a7102908abf831de93a0037232d45c239ccec3fbf57274698d69a8c39"
+    },
+    {
+     "name": "Assert release and submission stay two acts",
+     "run_file": "tools/tasks/steps/organization-batch-release-validation.validate/03-assert-release-and-submission-stay-two-acts.sh",
+     "run_sha256": "f1e1544e8bfb7ea714276c39a602c80e5ea80f810487363707aa0cf61bc95809"
+    },
+    {
+     "name": "Record what this validation establishes and what it leaves open",
+     "run_file": "tools/tasks/steps/organization-batch-release-validation.validate/04-record-what-this-validation-establishes-and-what-it-leaves-o.sh",
+     "run_sha256": "cf832fb7963d6650af0e1c144670990885558e9f1fc293f826e80e4325c73eec"
+    }
+   ],
+   "artifacts": [],
+   "runner": {
+    "fetch_depth": "1",
+    "persist_credentials": "true",
+    "timeout_minutes": 30
+   }
+  },
+  {
+   "id": "organization-egress-boundary-validation.validate",
+   "source": {
+    "workflow": ".github/workflows/organization-egress-boundary-validation.yml",
+    "workflow_name": "Organization Egress Boundary Validation",
+    "job": "validate",
+    "job_name": null,
+    "commit": "99311bb",
+    "triggers_before": [
+     "pull_request",
+     "push",
+     "workflow_dispatch"
+    ],
+    "permissions_before": {
+     "contents": "read"
+    }
+   },
+   "events": [
+    "pull_request",
+    "push"
+   ],
+   "env": {},
+   "steps": [
+    {
+     "name": "Prove this organization can initiate a crossing and record it",
+     "run_file": "tools/tasks/steps/organization-egress-boundary-validation.validate/01-prove-this-organization-can-initiate-a-crossing-and-record-i.sh",
+     "run_sha256": "2c11282449ed8a656bedae63eb3581a48f576eaf8daf86afed70063db77045a5"
+    },
+    {
+     "name": "Assert the ledger contracts declare nothing they do not enforce",
+     "run_file": "tools/tasks/steps/organization-egress-boundary-validation.validate/02-assert-the-ledger-contracts-declare-nothing-they-do-not-enfo.sh",
+     "run_sha256": "27d2079ed7c7033a505b552a7fc6169862577d6a9a5c47c5ad629285535fcea8"
+    },
+    {
+     "name": "Record what the boundary does and does not establish",
+     "run_file": "tools/tasks/steps/organization-egress-boundary-validation.validate/03-record-what-the-boundary-does-and-does-not-establish.sh",
+     "run_sha256": "1c5fccfd2b3e9517cf02b68c123fdaef7c6bde45a176f73e2a42a3b19f3a25c0"
+    }
+   ],
+   "artifacts": [],
+   "runner": {
+    "fetch_depth": "1",
+    "persist_credentials": "true",
+    "timeout_minutes": 30
+   }
+  },
+  {
+   "id": "workflow-surface-registry.validate",
+   "catalog_addition": "G17 registry gate (no folded source workflow)",
+   "events": [
+    "pull_request",
+    "push"
+   ],
+   "env": {},
+   "steps": [
+    {
+     "name": "Workflow files equal the registered surfaces; catalog verifies ALLOW",
+     "run_file": "tools/tasks/steps/workflow-surface-registry.validate/01-registry.sh",
+     "run_sha256": "811824e88664923006be2eeb35632d710f5504145967f61632ad9e8fbdcb35ca"
+    }
+   ],
+   "artifacts": [],
+   "runner": {
+    "fetch_depth": "1",
+    "persist_credentials": "false",
+    "timeout_minutes": 10,
+    "python_version": "3.11"
+   }
+  }
+ ]
+}

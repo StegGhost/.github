@@ -1817,5 +1817,18 @@ class ProcessBoundaryExitSplit(unittest.TestCase):
         again, printed = self.run_once.run(envelope, egress, self.quarantine)
         self.assertEqual((again, printed["failure_code"]), (65, "FRAME_REFUSED_QUARANTINED"))
 
+# The validation dispatcher (#34) runs this module through the catalog group
+# clock-marker-probe-validation.validate, whose step body is sha256-pinned in a
+# catalog this lane does not own. Named directly (`python -m unittest
+# tests.test_clock_marker_probe`), the module also loads the B-P40 trigger and
+# committed-request suites the folded workflow used to run as their own steps;
+# under discovery (pattern set) they are collected once on their own.
+def load_tests(loader, tests, pattern):
+    if pattern is None:
+        tests.addTests(loader.loadTestsFromNames(
+            ["tests.test_workflow_triggers", "tests.test_committed_request_receipts"]))
+    return tests
+
+
 if __name__ == "__main__":
     unittest.main()

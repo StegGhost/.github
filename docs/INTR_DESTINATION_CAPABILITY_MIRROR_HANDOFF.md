@@ -154,10 +154,11 @@ The organization ledger ref is `refs/stegverse/organization-ledger` in
 subtree of that same ref (`repository_ledger_location` in `contract.json`).
 `resident-runtime/intr_destination_ingress.py` `self_close` forms a diagnostic
 and receives it here. Both receipts carry `communication_id`.
-`.github/workflows/organization-ledger-transition.yml` is the run, triggered
-by a push to main committing `.stegverse/organization-ledger-transition/request.json`
-(COMMITTED_REQUEST, B-P40), that appends those receipts on the designated ref,
-pushes it fast-forward only, and reads them back from a fresh fetch.
+No workflow appends those receipts on the designated ref any more: that is an
+InTr hop inside one organization, and InTr paths exist only between distinct
+organizations (Rigel's rule, 2026-10-25), so the `workflow_dispatch`
+`.github/workflows/organization-ledger-transition.yml` is retired. Historical
+receipts stay; the ledger is append-only.
 `SGHOST-EXEMPTION-006` still refuses the master-records handoff. That refusal
 is a separate act from recording on this ledger.
 

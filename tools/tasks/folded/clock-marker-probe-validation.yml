@@ -11,6 +11,7 @@ on:
       - 'resident-runtime/federation_cycle.py'
       - 'resident-runtime/activation-manifest.json'
       - '.github/workflows/resident-federation-cycle.yml'
+      - 'resident-runtime/federation_gateway_transport.py'
       - 'runtime/organization_runtime.py'
       - 'resident-runtime/aggregate_repo_transition.py'
       - 'resident-runtime/ledger_store.py'
@@ -21,11 +22,6 @@ on:
       - '.stegverse/transition-ledger/emit.py'
       - 'tests/test_clock_marker_probe.py'
       - '.github/workflows/clock-marker-probe-validation.yml'
-      - 'tests/test_workflow_triggers.py'
-      - 'tests/test_committed_request_receipts.py'
-      - 'resident-runtime/intr_path_*.py'
-      - 'resident-runtime/ecosystem_control.py'
-      - '.github/workflows/**'
   push:
     branches: [main]
     paths:
@@ -36,6 +32,7 @@ on:
       - 'resident-runtime/federation_cycle.py'
       - 'resident-runtime/activation-manifest.json'
       - '.github/workflows/resident-federation-cycle.yml'
+      - 'resident-runtime/federation_gateway_transport.py'
       - 'runtime/organization_runtime.py'
       - 'resident-runtime/aggregate_repo_transition.py'
       - 'resident-runtime/ledger_store.py'
@@ -46,11 +43,7 @@ on:
       - '.stegverse/transition-ledger/emit.py'
       - 'tests/test_clock_marker_probe.py'
       - '.github/workflows/clock-marker-probe-validation.yml'
-      - 'tests/test_workflow_triggers.py'
-      - 'tests/test_committed_request_receipts.py'
-      - 'resident-runtime/intr_path_*.py'
-      - 'resident-runtime/ecosystem_control.py'
-      - '.github/workflows/**'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -67,10 +60,3 @@ jobs:
       # an absent epoch or stamp the supplied one.
       - name: Fixed-clock probe of every route
         run: python -m unittest tests.test_clock_marker_probe -v
-      # No workflow is triggered by hand or by a clock (B-P40, R-DISPATCH).
-      - name: Workflow triggers are state transitions
-        run: python -m unittest tests.test_workflow_triggers -v
-      # Each receipt names its committed request; deep, non-finite and mistyped
-      # inputs are refused six-field (B-P40 VALIDATOR rows 1-5).
-      - name: Committed-request receipts and strict inputs
-        run: python -m unittest tests.test_committed_request_receipts -v

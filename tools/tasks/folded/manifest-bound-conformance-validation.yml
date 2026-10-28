@@ -26,6 +26,7 @@ on:
       - control/organization-runtime.json
       - resident-runtime/activation-manifest.json
       - .github/workflows/manifest-bound-conformance-validation.yml
+  workflow_dispatch:
 
 # This repository is internal; an unpermissioned GITHUB_TOKEN cannot read it.
 permissions:

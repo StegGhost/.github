@@ -39,6 +39,7 @@ on:
       - org-runtime/runtime_boundary.py
       - org-kernel/kernel.py
       - .github/workflows/organization-egress-boundary-validation.yml
+  workflow_dispatch:
 
 # This repository is internal; an unpermissioned GITHUB_TOKEN cannot read it and
 # checkout fails before any test body runs.

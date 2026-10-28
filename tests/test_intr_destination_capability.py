@@ -744,129 +744,18 @@ class DesignatedLedgerRefTests(unittest.TestCase):
         self.assertIs(location["new_ledger_root"], False)
         self.assertTrue(location["namespace"])
 
-    def test_the_committed_request_workflow_appends_pushes_and_reads_the_ref_back(self):
-        text = (ROOT / ".github/workflows/organization-ledger-transition.yml").read_text(
-            encoding="utf-8")
-        # B-P40 COMMITTED_REQUEST: a push committing the request, no dispatch, no inputs.
-        self.assertNotIn("workflow_dispatch:", text)
-        self.assertNotIn("github.event.inputs", text)
-        self.assertIn("on:\n  push:\n    branches: [main]\n    paths:\n"
-                      "      - .stegverse/organization-ledger-transition/request.json\n", text)
+    def test_the_dispatch_workflow_appends_pushes_and_reads_the_ref_back(self):
+        # Re-purposed (base id kept) under Rigel's rule (2026-10-25): InTr paths exist only between distinct
+        # organizations, so the self-closure dispatch workflow is retired, along with its inline epoch gate
+        # (DispatchEpochGateTests). The designated ref is appended only by the push-only writer.
+        self.assertFalse((ROOT / ".github/workflows/organization-ledger-transition.yml").exists())
+        for workflow in sorted((ROOT / ".github/workflows").glob("*.y*ml")):
+            text = workflow.read_text(encoding="utf-8")
+            self.assertNotIn("--self-close", text, workflow.name)
+            self.assertNotIn("--verify-self-closure", text, workflow.name)
+        text = (ROOT / ".github/workflows/organization-ledger-writer.yml").read_text(encoding="utf-8")
         self.assertIn("refs/stegverse/organization-ledger", text)
-        self.assertIn("--self-close", text)
-        self.assertIn("communication_id", text)
-        self.assertIn('git push origin "$LEDGER_REF:$LEDGER_REF"', text)
-        self.assertIn("organization_ledger_readback.py", text)
-        self.assertIn("SGHOST-EXEMPTION-006", text)
         self.assertNotIn("federation.json", text)
-
-
-class CommittedRequestGateTests(unittest.TestCase):
-    """The workflow's own inline request gate emits six-field refusals.
-
-    The step's run block is read from the workflow and executed as-is; only
-    the committed request file (REQUEST) varies per case. LEDGER_REF is this
-    checkout's HEAD, so a request naming HEAD or an ancestor is on the ledger.
-    """
-
-    STEP = "      - name: Refuse an absent, invalid or stale committed request before any append\n"
-    SIX_FIELDS = ("failure_code", "failed_predicate", "required_evidence_or_repair",
-                  "retry_entrypoint", "owning_existing_goal", "next_attempt")
-
-    @classmethod
-    def setUpClass(cls):
-        lines = (ROOT / ".github/workflows/organization-ledger-transition.yml").read_text(
-            encoding="utf-8").splitlines(keepends=True)
-        start = lines.index(cls.STEP)
-        run = next(i for i in range(start, len(lines)) if lines[i] == "        run: |\n")
-        body = []
-        for line in lines[run + 1:]:
-            if line.strip() and not line.startswith("          "):
-                break
-            body.append(line[10:] if line.strip() else "\n")
-        cls.script = "".join(body)
-
-    HEAD = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True,
-                          text=True, check=True).stdout.strip()
-
-    def run_gate(self, inputs, raw=None):
-        work = tempfile.TemporaryDirectory()
-        self.addCleanup(work.cleanup)
-        request = Path(work.name) / "request.json"
-        if raw is not None:
-            request.write_text(raw)
-        elif inputs is not None:
-            request.write_text(json.dumps(inputs))
-        env = {k: v for k, v in os.environ.items() if k not in ("GITHUB_ENV", "GITHUB_SHA")}
-        env.update(REQUEST=str(request), LEDGER_REF="HEAD", RUNNER_TEMP=work.name,
-                   GITHUB_ENV=str(Path(work.name) / "env"))
-        result = subprocess.run(["bash", "-e", "-c", self.script], cwd=ROOT, env=env,
-                                capture_output=True, text=True, check=False)
-        result.work = Path(work.name)
-        return result
-
-    def assert_refused(self, inputs, code):
-        result = self.run_gate(inputs)
-        self.assertEqual(result.returncode, 1, (inputs, result.stdout, result.stderr))
-        self.assertNotIn("Traceback", result.stderr)
-        self.assertNotIn("Traceback", result.stdout)
-        refusal = json.loads(result.stdout)
-        self.assertEqual(refusal["disposition"], "FAIL_CLOSED")
-        for field in self.SIX_FIELDS:
-            self.assertTrue(refusal.get(field), (field, refusal))
-        self.assertEqual(refusal["failure_code"], code, refusal)
-        self.assertEqual(refusal["retry_entrypoint"],
-                         ".github/workflows/organization-ledger-transition.yml")
-        self.assertIs(refusal["consequence_committed"], False)
-
-    def test_an_absent_or_empty_epoch_is_not_supplied(self):
-        # A missing hb_epoch key and "" are both NOT_SUPPLIED.
-        self.assert_refused({"communication_id": "c-1"}, "HB_EPOCH_NOT_SUPPLIED")
-        self.assert_refused({"hb_epoch": ""}, "HB_EPOCH_NOT_SUPPLIED")
-        self.assert_refused({}, "HB_EPOCH_NOT_SUPPLIED")
-
-    def test_an_absent_or_malformed_request_is_refused(self):
-        self.assert_refused(None, "LEDGER_TRANSITION_REQUEST_NOT_SUPPLIED")
-        result = self.run_gate(None, raw="[1]")
-        self.assertEqual(json.loads(result.stdout)["failure_code"], "LEDGER_TRANSITION_REQUEST_INVALID")
-        result = self.run_gate(None, raw="{")
-        self.assertEqual(json.loads(result.stdout)["failure_code"], "LEDGER_TRANSITION_REQUEST_INVALID")
-
-    def test_identifiers_and_ledger_head_are_checked(self):
-        base = {"hb_epoch": "4096", "communication_id": "c-1", "ledger_head": self.HEAD}
-        self.assert_refused({**base, "communication_id": ""}, "COMMUNICATION_ID_NOT_SUPPLIED")
-        self.assert_refused({**base, "communication_id": "a/../b"}, "REQUEST_IDENTIFIER_INVALID")
-        self.assert_refused({**base, "packet_id": "p\u00e9"}, "REQUEST_IDENTIFIER_INVALID")
-        self.assert_refused({k: v for k, v in base.items() if k != "ledger_head"}, "LEDGER_HEAD_NOT_SUPPLIED")
-        self.assert_refused({**base, "ledger_head": "f" * 40}, "LEDGER_HEAD_INVALID")
-        self.assert_refused({**base, "ledger_head": "GENESIS"}, "LEDGER_HEAD_INVALID")
-
-    def test_an_invalid_epoch_is_refused(self):
-        for value in ("\u0663\u0663", "\uff13\uff13", "+33", " 33", "33.0", "31", "abc"):
-            with self.subTest(value=value):
-                self.assert_refused({"hb_epoch": value}, "HB_EPOCH_INVALID")
-
-    def test_a_committed_request_on_the_ledger_passes(self):
-        result = self.run_gate({"hb_epoch": "4096", "communication_id": "c-1", "ledger_head": self.HEAD})
-        self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
-        self.assertNotIn("Traceback", result.stderr)
-        receipt = json.loads(result.stdout)
-        self.assertEqual(receipt["hb_epoch"], "4096")
-        self.assertTrue(receipt["request_sha256"].startswith("sha256:"))
-        self.assertIs(receipt["derived_from_clock"], False)
-        exported = dict(line.split("=", 1) for line in (result.work / "env").read_text().splitlines())
-        # The epoch, and the committed request every writer records (B-P40 clause b).
-        self.assertEqual(exported, {"HB_EPOCH": "4096",
-                                    "STEGVERSE_COMMITTED_REQUEST_PATH": str(result.work / "request.json"),
-                                    "STEGVERSE_COMMITTED_REQUEST_SHA256": receipt["request_sha256"]})
-        self.assertEqual((result.work / "closure-id.txt").read_text(),
-                         "c-1\norganization-intr-destination-self-closure\n")
-
-    def test_the_legacy_inline_refusal_is_gone(self):
-        text = (ROOT / ".github/workflows/organization-ledger-transition.yml").read_text(
-            encoding="utf-8")
-        self.assertNotIn("DISPATCH_HB_EPOCH_INVALID", text)
-        self.assertIn("kernel.writer_epoch_refusal(hb_epoch", text)
 
 
 class DiagnosticSelfClosureOnAGitRefTests(unittest.TestCase):
