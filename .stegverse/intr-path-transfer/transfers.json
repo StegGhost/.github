@@ -28,6 +28,10 @@
       "communication_id": "intr-path-v1:StegGhost->GCAT-BCAT-Engine"
     },
     {
+      "path_id": "StegGhost->Infrastructure-Continuity-Ventures:intr-destination",
+      "communication_id": "intr-path-v1:StegGhost->Infrastructure-Continuity-Ventures"
+    },
+    {
       "path_id": "StegGhost->SV-011:intr-destination",
       "communication_id": "intr-path-v1:StegGhost->SV-011"
     },
@@ -50,6 +54,14 @@
     {
       "path_id": "StegGhost->Triad-Test:intr-destination",
       "communication_id": "intr-path-v1:StegGhost->Triad-Test"
+    },
+    {
+      "path_id": "StegGhost->formalism-tests:intr-destination",
+      "communication_id": "intr-path-v1:StegGhost->formalism-tests"
+    },
+    {
+      "path_id": "StegGhost->master-records:intr-destination",
+      "communication_id": "intr-path-v1:StegGhost->master-records"
     }
   ]
 }
