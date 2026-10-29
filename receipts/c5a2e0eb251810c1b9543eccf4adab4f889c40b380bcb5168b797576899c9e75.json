@@ -1,0 +1,38 @@
+{
+  "authority_effect": "NONE",
+  "boundary_evidence": {
+    "communication_id": "intr-path-v1:StegGhost->formalism-tests",
+    "destination_organization": "formalism-tests",
+    "disposition": "ALLOW",
+    "operation": "INTR_MESH_PATH_TRANSFER",
+    "path_id": "StegGhost->formalism-tests:intr-destination",
+    "profile_id": "intr-mesh-path-transfer",
+    "repository": "StegGhost/.github",
+    "transfer_commit": "d6234b5f66ff79a6c1a9705243de98e65b475488"
+  },
+  "canonical_state_transition_receipt_sha256": null,
+  "hb_reference": {
+    "authority_effect": "NONE",
+    "derived_from_clock": false,
+    "epoch": 469436465,
+    "frequency_hz": 100,
+    "generation": 469436465,
+    "heartbeat_id": "HB:469436465",
+    "phase_offset_ns": 0,
+    "progression_dependency": "OSCILLATOR_ONLY"
+  },
+  "org_transition_class": "REPO_STATE_PROPAGATION",
+  "organization": "StegGhost",
+  "predecessor_org_state_sha256": "sha256:8156a0e0b8e0bcf60779d684718408e60f9d2a33ae7a1b83bd5fd3c130aebb72",
+  "previous_receipt_sha256": "sha256:c4c4228ed8e8bad3d4da0f188820a27d7f08f7de59cf15cde4784416d5d14de2",
+  "receipt_sha256": "sha256:c5a2e0eb251810c1b9543eccf4adab4f889c40b380bcb5168b797576899c9e75",
+  "repo_receipt_sha256": "sha256:5a299335a3c34675d9a8a474f6492df82894b8766ce99779735b914dee148cc5",
+  "repo_transition_id": "INTR_MESH_PATH_TRANSFER:StegGhost->formalism-tests:intr-destination@intr-path-v1:StegGhost->formalism-tests",
+  "schema": "stegverse.organization-transition-receipt/v1",
+  "source_receipt_schema": "stegverse.repo-transition-receipt/v1",
+  "source_repository": "StegGhost/.github",
+  "source_transition_id": "INTR_MESH_PATH_TRANSFER:StegGhost->formalism-tests:intr-destination@intr-path-v1:StegGhost->formalism-tests",
+  "source_transition_sha256": "sha256:5a299335a3c34675d9a8a474f6492df82894b8766ce99779735b914dee148cc5",
+  "subject_or_correlation_id": null,
+  "successor_org_state_sha256": "sha256:9f7bde61172ba037adb0f88387af11b41f7e5ac1fad2f990380cd71d0db09e92"
+}
