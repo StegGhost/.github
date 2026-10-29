@@ -488,6 +488,34 @@ class InboundEpochIsSupplied(unittest.TestCase):
         self.assertEqual(status["monitor_status_refusal"]["failure_code"], "HB_EPOCH_NOT_SUPPLIED")
         self.assertEqual(CLOCK_CALLS, [])
 
+    def test_the_gateway_blocks_a_deep_frame_and_leaves_an_unreadable_envelope_pending(self):
+        # VALIDATOR 10:31Z gateway rule: a deep or unusable frame inside a
+        # readable gateway envelope is acked BLOCKED FRAME_INGEST_FAILED
+        # (terminal); an unreadable envelope raises, is not acked, and stays
+        # pending for redelivery.
+        import base64
+        gateway = load("probe_gateway_deep", "resident-runtime/federation_gateway_transport.py")
+        gateway.K = KERNEL
+        acked = []
+        gateway.acknowledge_frame = lambda organization, frame, state, hb_epoch=None: acked.append(state) or {"state": state}
+        gateway.submit_frame = lambda frame: {}
+        deep = KERNEL.carrier_frame(self.distinct("gateway-deep"), epoch=4096)
+        raw = ("[" * 200000).encode()
+        body = {k: v for k, v in deep.items() if k != "frame_sha256"}
+        body.update(packet_base64=base64.b64encode(raw).decode("ascii"), packet_sha256=KERNEL.sha(raw))
+        deep = {**body, "frame_sha256": KERNEL.sha(body)}
+        gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": deep}
+        blocked = gateway.resident_gateway_cycle(self.b, hb_epoch=4096)
+        self.assertEqual((blocked["state"], blocked["refusal"]["failure_code"]), ("BLOCKED", "FRAME_INGEST_FAILED"))
+        self.assertEqual(acked, ["BLOCKED"])
+
+        def unreadable(organization):
+            raise gateway.FederationGatewayTransportError("gateway response is not JSON")
+        gateway.fetch_frame = unreadable
+        with self.assertRaises(gateway.FederationGatewayTransportError):
+            gateway.resident_gateway_cycle(self.b, hb_epoch=4096)
+        self.assertEqual(acked, ["BLOCKED"])
+
     def test_git_carrier_refuses_a_clock_flagged_egress(self):
         RAISING.clear()
         root = self.tmp / "g"
