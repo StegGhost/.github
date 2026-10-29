@@ -1,0 +1,45 @@
+{
+  "authority_effect": "NONE",
+  "evidence": {
+    "capability": "intr-destination",
+    "communication_id": "intr-path-v1:StegGhost->Infrastructure-Continuity-Ventures",
+    "destination_address": "infrastructure-continuity-ventures.intr-destination",
+    "destination_organization": "Infrastructure-Continuity-Ventures",
+    "disposition": "ALLOW",
+    "merge_transfer_organization_receipt_sha256": "sha256:970acac4323c5ad2158390713f20cdc65be10c3a11d8898cbb7d59fe430ec182",
+    "message": {
+      "body": {
+        "path_id": "StegGhost->Infrastructure-Continuity-Ventures:intr-destination",
+        "schema": "stegverse.org-intr-destination-diagnostic/v1",
+        "transfer_commit": "d6234b5f66ff79a6c1a9705243de98e65b475488"
+      },
+      "communication_id": "intr-path-v1:StegGhost->Infrastructure-Continuity-Ventures",
+      "message_class": "ecosystem.communication"
+    },
+    "message_sha256": "sha256:be557a7501636fe304be70d9908267e64f8c2970f69e71c4d2a30ce2386e4593",
+    "path_id": "StegGhost->Infrastructure-Continuity-Ventures:intr-destination",
+    "payload_sha256": "sha256:b2e21137c7ba9aeade6c3869ce048372690d14120eb96ffca7b3d79539782866",
+    "repository": "StegGhost/.github",
+    "schema": "stegverse.intr-path-transfer-evidence/v1",
+    "source_organization": "StegGhost",
+    "transfer_commit": "d6234b5f66ff79a6c1a9705243de98e65b475488"
+  },
+  "hb_reference": {
+    "authority_effect": "NONE",
+    "derived_from_clock": false,
+    "epoch": 469436465,
+    "frequency_hz": 100,
+    "generation": 469436465,
+    "heartbeat_id": "HB:469436465",
+    "phase_offset_ns": 0,
+    "progression_dependency": "OSCILLATOR_ONLY"
+  },
+  "predecessor_state_sha256": "sha256:b2e21137c7ba9aeade6c3869ce048372690d14120eb96ffca7b3d79539782866",
+  "previous_receipt_sha256": "sha256:de7eef9f6a1347fde42bb1531f05277d3b2beb2c515b647cf49f6746a92f71a7",
+  "receipt_sha256": "sha256:ced74ceefe5a22276949af40053e66d9a6901778b089ea55f23c1d7a155fe7d7",
+  "repository": "StegGhost/.github",
+  "schema": "stegverse.repo-transition-receipt/v1",
+  "successor_state_sha256": "sha256:e9185b2269cfeff94a893a08c3bbf883e41483f58a4be25ee4ef2ee03518efb4",
+  "transition_class": "INTR_MESH_PATH_TRANSFER",
+  "transition_id": "INTR_MESH_PATH_TRANSFER:StegGhost->Infrastructure-Continuity-Ventures:intr-destination@intr-path-v1:StegGhost->Infrastructure-Continuity-Ventures"
+}
