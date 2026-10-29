@@ -69,6 +69,44 @@ def provision(root: Path, organization: str, role: str, service: str) -> None:
         json.dumps({"organization": organization, "services": [row]}))
 
 
+#: The repository ledger's namespace in the organization ledger (B-P40: emit.py lr()).
+REPOSITORY_NAMESPACE = json.loads((TREE / ".stegverse/transition-ledger/contract.json").read_text())[
+    "repository_ledger_location"]["namespace"]
+
+
+def on_repository_ledger(receipt, root: Path) -> Path:
+    """Make `receipt` the HEAD of a scratch repository ledger at `root`.
+
+    aggregate reads a source receipt only from its contract-designated ledger
+    or this repository's emit store (B-P40, LEDGER_ROOT_NOT_CONTRACT_DESIGNATED),
+    so a probe's hand-built source is this repository's and goes in the emit
+    store; the caller points STEGVERSE_REPO_LEDGER_ROOT at `root`."""
+    store_module = load("probe_source_ledger_store", "resident-runtime/ledger_store.py")
+    store = store_module.open_store(root)
+    store.initialize()
+    digest = receipt["receipt_sha256"]
+    assert store.append_transaction(store_module.receipt_key(digest), receipt,
+                                    store.get(store_module.HEAD_KEY), {"receipt_sha256": digest})
+    return root
+
+
+def repository_ledger_root(test, organization: Path) -> Path:
+    """This repository's ledger: the designated subtree of the organization
+    ledger at STEGVERSE_ORG_LEDGER_ROOT (set to `organization` when unset).
+    STEGVERSE_REPO_LEDGER_ROOT is pointed at it (B-P40, emit.py lr())."""
+    import os
+    previous_org = os.environ.get("STEGVERSE_ORG_LEDGER_ROOT")
+    if previous_org is None:
+        os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(organization)
+        test.addCleanup(os.environ.pop, "STEGVERSE_ORG_LEDGER_ROOT", None)
+    root = Path(os.environ["STEGVERSE_ORG_LEDGER_ROOT"]) / REPOSITORY_NAMESPACE
+    previous = os.environ.get("STEGVERSE_REPO_LEDGER_ROOT")
+    os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(root)
+    test.addCleanup(lambda: os.environ.__setitem__("STEGVERSE_REPO_LEDGER_ROOT", previous)
+                    if previous is not None else os.environ.pop("STEGVERSE_REPO_LEDGER_ROOT", None))
+    return root
+
+
 def unmarked_clock_values(value, path="$", parent=None):
     """Paths of pinned-clock values not marked as clock-derived."""
     found = []
@@ -190,23 +228,6 @@ class ClockMarkerProbe(unittest.TestCase):
             self.assertIs(envelope["carrier"]["derived_from_clock"], True)
         self.assertMarked(ingress, egress)
 
-    def test_gateway_acknowledgement_reads_no_clock(self):
-        # VALIDATOR (4): the ack is stamped from the epoch in hand, or carries
-        # none; it never reads the clock.
-        gateway = load("probe_gateway", "resident-runtime/federation_gateway_transport.py")
-        sent = []
-        gateway._json_request = lambda method, path, *, body=None, headers=None: sent.append(body) or {"state": "OK"}
-        RAISING.append(True)
-        self.addCleanup(RAISING.clear)
-        frame = {"packet_id": "p", "frame_sha256": "sha256:" + "0" * 64}
-        gateway.acknowledge_frame("Org-A", frame, "CONSUMED")
-        gateway.acknowledge_frame("Org-A", frame, "CONSUMED", hb_epoch=4096)
-        self.assertEqual((sent[0]["observed_at"], sent[0]["heartbeat_reference"]), (None, None))
-        self.assertEqual((sent[1]["heartbeat_reference"]["epoch"], sent[1]["heartbeat_reference"]["derived_from_clock"]),
-                         (4096, False))
-        self.assertEqual(CLOCK_CALLS, [])
-        self.assertMarked(*sent)
-
     def test_federation_cycle_refuses_an_absent_epoch(self):
         # S2: with no --hb-epoch and no HB_EPOCH the cycle is refused six-field
         # NOT_SUPPLIED and writes nothing; no clock is read.
@@ -316,18 +337,22 @@ class SharedRuleAndSourceProvenance(unittest.TestCase):
                          "ad8ff52936d5bcd9a2ad6caceb2d9a637a099518989b34bbb3370301c7a4cce2")
 
     def repo_receipt(self, transition_id, hb):
-        body = {"schema": "stegverse.repo-transition-receipt/v1", "repository": self.org.C["organization"] + "/probe",
+        body = {"schema": "stegverse.repo-transition-receipt/v1", "repository": self.org.C["organization"] + "/.github",
                 "transition_id": transition_id, "transition_class": "PROBE",
                 "predecessor_state_sha256": "sha256:" + "1" * 64, "successor_state_sha256": "sha256:" + "2" * 64,
                 "evidence": {}, "authority_effect": "NONE", "hb_reference": hb, "previous_receipt_sha256": None}
         return {**body, "receipt_sha256": self.org.sha(body)}
 
     def append(self, receipt, **kw):
+        on_repository_ledger(receipt, repository_ledger_root(self, self.tmp / "repo-ledger"))
         return self.org.append(receipt, "REPO_STATE_PROPAGATION", "sha256:" + "1" * 64, "sha256:" + "2" * 64,
                                {}, "NONE", hb_epoch="4096", **kw)
 
     def files(self):
-        return sorted(p for p in self.ledger.rglob("*") if p.is_file()) if self.ledger.exists() else []
+        # The organization ledger's own files; its repository-ledger subtree
+        # holds the probe's source receipts (B-P40).
+        return sorted(p for p in self.ledger.rglob("*") if p.is_file()
+                      and "repository-ledger" not in p.relative_to(self.ledger).parts) if self.ledger.exists() else []
 
     def test_clock_provenance_source_is_refused_and_writes_nothing(self):
         k = self.org.kernel
@@ -399,18 +424,6 @@ class InboundEpochIsSupplied(unittest.TestCase):
         self.assertSupplied(served[0]["response_publication"]["frame"])
         self.assertEqual(CLOCK_CALLS, [])
 
-    def test_gateway_cycle_responds_at_the_inbound_epoch(self):
-        gateway = load("probe_gateway_cycle", "resident-runtime/federation_gateway_transport.py")
-        gateway.K = KERNEL
-        submitted = []
-        gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": self.frame}
-        gateway.submit_frame = lambda frame: submitted.append(frame) or {}
-        gateway.acknowledge_frame = lambda organization, frame, state, hb_epoch=None: {"state": state}
-        out = gateway.resident_gateway_cycle(self.b)
-        self.assertEqual(out["responses_emitted"], 1)
-        self.assertSupplied(submitted[0])
-        self.assertEqual(CLOCK_CALLS, [])
-
     def test_a_refused_frame_is_quarantined_and_never_retried(self):
         # B-P36j: a mixed batch. The refused frame gets a terminal six-field
         # quarantine marker, the valid one is answered, and a second cycle
@@ -473,22 +486,6 @@ class InboundEpochIsSupplied(unittest.TestCase):
         status = KERNEL.ingest_frame(self.b, clock_monitor)["execution_result"]["application_result"]
         self.assertNotIn("monitor_status", status)
         self.assertEqual(status["monitor_status_refusal"]["failure_code"], "HB_EPOCH_NOT_SUPPLIED")
-        gateway = load("probe_gateway_clock", "resident-runtime/federation_gateway_transport.py")
-        gateway.K = KERNEL
-        submitted = []
-        gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": clock_request}
-        gateway.submit_frame = lambda frame: submitted.append(frame) or {}
-        gateway.acknowledge_frame = lambda organization, frame, state, hb_epoch=None: {"state": state}
-        out = gateway.resident_gateway_cycle(self.b)
-        self.assertEqual((out["responses_emitted"], submitted), (0, []))
-        self.assertEqual(out["response_refusal"]["failure_code"], "HB_EPOCH_NOT_SUPPLIED")
-        self.assertEqual(gateway.resident_gateway_cycle(self.b, hb_epoch=4096)["responses_emitted"], 1)
-        # B-P36o: a tampered frame is refused six-field and acknowledged BLOCKED.
-        tampered = dict(clock_request, frame_sha256="sha256:" + "0" * 64)
-        gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": tampered}
-        blocked = gateway.resident_gateway_cycle(self.b, hb_epoch=4096)
-        self.assertEqual((blocked["state"], blocked["refusal"]["failure_code"]), ("BLOCKED", "FRAME_INTEGRITY_INVALID"))
-        self.assertSupplied(submitted[0])
         self.assertEqual(CLOCK_CALLS, [])
 
     def test_git_carrier_refuses_a_clock_flagged_egress(self):
@@ -914,29 +911,6 @@ class InboundEpochIsSupplied(unittest.TestCase):
         self.assertEqual(KERNEL.consume_and_respond(self.b, mesh_root=self.mesh), [])
         self.assertEqual(CLOCK_CALLS, [])
 
-    def test_a_failed_gateway_ack_never_yields_a_second_response(self):
-        # F-REPUB at the gateway: the ack fails after the response is
-        # submitted; the redelivered frame is not answered again.
-        gateway = load("probe_gateway_repub", "resident-runtime/federation_gateway_transport.py")
-        gateway.K = KERNEL
-        submitted, acks = [], []
-        gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": self.frame}
-        gateway.submit_frame = lambda frame: submitted.append(frame) or {}
-
-        def ack(organization, frame, state, hb_epoch=None):
-            acks.append(state)
-            if len(acks) == 1:
-                raise OSError(104, "Connection reset by peer")
-            return {"state": state}
-        gateway.acknowledge_frame = ack
-        first = gateway.resident_gateway_cycle(self.b)
-        self.assertEqual(first["ack_state"], "ACK_FAILED")
-        second = gateway.resident_gateway_cycle(self.b)
-        self.assertEqual(second["ack_state"], "CONSUMED")
-        self.assertEqual(len(submitted), 1)
-        self.assertEqual(second["response_frame_sha256"], submitted[0]["frame_sha256"])
-        self.assertEqual(CLOCK_CALLS, [])
-
     def test_a_verified_carried_crossing_is_answered_carried_and_recorded(self):
         # VALIDATOR @7a12ee6 rows 2-3 (B-P36m 09:00Z): a frame whose CARRIED
         # claim names the real current org head is admitted with a durable
@@ -953,12 +927,15 @@ class InboundEpochIsSupplied(unittest.TestCase):
         self.addCleanup(lambda: os.environ.__setitem__("STEGVERSE_ORG_LEDGER_ROOT", saved)
                         if saved is not None else os.environ.pop("STEGVERSE_ORG_LEDGER_ROOT", None))
         org = load("probe_carried_org", "resident-runtime/aggregate_repo_transition.py")
-        body = {"schema": "stegverse.repo-transition-receipt/v1", "repository": org.C["organization"] + "/probe",
+        body = {"schema": "stegverse.repo-transition-receipt/v1", "repository": org.C["organization"] + "/.github",
                 "transition_id": "seed", "transition_class": "SEED", "predecessor_state_sha256": "sha256:" + "1" * 64,
                 "successor_state_sha256": "sha256:" + "2" * 64, "evidence": {}, "authority_effect": "NONE",
                 "hb_reference": KERNEL.hb_reference(epoch=4096), "previous_receipt_sha256": None}
-        head = org.append({**body, "receipt_sha256": org.sha(body)}, "REPO_STATE_PROPAGATION",
-                          "sha256:" + "1" * 64, "sha256:" + "2" * 64, {}, "NONE", hb_epoch=4096)
+        seed = {**body, "receipt_sha256": org.sha(body)}
+        head = org.append(seed, "REPO_STATE_PROPAGATION",
+                          "sha256:" + "1" * 64, "sha256:" + "2" * 64, {}, "NONE", hb_epoch=4096,
+                          source_ledger=on_repository_ledger(
+                              seed, repository_ledger_root(self, self.tmp / "seed-repo-ledger")))
         claim = {"source": "ORGANIZATION_LEDGER_HEAD", "head_receipt_sha": head["receipt_sha256"]}
         frame = KERNEL.carrier_frame(self.request, epoch=4096, carried=claim)
         KERNEL.publish_frame(frame, root=self.mesh)
@@ -975,17 +952,6 @@ class InboundEpochIsSupplied(unittest.TestCase):
         record = json.loads(admissions[0].read_text())
         self.assertEqual((record["packet_id"], record["head_receipt_sha"], record["epoch"], record["derived_from_clock"]),
                          (frame["packet_id"], claim["head_receipt_sha"], 4096, False))
-        # The gateway answers the same way.
-        gateway = load("probe_gateway_carried", "resident-runtime/federation_gateway_transport.py")
-        gateway.K = KERNEL
-        submitted = []
-        other = KERNEL.carrier_frame(self.distinct(self.request["packet_id"] + ":gw"),
-                                     epoch=4096, carried=claim)
-        gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": other}
-        gateway.submit_frame = lambda f: submitted.append(f) or {}
-        gateway.acknowledge_frame = lambda organization, f, state, hb_epoch=None: {"state": state}
-        self.assertEqual(gateway.resident_gateway_cycle(self.b)["responses_emitted"], 1)
-        self.assertEqual(submitted[0]["heartbeat_reference"]["head_receipt_sha"], claim["head_receipt_sha"])
         self.assertEqual(CLOCK_CALLS, [])
 
     def test_a_distinct_request_reusing_a_communication_id_is_refused(self):
@@ -1013,61 +979,7 @@ class InboundEpochIsSupplied(unittest.TestCase):
         responses = [p for p in (self.mesh / "frames.d").glob("*.json")
                      if json.loads(p.read_text()).get("destination_org") == "Org-A"]
         self.assertEqual(len(responses), 1)
-        # The gateway refuses it the same way.
-        gateway = load("probe_gateway_cid", "resident-runtime/federation_gateway_transport.py")
-        gateway.K = KERNEL
-        gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": second}
-        gateway.submit_frame = lambda frame: self.fail("a colliding request was answered")
-        gateway.acknowledge_frame = lambda organization, frame, state, hb_epoch=None: {"state": state}
-        out = gateway.resident_gateway_cycle(self.b)
-        self.assertEqual((out["state"], out["refusal"]["failure_code"]), ("BLOCKED", "RESPONSE_ID_COLLISION"))
         self.assertEqual(CLOCK_CALLS, [])
-
-    def test_a_fault_at_each_gateway_write_submits_exactly_once(self):
-        # B-P36q at the gateway: an OSError writing the response record, writing
-        # the submitted flag, or from the submit itself leaves the request
-        # pending (not acknowledged); the next delivery submits exactly once.
-        for step in ("record", "flag", "submit"):
-            with self.subTest(step=step):
-                root = self.tmp / ("gw-" + step)
-                provision(root, "Org-B", "BOUNDARY_LOCAL_CONTROL", "org-b.org-control")
-                gateway = load("probe_gateway_io_" + step, "resident-runtime/federation_gateway_transport.py")
-                gateway.K = KERNEL
-                submitted, acks = [], []
-                gateway.fetch_frame = lambda organization: {"state": "FRAME_AVAILABLE", "frame": self.frame}
-                gateway.acknowledge_frame = lambda organization, frame, state, hb_epoch=None: acks.append(state) or {
-                    "state": state}
-                calls = []
-
-                def submit(frame, _calls=calls, _step=step):
-                    _calls.append(1)
-                    if _step == "submit" and len(_calls) == 1:
-                        raise OSError(104, "Connection reset by peer")
-                    submitted.append(frame)
-                    return {}
-                gateway.submit_frame = submit
-                original_write = KERNEL.write_atomic
-                writes = []
-
-                def write(path, text, _step=step, _writes=writes):
-                    target = "flag" if str(path).endswith(".submitted") else (
-                        "record" if "responses.d" in str(path) else "other")
-                    _writes.append(target)
-                    if target == _step and _writes.count(target) == 1:
-                        raise OSError(28, "No space left on device")
-                    return original_write(path, text)
-                KERNEL.write_atomic = write
-                try:
-                    first = gateway.resident_gateway_cycle(root)
-                finally:
-                    KERNEL.write_atomic = original_write
-                self.assertEqual(first["state"], "PENDING", first)
-                self.assertIs(first["refusal"]["terminal"], False)
-                self.assertEqual(acks, [])
-                second = gateway.resident_gateway_cycle(root)
-                third = gateway.resident_gateway_cycle(root)
-                self.assertEqual((second["state"], third["state"]), ("CONSUMED", "CONSUMED"))
-                self.assertEqual(len(submitted), 1)
 
     def test_monitor_request_status_takes_the_inbound_epoch(self):
         # R2: resident_status is stamped from the request frame's epoch.
@@ -1171,7 +1083,7 @@ class WritersVerifyACarriedClaim(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp)
         saved = {key: os.environ.get(key) for key in ("STEGVERSE_ORG_LEDGER_ROOT", "STEGVERSE_REPO_LEDGER_ROOT")}
         os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(self.tmp / "org")
-        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(self.tmp / "repo")
+        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(self.tmp / "org" / REPOSITORY_NAMESPACE)
 
         def restore():
             for key, value in saved.items():
@@ -1247,18 +1159,31 @@ class ManifestEntrypointsBindTheirEpoch(unittest.TestCase):
             with self.subTest(entrypoint=path):
                 binding = bindings.get(path)
                 self.assertIsNotNone(binding, path + " requires an epoch but the manifest binds none")
-                self.assertIn(binding["hb_epoch"]["from"], ("dispatch_input", "carried"))
+                self.assertIn(binding["hb_epoch"]["from"], ("committed_request", "carried", "caller_supplied"))
                 self.assertIs(binding["hb_epoch"]["derived_from_clock"], False)
                 flag = binding["hb_epoch"]["cli_flag"]
                 self.assertIn('"' + flag + '"', (TREE / path).read_text())
                 dispatcher = binding["dispatcher"]
                 self.assertIs(dispatcher["adds_dependency"], False)
-                # The dispatcher is in the tree: a workflow that takes the epoch
-                # as a dispatch input and passes it to the entrypoint.
+                if dispatcher["kind"] == "CALLER_SUPPLIED":
+                    # A CLI its caller runs with the epoch in hand (B-P40 row 5):
+                    # no workflow dispatches it, and it refuses an absent epoch.
+                    self.assertEqual(binding["hb_epoch"]["from"], "caller_supplied")
+                    self.assertIs(dispatcher["in_tree"], False)
+                    self.assertIn(path + " ", dispatcher["invocation"])
+                    self.assertIn(" " + flag + " ", dispatcher["invocation"])
+                    self.assertIn("writer_epoch_refusal", (TREE / path).read_text())
+                    continue
+                # The dispatcher is in the tree: a workflow triggered by a push
+                # that commits the request, reading the epoch from that file and
+                # passing it to the entrypoint (B-P40 COMMITTED_REQUEST).
                 self.assertIs(dispatcher["in_tree"], True)
+                self.assertEqual(dispatcher["kind"], "COMMITTED_REQUEST")
                 workflow = (TREE / dispatcher["workflow"]).read_text()
-                self.assertIn("workflow_dispatch:", workflow)
-                self.assertIn("      " + dispatcher["input"] + ":", workflow)
+                self.assertNotIn("workflow_dispatch:", workflow)
+                self.assertIn("      - " + dispatcher["request"] + "\n", workflow)
+                self.assertIn('request.get("' + dispatcher["input"] + '")', workflow)
+                self.assertIn('request.get("ledger_head")', workflow)
                 self.assertIn(dispatcher["invocation"], workflow)
                 self.assertIn(path + " " + flag + " ", dispatcher["invocation"])
                 self.assertIn("writer_epoch_refusal", workflow)
@@ -1266,7 +1191,22 @@ class ManifestEntrypointsBindTheirEpoch(unittest.TestCase):
     def test_no_schedule_or_push_trigger_reaches_an_epoch_requiring_entrypoint(self):
         # Lead 08:35Z: schedule and push are not admissible dispatchers. A
         # workflow they trigger runs no epoch-requiring entrypoint (only tests).
+        # B-P40 (R-DISPATCH): the one admissible push is a committed request: a
+        # workflow whose push paths are only its .stegverse/**/request.json, that
+        # reads hb_epoch from that file through the kernel's shared rule. The
+        # manifest's dispatcher is one of them.
         import re
+        manifest = json.loads((TREE / "resident-runtime/activation-manifest.json").read_text())
+        requests = {b["dispatcher"]["workflow"]: b["dispatcher"]["request"]
+                    for b in (manifest.get("epoch_bindings") or {}).values()
+                    if b["dispatcher"].get("kind") == "COMMITTED_REQUEST"}
+        self.assertIn(".github/workflows/resident-federation-cycle.yml", requests)
+        for workflow in sorted((TREE / ".github/workflows").glob("*.yml")):
+            text = workflow.read_text()
+            only = re.search(r"^on:\n  push:\n    branches: \[main\]\n    paths:\n"
+                             r"      - (\.stegverse/[\w./-]+/request\.json)\n\n", text, re.M)
+            if only and 'request.get("hb_epoch")' in text and "writer_epoch_refusal(hb_epoch" in text:
+                requests.setdefault(".github/workflows/" + workflow.name, only.group(1))
         requiring = [path for path in TREE.rglob("*.py")
                      if ".git" not in path.parts and "tests" not in path.parts
                      and '"--hb-epoch"' in path.read_text()]
@@ -1278,6 +1218,12 @@ class ManifestEntrypointsBindTheirEpoch(unittest.TestCase):
             on_block = re.search(r"^on:\n((?:[ \t]+.*\n|\n)*)", text, re.M)
             triggers = set(re.findall(r"^  (\w+):", on_block.group(1), re.M)) if on_block else set()
             if not triggers & {"schedule", "push"}:
+                continue
+            request = requests.get(".github/workflows/" + workflow.name)
+            if request is not None and triggers == {"push"}:
+                paths = re.search(r"^  push:\n    branches: \[main\]\n    paths:\n((?:      - .*\n)+)", text, re.M)
+                self.assertIsNotNone(paths, workflow.name)
+                self.assertEqual(paths.group(1), "      - " + request + "\n", workflow.name)
                 continue
             for line in text.splitlines():
                 for name in names:
@@ -1306,7 +1252,7 @@ class WriterEntryPointsReportFaultsSixField(unittest.TestCase):
         for key in saved:
             os.environ.pop(key, None)
         os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(self.tmp / "org")
-        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(self.tmp / "repo")
+        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(self.tmp / "org" / REPOSITORY_NAMESPACE)
         os.environ["STEGVERSE_ORG_FEDERATION_ROOT"] = str(self.tmp / "mesh")
 
         def restore():
@@ -1359,17 +1305,19 @@ class WriterEntryPointsReportFaultsSixField(unittest.TestCase):
         argv = ["--transition-id", "t:cli", "--transition-class", "T", "--predecessor-state-sha256",
                 "sha256:" + "0" * 64, "--successor-state-sha256", "sha256:" + "1" * 64, "--hb-epoch", "4096"]
         self.assert_fault_then_once(emit, argv)
-        receipts = list((self.tmp / "repo" / "receipts").glob("*.json"))
+        receipts = list((self.tmp / "org" / REPOSITORY_NAMESPACE / "receipts").glob("*.json"))
         self.assertEqual(len(receipts), 1)
 
     def test_aggregate_cli(self):
         org = load("probe_aggregate_cli", "resident-runtime/aggregate_repo_transition.py")
-        body = {"schema": "stegverse.repo-transition-receipt/v1", "repository": org.C["organization"] + "/cli",
+        body = {"schema": "stegverse.repo-transition-receipt/v1", "repository": org.C["organization"] + "/.github",
                 "transition_id": "cli", "transition_class": "CLI", "predecessor_state_sha256": "sha256:" + "1" * 64,
                 "successor_state_sha256": "sha256:" + "2" * 64, "evidence": {}, "authority_effect": "NONE",
                 "hb_reference": KERNEL.hb_reference(epoch=4096), "previous_receipt_sha256": None}
         source = self.tmp / "source.json"
         source.write_text(json.dumps({**body, "receipt_sha256": org.sha(body)}))
+        on_repository_ledger({**body, "receipt_sha256": org.sha(body)},
+                             repository_ledger_root(self, self.tmp / "source-ledger"))
         argv = ["--repo-receipt", str(source), "--predecessor-org-state-sha256", "sha256:" + "1" * 64,
                 "--successor-org-state-sha256", "sha256:" + "2" * 64, "--hb-epoch", "4096"]
         self.assert_fault_then_once(org, argv)
@@ -1380,7 +1328,7 @@ class WriterEntryPointsReportFaultsSixField(unittest.TestCase):
         argv = ["--self-close", "--hb-epoch", "4096", "--communication-id", "cli-close", "--packet-id", "cli-close"]
         self.assert_fault_then_once(ingress, argv)
         self.assertEqual(len(list((self.tmp / "org" / "receipts").glob("*.json"))), 1)
-        self.assertEqual(len(list((self.tmp / "repo" / "receipts").glob("*.json"))), 1)
+        self.assertEqual(len(list((self.tmp / "org" / REPOSITORY_NAMESPACE / "receipts").glob("*.json"))), 1)
 
     def test_organization_runtime_cli(self):
         runtime = load("probe_runtime_cli", "runtime/organization_runtime.py")
@@ -1493,6 +1441,76 @@ class CliInputsAreRefusedTerminal(WriterEntryPointsReportFaultsSixField):
             self.assertIn(field, record)
         self.assertEqual(self.written(), before)
 
+    def test_every_ingress_refusal_is_terminal_six_field(self):
+        # VALIDATOR 10:31Z amendment: every refusal ingress() raises -- each
+        # RuntimeBoundaryError site, and a field of the wrong type such as a
+        # non-object authority -- is RUNTIME_BOUNDARY_REFUSED, rc 2, nothing
+        # written, no traceback.
+        import base64
+        runtime = load("input_runtime_every_refusal", "runtime/organization_runtime.py")
+        runtime.INGRESS = self.tmp / "ingress"
+        payload = b"payload"
+        intent = {"schema": "stegverse.universal-intr-transport/v1", "protocol": "InTr", "packet_id": "p1",
+                  "payload_hash": runtime.sha(payload), "authority": {"transport_grants_execution_authority": False}}
+
+        def envelope(**changes):
+            env = {"schema": "stegverse.organization-interlock-envelope/v1", "intr_intent": intent,
+                   "payload_base64": base64.b64encode(payload).decode()}
+            env.update(changes)
+            body = {k: v for k, v in env.items() if k != "envelope_hash"}
+            return {**body, "envelope_hash": runtime.sha(body)} if "envelope_hash" not in changes else env
+        cases = {
+            "schema mismatch": envelope(schema="other"),
+            "InTr invalid": envelope(intr_intent={**intent, "protocol": "HTTP"}),
+            "envelope hash mismatch": envelope(envelope_hash="sha256:" + "0" * 64),
+            "payload invalid": envelope(payload_base64="not base64!"),
+            "payload hash mismatch": envelope(payload_base64=base64.b64encode(b"other").decode()),
+            "transport authority drift": envelope(intr_intent={**intent, "authority": {}}),
+            "non-object authority": envelope(intr_intent={**intent, "authority": "x"}),
+            "non-object intr_intent": envelope(intr_intent="x"),
+        }
+        for name, env in cases.items():
+            with self.subTest(refusal=name):
+                path = self.valid("ingress-case.json", env)
+                before = self.written()
+                code, out, err = self.run_cli(runtime, ["ingress", "--file", path, "--hb-epoch", "4096"], fault=False)
+                self.assertNotIn("Traceback", out + err)
+                self.assertEqual(code, 2, out + err)
+                record = json.loads(out.strip().splitlines()[-1])
+                self.assertEqual((record["failure_code"], record["terminal"]), ("RUNTIME_BOUNDARY_REFUSED", True))
+                for field in self.SIX:
+                    self.assertIn(field, record)
+                self.assertEqual(self.written(), before)
+                self.assertFalse((self.tmp / "ingress").exists() and any((self.tmp / "ingress").iterdir()))
+
+    def test_a_non_finite_envelope_is_refused_terminal_six_field(self):
+        # V-P11 @755875b row 1: NaN or Infinity in an envelope. At the file read
+        # it is CLI_INPUT_UNREADABLE; reaching ingress() it is the ValueError
+        # canon(allow_nan=False) raises, refused RUNTIME_BOUNDARY_REFUSED. Both
+        # rc 2, terminal six-field, nothing written, no traceback.
+        runtime = load("input_runtime_nonfinite", "runtime/organization_runtime.py")
+        runtime.INGRESS = self.tmp / "ingress"
+        path = self.tmp / "nonfinite.json"
+        path.write_text('{"schema": "stegverse.organization-interlock-envelope/v1", "x": NaN}')
+        before = self.written()
+        code, out, err = self.run_cli(runtime, ["ingress", "--file", str(path), "--hb-epoch", "4096"], fault=False)
+        self.assertNotIn("Traceback", out + err)
+        self.assertEqual(code, 2, out + err)
+        record = json.loads(out.strip().splitlines()[-1])
+        self.assertEqual((record["failure_code"], record["terminal"]), ("CLI_INPUT_UNREADABLE", True))
+        envelope = {"schema": "stegverse.organization-interlock-envelope/v1",
+                    "intr_intent": {"schema": "stegverse.universal-intr-transport/v1", "protocol": "InTr"},
+                    "x": float("inf")}
+        runtime.kernel.read_input_json = lambda *args, **kwargs: envelope
+        code, out, err = self.run_cli(runtime, ["ingress", "--file", str(path), "--hb-epoch", "4096"], fault=False)
+        self.assertNotIn("Traceback", out + err)
+        self.assertEqual(code, 2, out + err)
+        record = json.loads(out.strip().splitlines()[-1])
+        self.assertEqual((record["failure_code"], record["terminal"]), ("RUNTIME_BOUNDARY_REFUSED", True))
+        for field in self.SIX:
+            self.assertIn(field, record)
+        self.assertEqual(self.written(), before)
+
     def test_inline_json_inputs_are_refused_terminal(self):
         emit = load("input_emit_cli", ".stegverse/transition-ledger/emit.py")
         aggregate = load("input_aggregate_inline_cli", "resident-runtime/aggregate_repo_transition.py")
@@ -1501,8 +1519,11 @@ class CliInputsAreRefusedTerminal(WriterEntryPointsReportFaultsSixField):
                 "successor_state_sha256": "sha256:" + "2" * 64, "evidence": {}, "authority_effect": "NONE",
                 "hb_reference": KERNEL.hb_reference(epoch=4096), "previous_receipt_sha256": None}
         source = self.valid("source.json", {**body, "receipt_sha256": aggregate.sha(body)})
+        # NaN, Infinity and 1e999 are not JSON: refused before any write, so no
+        # non-finite number reaches a receipt (V-P11 @755875b row 3).
         for text, error in (("not json", "JSONDecodeError"), ("[1]", "WRONG_TOP_LEVEL_TYPE"),
-                            ("[" * 60000, "RecursionError")):
+                            ("[" * 60000, "RecursionError"), ('{"a":NaN}', "ValueError"),
+                            ('{"a":-Infinity}', "ValueError"), ('{"a":1e999}', "ValueError")):
             with self.subTest(cli="emit", input=error):
                 self.assert_refused(emit, ["--transition-id", "t:in", "--transition-class", "T",
                                            "--predecessor-state-sha256", "sha256:" + "0" * 64,
@@ -1795,6 +1816,19 @@ class ProcessBoundaryExitSplit(unittest.TestCase):
         self.assertFalse(egress.exists())
         again, printed = self.run_once.run(envelope, egress, self.quarantine)
         self.assertEqual((again, printed["failure_code"]), (65, "FRAME_REFUSED_QUARANTINED"))
+
+# The validation dispatcher (#34) runs this module through the catalog group
+# clock-marker-probe-validation.validate, whose step body is sha256-pinned in a
+# catalog this lane does not own. Named directly (`python -m unittest
+# tests.test_clock_marker_probe`), the module also loads the B-P40 trigger and
+# committed-request suites the folded workflow used to run as their own steps;
+# under discovery (pattern set) they are collected once on their own.
+def load_tests(loader, tests, pattern):
+    if pattern is None:
+        tests.addTests(loader.loadTestsFromNames(
+            ["tests.test_workflow_triggers", "tests.test_committed_request_receipts"]))
+    return tests
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -22,8 +22,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from ledger_store import (HEAD_KEY, RECEIPT_PREFIX, SOURCE_PREFIX, open_store,  # noqa: E402
-                          parse_locator, receipt_key, source_key)
+from ledger_store import (HEAD_KEY, RECEIPT_PREFIX, SOURCE_PREFIX, canonical_location,  # noqa: E402
+                          open_store, parse_locator, receipt_key, source_key, subtree)
 
 ROOT = Path(__file__).resolve().parents[1]
 C = json.loads((ROOT / ".stegverse/transition-ledger/org-contract.json").read_text())
@@ -45,7 +45,9 @@ def require_state_digest(field, value):
 
 
 def canon(value):
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    # allow_nan=False: a non-finite number never reaches a receipt (B-P40 row 2).
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                      allow_nan=False).encode()
 
 
 def sha(value):
@@ -56,14 +58,14 @@ def ledger_root():
     """The organization ledger location supplied to this execution.
 
     A `git+<repository>#<ref>` names the designated ref. A plain path stays a
-    filesystem root. With neither supplied, the host state directory remains
-    the local root existing callers already resolve. Opening that location
+    filesystem root. With neither supplied, XDG_STATE_HOME as the caller set
+    it, else the repo-relative run root; never the host home (kernel.state_home). Opening that location
     does not designate the organization's ledger; the contract does.
     """
     override = os.getenv("STEGVERSE_ORG_LEDGER_ROOT")
     if override:
         return parse_locator(override)
-    return (Path(os.getenv("XDG_STATE_HOME", str(Path.home() / ".local/state")))
+    return (kernel.state_home()
             / "stegverse/org-ledgers" / C["organization"]).resolve()
 
 
@@ -311,11 +313,121 @@ def source_clock_refusal(source_receipt):
             "derived_from_clock": False, "consequence_committed": False}
 
 
+def _canonical_ledger(location):
+    """A ledger location compared by what it resolves to (ledger_store.canonical_location)."""
+    return canonical_location(location)
+
+
+def designated_repository_ledger(repository):
+    """The contract-designated ledger of an organization repository.
+
+    contract.json repository_ledger_location: the repository's chain is kept
+    in its own subtree, namespace repository-ledger/<repository>, of the
+    organization ledger this execution appends to."""
+    return subtree(ledger_root(), "repository-ledger/" + repository)
+
+
+def _tracked_in_checkout(location):
+    """Whether a POSIX ledger root holds files tracked in this checkout.
+
+    A ledger force-added and committed to the tree is a file anyone can write
+    in a pull request, not a ledger anyone appended to."""
+    canonical = _canonical_ledger(location)
+    if canonical[0] != "posix":
+        return False
+    root, path = os.path.realpath(str(ROOT)), canonical[1]
+    if os.path.commonpath([root, path]) != root:
+        return False
+    import subprocess
+    listed = subprocess.run(["git", "-C", root, "ls-files", "-z", "--", os.path.relpath(path, root)],
+                            capture_output=True, check=False)
+    return listed.returncode != 0 or bool(listed.stdout)
+
+
+def require_on_repository_ledger(receipt, source_ledger=None):
+    """Refuse `receipt` unless it is on the repository ledger it belongs to.
+
+    Every source ingest is checked: a receipt that hashes consistently but was
+    never appended, or that differs from the stored copy, would launder a
+    fabricated transition into the organization ledger.
+
+    The ledger is never the caller's choice (B-P40 row 8, lead rulings
+    20:57Z/20:59Z): it is the receipt repository's contract-designated ledger,
+    the namespace repository-ledger/<repository> of the organization ledger
+    this execution appends to (designated_repository_ledger; emit.py's lr() is
+    the same ledger for this repository). A `source_ledger` must resolve
+    (realpath, symlinks followed; git locators by real repository, ref and
+    namespace) to it, and a POSIX root may hold no file tracked in the
+    checkout. Otherwise LEDGER_ROOT_NOT_CONTRACT_DESIGNATED.
+
+    A receipt not on the ledger, or a ledger whose stored receipt is
+    unreadable, is refused SOURCE_RECEIPT_NOT_ON_LEDGER, terminal. An OSError
+    reading the store is the non-terminal LedgerWriteFailed. Read only; nothing
+    is written."""
+    refusal = kernel.SourceReceiptNotOnLedger
+    claimed = receipt.get("receipt_sha256")
+    repository = receipt.get("repository")
+    if (receipt.get("schema") != "stegverse.repo-transition-receipt/v1" or not isinstance(repository, str)
+            or not repository.startswith(C["organization"] + "/") or ".." in repository.split("/")):
+        raise refusal("source receipt is not a repo-transition receipt naming an organization repository")
+    allowed = [designated_repository_ledger(repository)]
+    if source_ledger is None:
+        source_ledger = allowed[0]
+    if _canonical_ledger(source_ledger) not in {_canonical_ledger(location) for location in allowed}:
+        raise kernel.LedgerRootNotContractDesignated(
+            "source ledger " + str(source_ledger) + " is not " + repr(repository)
+            + "'s contract-designated ledger or this repository's store")
+    if _tracked_in_checkout(source_ledger):
+        raise kernel.LedgerRootNotContractDesignated(
+            "source ledger " + str(source_ledger) + " holds files tracked in the checkout")
+    with kernel.ledger_write(EPOCH_RETRY_ENTRYPOINT):
+        store = open_store(source_ledger)
+        try:
+            head = store.get(HEAD_KEY)
+            cursor = head.get("receipt_sha256") if isinstance(head, dict) else None
+            seen = set()
+            found = False
+            # The whole chain is walked, HEAD to genesis, and each link verified:
+            # the source receipt is accepted only on a chain whose every receipt,
+            # its predecessors included, is present, hash-consistent and a
+            # repository receipt of this repository (B-P40, corrupt predecessor).
+            while cursor is not None:
+                if not isinstance(cursor, str) or cursor in seen:
+                    raise refusal("repository ledger chain is broken or cyclic at " + repr(cursor))
+                seen.add(cursor)
+                stored = store.get(receipt_key(cursor))
+                body = {k: v for k, v in stored.items() if k != "receipt_sha256"} if isinstance(stored, dict) else None
+                if (body is None or stored.get("receipt_sha256") != cursor or sha(body) != cursor
+                        or stored.get("schema") != "stegverse.repo-transition-receipt/v1"
+                        or stored.get("repository") != repository):
+                    raise refusal("repository ledger receipt " + cursor + " is missing, corrupt or not "
+                                  + repr(repository) + "'s")
+                if cursor == claimed:
+                    if stored != receipt:
+                        raise refusal("source receipt " + str(claimed)
+                                      + " differs from the one on its repository ledger")
+                    found = True
+                cursor = stored.get("previous_receipt_sha256")
+            if found:
+                return
+        except ValueError as error:
+            # A corrupt stored document (truncated, garbage) is not a receipt this
+            # ledger holds: refused, never a traceback (B-P40 row 9).
+            if getattr(error, "input_refused", False):
+                raise
+            raise refusal("repository ledger is unreadable: " + type(error).__name__) from None
+    raise refusal("source receipt " + str(claimed) + " is not reachable from its repository ledger HEAD")
+
+
 def append(source_receipt, org_transition_class, predecessor_state, successor_state,
-           boundary_evidence, authority_effect, hb_epoch=None, idempotent=False, hb_carried=None):
+           boundary_evidence, authority_effect, hb_epoch=None, idempotent=False, hb_carried=None,
+           source_ledger=None):
     # Admission is decided before the append lock is taken; an inadmissible
     # source receipt never contends for the organization ledger.
     source = verify_source(source_receipt)
+    # Only the gate-supplied pair sets committed_request; the key anywhere in
+    # caller boundary evidence is refused before anything is opened.
+    kernel.refuse_caller_committed_request(boundary_evidence, argument="boundary_evidence")
     clock_source = source_clock_refusal(source_receipt)
     if clock_source is not None:
         # Read-only: neither the store nor its lock is created for a refusal.
@@ -337,6 +449,17 @@ def append(source_receipt, org_transition_class, predecessor_state, successor_st
     # the tick; an absent or invalid one raises OrgLedgerEpochRefused here,
     # before the store is opened, so a refusal writes nothing.
     heartbeat = require_supplied_epoch(hb_epoch, hb_carried)
+    # Every source receipt is retained only when it is on its repository ledger,
+    # reachable from that ledger's HEAD (SOURCE_RECEIPT_NOT_ON_LEDGER); one
+    # carrying committed_request must also carry the committed request
+    # (COMMITTED_REQUEST_DIGEST_UNVERIFIED). Six-field, nothing copied. After the epoch
+    # and source-provenance refusals, which come first and read nothing.
+    require_on_repository_ledger(source_receipt, source_ledger)
+    kernel.verify_carried_committed_request(source_receipt, ROOT)
+    # The committed request this run answers rides in the receipt (B-P40 clause
+    # b); a half-set or malformed pair raises kernel.CommittedRequestInvalid here,
+    # before the store is opened.
+    request = kernel.committed_request()
     retained = {source_key(source["source_transition_sha256"]): source_receipt}
     # A fault in the store phase is this repository's, never the source's:
     # raised as kernel.LedgerWriteFailed so a caller keeps the frame pending.
@@ -370,6 +493,8 @@ def append(source_receipt, org_transition_class, predecessor_state, successor_st
                 "hb_reference": heartbeat,
                 "previous_receipt_sha256": previous,
             }
+            if request is not None:
+                body["committed_request"] = request
             digest = sha(body)
             receipt = {**body, "receipt_sha256": digest}
             key = receipt_key(digest)

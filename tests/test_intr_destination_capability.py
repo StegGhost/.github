@@ -58,6 +58,9 @@ ingress = _module("intr_destination_ingress", "resident-runtime/intr_destination
 runtime_boundary = _module("runtime_boundary", "org-runtime/runtime_boundary.py")
 
 REGISTRY = json.loads((ROOT / "org-boundary/registry/services.json").read_text(encoding="utf-8"))
+#: The repository ledger's namespace in the organization ledger (B-P40: emit.py lr()).
+REPOSITORY_NAMESPACE = json.loads((ROOT / ".stegverse/transition-ledger/contract.json").read_text(
+    encoding="utf-8"))["repository_ledger_location"]["namespace"]
 BOUNDARY = json.loads((ROOT / "org-runtime/interlock-intr.json").read_text(encoding="utf-8"))
 FEDERATION = json.loads((ROOT / "org-boundary/registry/federation.json").read_text(encoding="utf-8"))
 
@@ -230,8 +233,11 @@ class RedirectedLedgers(unittest.TestCase):
         self._work = tempfile.TemporaryDirectory()
         self.addCleanup(self._work.cleanup)
         previous = {name: os.environ.get(name) for name in self.LEDGER_ROOTS}
-        for name in self.LEDGER_ROOTS:
-            os.environ[name] = str(Path(self._work.name) / name.lower())
+        # The repository ledger is the designated subtree of the organization
+        # ledger (contract.json repository_ledger_location; emit.py lr(), B-P40).
+        organization = Path(self._work.name) / "stegverse_org_ledger_root"
+        os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(organization)
+        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(organization / REPOSITORY_NAMESPACE)
         self.mesh = Path(self._work.name) / "mesh"
 
         def restore():
@@ -455,8 +461,12 @@ class RefusalPrecedesAnyWriteTests(RedirectedLedgers):
                                       "sha256:" + "1" * 64, hb_epoch=32)
 
     def org_ledger_files(self):
+        # The organization ledger's own entries; its repository-ledger subtree is
+        # the repository ledger (B-P40), written by the repository append.
         root = Path(os.environ["STEGVERSE_ORG_LEDGER_ROOT"])
-        return sorted(str(path) for path in root.rglob("*")) if root.exists() else None
+        entries = sorted(str(path) for path in root.rglob("*")
+                         if "repository-ledger" not in path.relative_to(root).parts) if root.exists() else []
+        return entries or None
 
     def test_the_organization_ledger_refuses_before_opening_its_store(self):
         source = self.source_receipt()
@@ -819,6 +829,29 @@ class DiagnosticSelfClosureOnAGitRefTests(unittest.TestCase):
         self.assertIs(repository_ledger["replay_read_organization_receipts"], False)
         self.assertEqual(repository_ledger["consumed_by_organization_receipt_sha256"],
                          closed["organization_receipt_sha256"])
+
+    def test_a_self_closure_under_a_committed_request_names_it_in_both_receipts(self):
+        # B-P40 clause b: the gate exports the request pair; the self-closure's
+        # receipts are written by emit.py and aggregate_repo_transition.py, which
+        # record it. No InTr file is edited for this.
+        pair = {"STEGVERSE_COMMITTED_REQUEST_PATH": ".stegverse/organization-ledger-transition/request.json",
+                "STEGVERSE_COMMITTED_REQUEST_SHA256": "sha256:" + "b" * 64}
+        saved = {name: os.environ.get(name) for name in pair}
+        os.environ.update(pair)
+        try:
+            closed = ingress.self_close("diagnostic-self-closure-cr", registry=REGISTRY,
+                                        packet_id="self-closure-cr", hb_epoch=32)
+        finally:
+            for name, value in saved.items():
+                os.environ.pop(name, None) if value is None else os.environ.__setitem__(name, value)
+        self.assertEqual(closed["disposition"], "ALLOW", closed.get("detail"))
+        store = _module("ledger_store_cr", "resident-runtime/ledger_store.py")
+        expected = {"path": pair["STEGVERSE_COMMITTED_REQUEST_PATH"],
+                    "sha256": pair["STEGVERSE_COMMITTED_REQUEST_SHA256"], "hb_epoch_source": "COMMITTED_REQUEST"}
+        for root, digest in ((self.org_root, closed["organization_receipt_sha256"]),
+                             (self.repo_root, closed["repository_receipt_sha256"])):
+            receipt = store.open_store(store.parse_locator(root)).get(store.receipt_key(digest))
+            self.assertEqual(receipt["committed_request"], expected)
 
 
 class ReadBackEpochIsNeverForwardedTests(AddressedAndClosedTests):
@@ -1219,7 +1252,7 @@ class FailedHeadPublishDoesNotWedgeTests(AddressedAndClosedTests):
             for number in range(1, count + 1):
                 with self.subTest(fault=function + "#" + str(number)):
                     work = Path(tempfile.mkdtemp(dir=self._work.name))
-                    os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(work / "repo")
+                    os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(work / "org" / REPOSITORY_NAMESPACE)
                     os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(work / "org")
                     original = getattr(os, function)
                     calls = []
@@ -1252,7 +1285,7 @@ class FailedHeadPublishDoesNotWedgeTests(AddressedAndClosedTests):
                         self.assertEqual(len([r for r in organization
                                               if r["source_transition_id"].endswith(":" + packet)]), 1)
                     org_head = json.loads((work / "org" / "HEAD.json").read_text())["receipt_sha256"]
-                    repo_head = json.loads((work / "repo" / "HEAD.json").read_text())["receipt_sha256"]
+                    repo_head = json.loads((work / "org" / REPOSITORY_NAMESPACE / "HEAD.json").read_text())["receipt_sha256"]
                     later_org, = [r for r in organization if r["source_transition_id"].endswith(":later")]
                     later_repo, = [r for r in repository if r["transition_id"].endswith(":later")]
                     self.assertEqual((org_head, repo_head), (later_org["receipt_sha256"], later_repo["receipt_sha256"]))
@@ -1293,7 +1326,7 @@ class FailedHeadPublishDoesNotWedgeTests(AddressedAndClosedTests):
         for number in range(1, 6):
             with self.subTest(replace=number):
                 work = Path(tempfile.mkdtemp(dir=self._work.name))
-                os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(work / "repo")
+                os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(work / "org" / REPOSITORY_NAMESPACE)
                 os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(work / "org")
                 mesh = work / "mesh"
                 restore = self.fail_replace_call(number)
@@ -1358,7 +1391,7 @@ class FailedHeadPublishDoesNotWedgeTests(AddressedAndClosedTests):
 
     def fresh_ledgers(self):
         work = Path(tempfile.mkdtemp(dir=self._work.name))
-        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(work / "repo")
+        os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(work / "org" / REPOSITORY_NAMESPACE)
         os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(work / "org")
         return work
 
@@ -1412,7 +1445,7 @@ class FailedHeadPublishDoesNotWedgeTests(AddressedAndClosedTests):
                             argv = ["emit", "--transition-id", "x:1", "--transition-class", "T",
                                     "--predecessor-state-sha256", zero, "--successor-state-sha256", one,
                                     "--hb-epoch", str(self.SUPPLIED)]
-                            ledger = work / "repo"
+                            ledger = work / "org" / REPOSITORY_NAMESPACE
                         else:
                             seed = emitter.append("seed:1", "T", zero, one, hb_epoch=self.SUPPLIED)
                             (work / "seed.json").write_text(json.dumps(seed))
@@ -1728,8 +1761,8 @@ class CloseResponseAbsentFailsClosed(unittest.TestCase):
         work = Path(self._work.name)
         self.mesh = work / "mesh"
         self.mesh.mkdir()
-        self.repo_ledger = work / "repo-ledger"
         self.org_ledger = work / "org-ledger"
+        self.repo_ledger = self.org_ledger / REPOSITORY_NAMESPACE
         previous = {name: os.environ.get(name) for name in self.LEDGER_ENV}
         os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(self.repo_ledger)
         os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(self.org_ledger)

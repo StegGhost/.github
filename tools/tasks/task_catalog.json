@@ -88,6 +88,16 @@
      "name": "Fixed-clock probe of every route",
      "run_file": "tools/tasks/steps/clock-marker-probe-validation.validate/01-fixed-clock-probe-of-every-route.sh",
      "run_sha256": "0d4e3188feced385592ddffc38c0706a07e8dbc2a168e1dce8b8fe44930454e8"
+    },
+    {
+     "name": "Workflow triggers are state transitions",
+     "run_file": "tools/tasks/steps/clock-marker-probe-validation.validate/02-workflow-triggers-are-state-transitions.sh",
+     "run_sha256": "06d603e9ff749fa0ce5f28460b69e1d21bba913b001212c9aa6b1590e13ba7a9"
+    },
+    {
+     "name": "Committed-request receipts and strict inputs",
+     "run_file": "tools/tasks/steps/clock-marker-probe-validation.validate/03-committed-request-receipts-and-strict-inputs.sh",
+     "run_sha256": "57bb687480a0300f00e515fef0076077c5fa5348d45758a124083c10a31c5024"
     }
    ],
    "artifacts": [],
@@ -130,7 +140,7 @@
      "run_file": "tools/tasks/steps/intr-destination-capability-validation.validate-intr-destination/02-validate-advertise-address-resolve-emit-and-close.sh",
      "run_sha256": "fa5d3b43d4155d01f7c9f699483ad195165460db950e22b9b4364315f4135250",
      "env": {
-      "STEGVERSE_REPO_LEDGER_ROOT": "${{ runner.temp }}/repo-ledger",
+      "STEGVERSE_REPO_LEDGER_ROOT": "${{ runner.temp }}/org-ledger/repository-ledger/StegGhost/.github",
       "STEGVERSE_ORG_LEDGER_ROOT": "${{ runner.temp }}/org-ledger"
      }
     },
@@ -330,12 +340,12 @@
     {
      "name": "Prove the gate on every ingress surface",
      "run_file": "tools/tasks/steps/node-standing-ingress-validation.validate/01-prove-the-gate-on-every-ingress-surface.sh",
-     "run_sha256": "b3f6606630bf32973906b7105186464add1b8e5e8efe0031084f1323a7490f35"
+     "run_sha256": "f40115b5e624c97ba0bfc74f6f80a79cc4b8d629ca783b5a8205e77afc0b5181"
     },
     {
      "name": "Assert the contract is the authority and no surface is ungated",
      "run_file": "tools/tasks/steps/node-standing-ingress-validation.validate/02-assert-the-contract-is-the-authority-and-no-surface-is-ungat.sh",
-     "run_sha256": "4b8ca01ee5b06e90527863e6a4ea55407c453d1ac1a8bd96f5aecd5d0bdbb0f3"
+     "run_sha256": "fce804be5de53e25e2f82cd3646df28f57d3072065372a2b95120e0e8d9c36c6"
     },
     {
      "name": "Record what the gate does and does not establish",

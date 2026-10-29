@@ -12,3 +12,6 @@ resident-runtime/federation/responses.d/
 resident-runtime/federation/admissions.d/
 # Envelopes run_once quarantined for a terminal input fault (PB-EXIT-SPLIT).
 resident-runtime/federation/quarantine.d/
+# The repo-relative run root stores default to when none is supplied (B-P40,
+# kernel.state_home): per-run state, not source.
+.stegverse-run/

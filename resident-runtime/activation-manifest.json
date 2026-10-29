@@ -20,17 +20,31 @@
   "ecosystem_control": "resident-runtime/ecosystem_control.py",
   "federation_cycle": "resident-runtime/federation_cycle.py",
   "federation_directory": "org-boundary/registry/federation.json",
-  "federation_gateway_transport": "resident-runtime/federation_gateway_transport.py",
-  "federation_gateway_url_env": "STEGVERSE_ORG_FEDERATION_GATEWAY_URL",
-  "federation_gateway_required_for_cross_host": true,
-  "local_spool_scope": "SAME_HOST_FALLBACK_ONLY",
+  "federation_gateway_required_for_cross_host": false,
+  "local_spool_scope": "REPO_LOCAL_ONLY_ROUTE",
   "resident_cycle_entrypoint": "resident-runtime/federation_cycle.py",
   "federation_poll_mode": "OUTBOUND_ONLY",
-  "federation_network_route": "SHARED_SERVICE_GATEWAY",
+  "federation_network_route": "REPO_LOCAL_SPOOL",
   "epoch_bindings": {
+    "resident-runtime/ecosystem_control.py": {
+      "hb_epoch": {
+        "from": "caller_supplied",
+        "cli_flag": "--hb-epoch",
+        "env": "HB_EPOCH",
+        "rule": "SUBMISSION_CARRIES_THE_SUPPLIED_HB_EPOCH",
+        "absent_or_invalid": "six-field FAIL_CLOSED HB_EPOCH_NOT_SUPPLIED / HB_EPOCH_INVALID, rc 1, nothing published",
+        "derived_from_clock": false
+      },
+      "dispatcher": {
+        "kind": "CALLER_SUPPLIED",
+        "invocation": "python resident-runtime/ecosystem_control.py send-message --subject <s> --body-json <json> --standing <file> --hb-epoch <epoch>",
+        "in_tree": false,
+        "adds_dependency": false
+      }
+    },
     "resident-runtime/federation_cycle.py": {
       "hb_epoch": {
-        "from": "dispatch_input",
+        "from": "committed_request",
         "cli_flag": "--hb-epoch",
         "env": "HB_EPOCH",
         "rule": "SUBMISSION_CARRIES_THE_SUPPLIED_HB_EPOCH",
@@ -38,11 +52,14 @@
         "derived_from_clock": false
       },
       "dispatcher": {
-        "kind": "WORKFLOW_DISPATCH",
+        "kind": "COMMITTED_REQUEST",
         "workflow": ".github/workflows/resident-federation-cycle.yml",
+        "request": ".stegverse/federation-cycle/request.json",
         "input": "hb_epoch",
+        "ledger_head": "refs/stegverse/organization-ledger",
         "invocation": "python resident-runtime/federation_cycle.py --hb-epoch \"$HB_EPOCH\"",
         "empty_or_absent_input": "HB_EPOCH_NOT_SUPPLIED, refused before the cycle runs",
+        "ledger_head_absent_or_mismatched": "LEDGER_HEAD_NOT_SUPPLIED / LEDGER_HEAD_INVALID, refused before the cycle runs",
         "in_tree": true,
         "adds_dependency": false
       }

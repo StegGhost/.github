@@ -3,7 +3,7 @@
   "organization": "StegGhost",
   "owner_repository": "StegGhost/.github",
   "activation_source_scope": "ORG_DOT_GITHUB_ONLY",
-  "runtime_execution_surface": "SOVEREIGN_RESIDENT_PROCESS",
+  "runtime_execution_surface": "COMMITTED_TRANSITION_CYCLE",
   "activation_request_generator": "org-runtime/runtime_boundary.py",
   "activation_state": "SOURCE_INSTALLED_RUNTIME_NOT_PROVEN",
   "heartbeat_reference": {
@@ -18,7 +18,7 @@
   "authority_transfer_assumed": false,
   "authority_effect_resolution": "DERIVED_FROM_APPLICABLE_TRANSITION_ELEMENTS",
   "required_runtime_evidence": [
-    "resident process identity",
+    "committed request digest in the cycle record",
     "activation request consumption",
     "task-capable resident cycle",
     "local receipt",

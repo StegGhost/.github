@@ -23,7 +23,9 @@ from pathlib import Path
 
 TREE = Path(__file__).resolve().parents[2]
 _T = tempfile.mkdtemp()
-os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(Path(_T) / "repo-ledger")
+# The repository ledger is the designated subtree of the organization ledger
+# (contract.json repository_ledger_location; emit.py lr(), B-P40).
+os.environ["STEGVERSE_REPO_LEDGER_ROOT"] = str(Path(_T) / "org-ledger" / "repository-ledger/StegGhost/.github")
 os.environ["STEGVERSE_ORG_LEDGER_ROOT"] = str(Path(_T) / "org-ledger")
 
 

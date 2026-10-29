@@ -246,6 +246,21 @@ def writer_fault_record(error:BaseException, *, retry_entrypoint:str)->dict[str,
         return dict(fault.refusal)
     return dict(LedgerWriteFailed(fault,retry_entrypoint=retry_entrypoint).refusal)
 
+def _refuse_nonfinite(token:str)->Any:
+    raise ValueError("non-finite number "+token+" is not JSON")
+
+def _finite_float(token:str)->float:
+    value=float(token)
+    if value!=value or value in (float("inf"),float("-inf")):
+        raise ValueError("non-finite number "+token+" is not JSON")
+    return value
+
+def strict_json_loads(text:str|bytes)->Any:
+    """JSON as RFC 8259 defines it: NaN, Infinity and an overflowing literal
+    such as 1e999 raise ValueError instead of becoming a float no receipt can
+    carry. A deeply nested document still raises RecursionError for the caller."""
+    return json.loads(text,parse_constant=_refuse_nonfinite,parse_float=_finite_float)
+
 class InputRefused(Exception):
     """A CLI input the caller supplied is not readable as the JSON it must be.
 
@@ -263,12 +278,13 @@ def read_input_json(source:Any, *, argument:str, retry_entrypoint:str, inline:bo
                     expect:type=dict)->Any:
     """The JSON value of a CLI input (a file path, or with `inline` the text), or InputRefused.
 
-    A missing path, a directory, undecodable bytes, malformed JSON and a value
-    of the wrong top-level type are each refused terminal, naming the argument.
+    A missing path, a directory, undecodable bytes, malformed JSON, a
+    non-finite number and a value of the wrong top-level type are each refused
+    terminal, naming the argument.
     """
     try:
         text=source if inline else Path(source).read_text(encoding="utf-8")
-        value=json.loads(text)
+        value=strict_json_loads(text)
     # UnicodeDecodeError and JSONDecodeError are ValueErrors; a deeply nested
     # document raises RecursionError (or MemoryError) and is refused the same way.
     except (OSError,ValueError,RecursionError,MemoryError) as error:
@@ -765,6 +781,204 @@ __all__=["hb_reference","derive_channel","carrier_frame","recover_packet","dispa
          "SuppliedEpochRefused","writer_epoch_refusal","supplied_hb_reference","frame_supplied_epoch"]
 
 
+# --- Committed request (B-P40, clause b) ---
+COMMITTED_REQUEST_PATH_ENV="STEGVERSE_COMMITTED_REQUEST_PATH"
+COMMITTED_REQUEST_SHA256_ENV="STEGVERSE_COMMITTED_REQUEST_SHA256"
+
+class CommittedRequestInvalid(InputRefused):
+    """The committed-request pair a run carries is half set or malformed.
+
+    Terminal and six-field, raised before anything is opened or written: a
+    receipt either names the request it answers, or the run carries none."""
+    def __init__(self, detail:str)->None:
+        super().__init__({"disposition":"FAIL_CLOSED","failure_code":"COMMITTED_REQUEST_INVALID",
+                          "failed_predicate":"COMMITTED_REQUEST_PAIR_IS_COMPLETE_AND_WELL_FORMED",
+                          "detail":detail,
+                          "required_evidence_or_repair":("set both "+COMMITTED_REQUEST_PATH_ENV+" (a repository-relative "
+                                                         "path) and "+COMMITTED_REQUEST_SHA256_ENV+" (sha256:<64 hex>), or neither"),
+                          "retry_entrypoint":"the committed-request workflow gate that exports the pair",
+                          "owning_existing_goal":HB_EPOCH_OWNING_EXISTING_GOAL,
+                          "next_attempt":"re-run with a complete pair; nothing was written",
+                          "terminal":True,"derived_from_clock":False,"consequence_committed":False})
+
+def committed_request(env:dict[str,str]|None=None)->dict[str,Any]|None:
+    """The committed request this run answers, for each receipt it writes, or None.
+
+    Read from the pair the workflow gate exports after it has checked the
+    request; neither set is a run with no committed request. Half a pair, a
+    path that is absolute or climbs out, or a digest that is not sha256:<64 hex>
+    raises CommittedRequestInvalid."""
+    values=os.environ if env is None else env
+    path=values.get(COMMITTED_REQUEST_PATH_ENV); digest=values.get(COMMITTED_REQUEST_SHA256_ENV)
+    if not path and not digest:
+        return None
+    if not path or not digest:
+        raise CommittedRequestInvalid("only one of "+COMMITTED_REQUEST_PATH_ENV+" and "+COMMITTED_REQUEST_SHA256_ENV+" is set")
+    if (path.startswith("/") or ".." in path.split("/") or "\\" in path
+            or not all(32<ord(char)<127 for char in path)):
+        raise CommittedRequestInvalid(COMMITTED_REQUEST_PATH_ENV+" is not a repository-relative path: "+repr(path))
+    hexpart=digest[len("sha256:"):] if digest.startswith("sha256:") else ""
+    if len(hexpart)!=64 or any(char not in "0123456789abcdef" for char in hexpart):
+        raise CommittedRequestInvalid(COMMITTED_REQUEST_SHA256_ENV+" is not sha256:<64 hex>: "+repr(digest))
+    return {"path":path,"sha256":digest,"hb_epoch_source":"COMMITTED_REQUEST"}
+
+
+class CommittedRequestUnverified(InputRefused):
+    """A source receipt claims a committed request that cannot be verified.
+
+    Raised before an ingested receipt is retained: a rehashed off-ledger
+    receipt can carry any committed_request, so the claim must equal the
+    request this run carries or, with none, the file committed at its path."""
+    def __init__(self, detail:str)->None:
+        super().__init__({"disposition":"FAIL_CLOSED","failure_code":"COMMITTED_REQUEST_DIGEST_UNVERIFIED",
+                          "failed_predicate":"SOURCE_RECEIPT_COMMITTED_REQUEST_MATCHES_THE_COMMITTED_REQUEST",
+                          "detail":detail,
+                          "required_evidence_or_repair":("a source receipt whose committed_request equals the pair this run "
+                                                         "carries, or the sha256 of the file committed at its path"),
+                          "retry_entrypoint":"resident-runtime/aggregate_repo_transition.py (the same source receipt)",
+                          "owning_existing_goal":HB_EPOCH_OWNING_EXISTING_GOAL,
+                          "next_attempt":"none for this receipt: it is refused and nothing was copied",
+                          "terminal":True,"derived_from_clock":False,"consequence_committed":False})
+
+class SourceReceiptNotOnLedger(InputRefused):
+    """A source receipt is not on the repository ledger it names.
+
+    A receipt whose hash is self-consistent can still be fabricated: unless it
+    is reachable from that repository ledger's HEAD and identical to the stored
+    copy, it records a transition that never happened. Terminal, before any write."""
+    def __init__(self, detail:str)->None:
+        super().__init__({"disposition":"FAIL_CLOSED","failure_code":"SOURCE_RECEIPT_NOT_ON_LEDGER",
+                          "failed_predicate":"SOURCE_RECEIPT_IS_REACHABLE_FROM_ITS_REPOSITORY_LEDGER_HEAD",
+                          "detail":detail,
+                          "required_evidence_or_repair":("a source receipt appended to its repository's ledger "
+                                                         "and reachable from that ledger's HEAD"),
+                          "retry_entrypoint":"resident-runtime/aggregate_repo_transition.py (the on-ledger receipt)",
+                          "owning_existing_goal":HB_EPOCH_OWNING_EXISTING_GOAL,
+                          "next_attempt":"none for this receipt: it is refused and nothing was copied",
+                          "terminal":True,"derived_from_clock":False,"consequence_committed":False})
+
+class LedgerRootNotContractDesignated(InputRefused):
+    """A source ledger that is not the one the contract designates.
+
+    Ledger evidence is read only from the repository's contract-designated
+    ledger (the organization ledger ref, namespace repository-ledger/<repo>)
+    or this repository's own emit store, by real path. A scratch root, an
+    environment-chosen home, or a root with files tracked in the checkout is
+    not evidence. Terminal, before any write."""
+    def __init__(self, detail:str)->None:
+        super().__init__({"disposition":"FAIL_CLOSED","failure_code":"LEDGER_ROOT_NOT_CONTRACT_DESIGNATED",
+                          "failed_predicate":"SOURCE_LEDGER_IS_THE_CONTRACT_DESIGNATED_LEDGER",
+                          "detail":detail,
+                          "required_evidence_or_repair":(".stegverse/transition-ledger/contract.json "
+                                                         "repository_ledger_location: the organization ledger ref, "
+                                                         "namespace repository-ledger/<repository>"),
+                          "retry_entrypoint":"resident-runtime/aggregate_repo_transition.py (from the designated ledger)",
+                          "owning_existing_goal":HB_EPOCH_OWNING_EXISTING_GOAL,
+                          "next_attempt":"none for this ledger: nothing was copied",
+                          "terminal":True,"derived_from_clock":False,"consequence_committed":False})
+
+class CommittedRequestForged(InputRefused):
+    """Caller-supplied evidence carries a committed_request key.
+
+    Only the pair the committed-request gate exports sets a receipt's
+    committed_request; the same key anywhere inside caller evidence would be a
+    second, unverified claim written beside it. Terminal, before any write."""
+    def __init__(self, argument:str, where:str)->None:
+        super().__init__({"disposition":"FAIL_CLOSED","failure_code":"COMMITTED_REQUEST_FORGED",
+                          "failed_predicate":"ONLY_THE_GATE_SUPPLIED_PAIR_SETS_COMMITTED_REQUEST",
+                          "argument":argument,"detail":argument+" carries committed_request at "+where,
+                          "required_evidence_or_repair":("remove committed_request from "+argument+"; the committed-request "
+                                                         "gate supplies it through "+COMMITTED_REQUEST_PATH_ENV+"/"
+                                                         +COMMITTED_REQUEST_SHA256_ENV),
+                          "retry_entrypoint":"the same writer with "+argument+" free of committed_request",
+                          "owning_existing_goal":HB_EPOCH_OWNING_EXISTING_GOAL,
+                          "next_attempt":"correct "+argument+" and re-run; nothing was written",
+                          "terminal":True,"derived_from_clock":False,"consequence_committed":False})
+
+def refuse_caller_committed_request(value:Any, *, argument:str)->None:
+    """CommittedRequestForged when `value` holds a committed_request key at any depth.
+
+    Walked iteratively, so a deeply nested value is scanned, not a RecursionError,
+    and each container once, so a cyclic one terminates."""
+    stack:list[tuple[Any,str]]=[(value,"$")]
+    seen:set[int]=set()
+    while stack:
+        item,where=stack.pop()
+        if isinstance(item,(dict,list,tuple)):
+            # A container met twice (shared or cyclic in-process input) is not re-walked.
+            if id(item) in seen:
+                continue
+            seen.add(id(item))
+        if isinstance(item,dict):
+            if "committed_request" in item:
+                raise CommittedRequestForged(argument,where+".committed_request")
+            stack.extend((child,where+"."+str(key)) for key,child in item.items())
+        elif isinstance(item,(list,tuple)):
+            stack.extend((child,where+"["+str(index)+"]") for index,child in enumerate(item))
+
+def verify_carried_committed_request(receipt:Any, repo_root:Path, env:dict[str,str]|None=None)->dict[str,Any]|None:
+    """The committed_request a source receipt carries, verified, or None when it carries none.
+
+    The claim must be exactly {path, sha256, hb_epoch_source: COMMITTED_REQUEST}.
+    When this run carries a committed request, the claim must equal it. With
+    none, the claim's sha256 must be the sha256 of the file at its
+    repository-relative path. Anything else raises CommittedRequestUnverified."""
+    if not isinstance(receipt,dict) or "committed_request" not in receipt:
+        return None
+    claim=receipt["committed_request"]
+    if (not isinstance(claim,dict) or set(claim)!={"path","sha256","hb_epoch_source"}
+            or claim.get("hb_epoch_source")!="COMMITTED_REQUEST"):
+        raise CommittedRequestUnverified("committed_request is not {path, sha256, hb_epoch_source: COMMITTED_REQUEST}")
+    try:
+        well_formed=committed_request({COMMITTED_REQUEST_PATH_ENV:claim["path"],COMMITTED_REQUEST_SHA256_ENV:claim["sha256"]}
+                                      if isinstance(claim["path"],str) and isinstance(claim["sha256"],str) else {})
+    except CommittedRequestInvalid as error:
+        raise CommittedRequestUnverified("committed_request is malformed: "+error.refusal["detail"]) from None
+    if well_formed is None:
+        raise CommittedRequestUnverified("committed_request names no path or digest")
+    current=committed_request(env)
+    if current is not None:
+        if claim!=current:
+            raise CommittedRequestUnverified("committed_request "+repr(claim["sha256"])+" is not this run's "+repr(current["sha256"]))
+        return claim
+    try:
+        actual="sha256:"+hashlib.sha256((Path(repo_root)/claim["path"]).read_bytes()).hexdigest()
+    except OSError as error:
+        raise CommittedRequestUnverified("committed request "+claim["path"]+" is unreadable: "+type(error).__name__) from None
+    if actual!=claim["sha256"]:
+        raise CommittedRequestUnverified("committed_request "+repr(claim["sha256"])+" is not the committed file's "+actual)
+    return claim
+
+
+# --- Run state root (B-P40) ---
+#: The repo-relative run root a store defaults to when its caller names none.
+#: The host home directory is never a default: a transition must not depend on
+#: which machine's home it lands in (derived from StegVerse-Labs/.github@149f16e
+#: task-registry-global-invariants.json:58,60,160-161). Ignored by git.
+RUN_STATE_ROOT=Path(__file__).resolve().parents[1]/".stegverse-run"/"state"
+
+REPOSITORY_LEDGER_HOME_ENV="STEGVERSE_REPO_LEDGER_HOME"
+
+def repository_ledger_home(env:dict[str,str]|None=None)->Path:
+    """Where this node keeps other repositories' ledgers, one directory each.
+
+    STEGVERSE_REPO_LEDGER_HOME as the caller set it, else under state_home().
+    Scratch space only: it is never ledger evidence, and aggregate does not
+    accept a source ledger here (REPO_LEDGER_HOME_DEFAULT_INSIDE_CHECKOUT,
+    lead ruling 20:57Z)."""
+    values=os.environ if env is None else env
+    override=values.get(REPOSITORY_LEDGER_HOME_ENV)
+    if override:
+        return Path(override).expanduser().resolve()
+    return (state_home(values)/"stegverse/repo-ledgers").resolve()
+
+def state_home(env:dict[str,str]|None=None)->Path:
+    """XDG_STATE_HOME as the caller set it, else the repo-relative RUN_STATE_ROOT."""
+    values=os.environ if env is None else env
+    base=values.get("XDG_STATE_HOME")
+    return Path(base) if base else RUN_STATE_ROOT
+
+
 # --- Federation mesh v1.1 additions ---
 FEDERATION_ROOT_ENV="STEGVERSE_ORG_FEDERATION_ROOT"
 
@@ -773,8 +987,7 @@ def federation_root(env:dict[str,str]|None=None)->Path:
     override=values.get(FEDERATION_ROOT_ENV)
     if override:
         return Path(override).expanduser().resolve()
-    base=Path(values.get("XDG_STATE_HOME",str(Path.home()/".local"/"state")))
-    return (base/"stegverse"/"org-federation").resolve()
+    return (state_home(values)/"stegverse"/"org-federation").resolve()
 
 def publish_frame(frame:dict[str,Any], *, root:Path|None=None)->Path:
     mesh=(root or federation_root()).resolve()
@@ -973,7 +1186,7 @@ def publish_ecosystem_message(*, origin_org:str, origin_service:str, organizatio
                               requested_action:str|None=None, transition_reference:str="ecosystem.communication.v1",
                               authority_effect:str="NONE", communication_id:str|None=None,
                               root:Path|None=None, now_ns:int|None=None,
-                              repo_root:Path|None=None)->dict[str,Any]:
+                              repo_root:Path|None=None, epoch:int|None=None)->dict[str,Any]:
     built=build_ecosystem_packets(
       origin_org=origin_org,origin_service=origin_service,organizations=organizations,standing=standing,
       message_class=message_class,subject=subject,body=body,requested_action=requested_action,
@@ -982,7 +1195,7 @@ def publish_ecosystem_message(*, origin_org:str, origin_service:str, organizatio
     )
     publications=[]
     for packet in built["packets"]:
-        published=publish_packet(packet,root=root,now_ns=now_ns)
+        published=publish_packet(packet,root=root,now_ns=now_ns,epoch=epoch)
         if repo_root is not None:
             # Written after the frame is published, because the record is of an
             # emission and carries the frame's digest. Recording it first would
@@ -1500,7 +1713,7 @@ def _verified_response(row:dict[str,Any], emissions:dict[str,dict[str,Any]])->di
 def publish_ecosystem_from_directory(repo_root:Path, *, standing:dict[str,Any], message_class:str, subject:str, body:dict[str,Any],
                                      requested_action:str|None=None, authority_effect:str="NONE",
                                      communication_id:str|None=None, mesh_root:Path|None=None,
-                                     now_ns:int|None=None)->dict[str,Any]:
+                                     now_ns:int|None=None, epoch:int|None=None)->dict[str,Any]:
     registry=load_registry(repo_root)
     directory=load_federation_directory(repo_root)
     organizations=[row["organization"] for row in directory["organizations"]]
@@ -1518,7 +1731,8 @@ def publish_ecosystem_from_directory(repo_root:Path, *, standing:dict[str,Any], 
       communication_id=communication_id,
       root=mesh_root,
       now_ns=now_ns,
-      repo_root=repo_root
+      repo_root=repo_root,
+      epoch=epoch
     )
 
 
