@@ -5,9 +5,9 @@
  "authority": "Rigel 2026-10-24 retroactive G17 enforcement (StegVerse-org/.github#166); pattern StegVerse-Labs/StegDB#60 (eab2e773)",
  "dispatcher": ".github/workflows/validation-dispatcher.yml",
  "runner": "tools/tasks/run_catalog.py",
- "runner_source": "StegVerse-Labs/StegDB tools/tasks/run_catalog.py @ eab2e773271f3e63466a710f1b4555f677882848 (sha256 f741f30557888fd8e4852a52adfc65736a08898d49ade7519f6bcc2672921e9b), copied unmodified",
+ "runner_source": "StegVerse-Labs/StegDB tools/tasks/run_catalog.py @ eab2e773271f3e63466a710f1b4555f677882848 (sha256 f741f30557888fd8e4852a52adfc65736a08898d49ade7519f6bcc2672921e9b), copied unmodified; then patched with the original-path-filter selection (matrix marks cells selected; StegVerse-Labs/Site#1647 pattern), so it no longer equals that sha256",
  "rule": "Every check a folded workflow job ran is one group here; its step bodies are the original run blocks byte for byte, pinned by sha256, except the repairs listed. A new check is a new group (or a step in one), never a new workflow file.",
- "path_filters": "Dropped: every group runs on every pull_request and push to main (a superset of the original path-filtered runs). workflow_dispatch/schedule triggers are not carried (no manual dispatch, no cron).",
+ "path_filters": "Restored: each folded group carries its original workflow's push / pull_request paths or paths-ignore filter as path_filters (a folded workflow's own path names its tools/tasks/folded copy and its tools/tasks/steps directory). A group the event's changed files do not select records NOT_SELECTED and exits 0 (a run, never a skipped job; pattern StegVerse-org/StegVerse-SDK#561, StegVerse-Labs/Site#1647). Not carried: branches filters, workflow_dispatch/schedule triggers (no manual dispatch, no cron), job-level if, and GitHub's 300-changed-file rule (an undeterminable diff selects every group).",
  "repairs": [
   "Path filters and workflow_dispatch are not carried. Each group runs on its declared pull_request and push events.",
   "Each folded workflow declared `permissions: contents: read` (the repository is internal, so checkout needs that read). The dispatcher holds the same contents: read.",
@@ -59,6 +59,28 @@
     "fetch_depth": "1",
     "persist_credentials": "true",
     "timeout_minutes": 30
+   },
+   "path_filters": {
+    "pull_request": {
+     "paths": [
+      "org-boundary/runtime/emission_chain_disclosure.py",
+      "resident-runtime/organization_egress_boundary.py",
+      "resident-runtime/tests/test_bilateral_match.py",
+      "org-kernel/kernel.py",
+      "tools/tasks/folded/bilateral-match-validation.yml",
+      "tools/tasks/steps/bilateral-match-validation.validate/**"
+     ]
+    },
+    "push": {
+     "paths": [
+      "org-boundary/runtime/emission_chain_disclosure.py",
+      "resident-runtime/organization_egress_boundary.py",
+      "resident-runtime/tests/test_bilateral_match.py",
+      "org-kernel/kernel.py",
+      "tools/tasks/folded/bilateral-match-validation.yml",
+      "tools/tasks/steps/bilateral-match-validation.validate/**"
+     ]
+    }
    }
   },
   {
@@ -105,6 +127,54 @@
     "fetch_depth": "1",
     "persist_credentials": "false",
     "timeout_minutes": 30
+   },
+   "path_filters": {
+    "pull_request": {
+     "paths": [
+      "org-kernel/kernel.py",
+      "org-boundary/runtime/intr_transport.py",
+      "org-boundary/runtime/git_carrier.py",
+      "org-boundary/schemas/intr-envelope.schema.json",
+      "resident-runtime/federation_cycle.py",
+      "resident-runtime/activation-manifest.json",
+      ".github/workflows/resident-federation-cycle.yml",
+      "resident-runtime/federation_gateway_transport.py",
+      "runtime/organization_runtime.py",
+      "resident-runtime/aggregate_repo_transition.py",
+      "resident-runtime/ledger_store.py",
+      "resident-runtime/organization_egress_boundary.py",
+      "resident-runtime/release_organization_batch.py",
+      "resident-runtime/intr_destination_ingress.py",
+      "org-boundary/runtime/capability_ingress.py",
+      ".stegverse/transition-ledger/emit.py",
+      "tests/test_clock_marker_probe.py",
+      "tools/tasks/folded/clock-marker-probe-validation.yml",
+      "tools/tasks/steps/clock-marker-probe-validation.validate/**"
+     ]
+    },
+    "push": {
+     "paths": [
+      "org-kernel/kernel.py",
+      "org-boundary/runtime/intr_transport.py",
+      "org-boundary/runtime/git_carrier.py",
+      "org-boundary/schemas/intr-envelope.schema.json",
+      "resident-runtime/federation_cycle.py",
+      "resident-runtime/activation-manifest.json",
+      ".github/workflows/resident-federation-cycle.yml",
+      "resident-runtime/federation_gateway_transport.py",
+      "runtime/organization_runtime.py",
+      "resident-runtime/aggregate_repo_transition.py",
+      "resident-runtime/ledger_store.py",
+      "resident-runtime/organization_egress_boundary.py",
+      "resident-runtime/release_organization_batch.py",
+      "resident-runtime/intr_destination_ingress.py",
+      "org-boundary/runtime/capability_ingress.py",
+      ".stegverse/transition-ledger/emit.py",
+      "tests/test_clock_marker_probe.py",
+      "tools/tasks/folded/clock-marker-probe-validation.yml",
+      "tools/tasks/steps/clock-marker-probe-validation.validate/**"
+     ]
+    }
    }
   },
   {
@@ -155,6 +225,46 @@
     "fetch_depth": "1",
     "persist_credentials": "false",
     "timeout_minutes": 30
+   },
+   "path_filters": {
+    "pull_request": {
+     "paths": [
+      "org-boundary/runtime/capability_ingress.py",
+      "org-boundary/registry/services.json",
+      "org-kernel/kernel.py",
+      "org-runtime/interlock-intr.json",
+      "org-runtime/runtime_boundary.py",
+      "resident-runtime/intr_destination_ingress.py",
+      "resident-runtime/organization_egress_boundary.py",
+      "resident-runtime/aggregate_repo_transition.py",
+      ".stegverse/transition-ledger/emit.py",
+      "tests/test_intr_destination_capability.py",
+      "docs/INTR_DESTINATION_CAPABILITY_MIRROR_HANDOFF.md",
+      "tools/tasks/folded/intr-destination-capability-validation.yml",
+      "tools/tasks/steps/intr-destination-capability-validation.validate-intr-destination/**",
+      ".github/workflows/**",
+      "tests/test_workflow_action_pins.py"
+     ]
+    },
+    "push": {
+     "paths": [
+      "org-boundary/runtime/capability_ingress.py",
+      "org-boundary/registry/services.json",
+      "org-kernel/kernel.py",
+      "org-runtime/interlock-intr.json",
+      "org-runtime/runtime_boundary.py",
+      "resident-runtime/intr_destination_ingress.py",
+      "resident-runtime/organization_egress_boundary.py",
+      "resident-runtime/aggregate_repo_transition.py",
+      ".stegverse/transition-ledger/emit.py",
+      "tests/test_intr_destination_capability.py",
+      "docs/INTR_DESTINATION_CAPABILITY_MIRROR_HANDOFF.md",
+      "tools/tasks/folded/intr-destination-capability-validation.yml",
+      "tools/tasks/steps/intr-destination-capability-validation.validate-intr-destination/**",
+      ".github/workflows/**",
+      "tests/test_workflow_action_pins.py"
+     ]
+    }
    }
   },
   {
@@ -213,6 +323,54 @@
     "fetch_depth": "0",
     "persist_credentials": "true",
     "timeout_minutes": 30
+   },
+   "path_filters": {
+    "pull_request": {
+     "paths": [
+      ".github/workflows/intr-path-transfer.yml",
+      ".github/workflows/intr-path-ingress.yml",
+      "tools/tasks/folded/intr-path-transfer-validation.yml",
+      "tools/tasks/steps/intr-path-transfer-validation.unit/**",
+      ".github/workflows/organization-ledger-writer.yml",
+      ".stegverse/intr-path-transfer/**",
+      "resident-runtime/intr_path_transfer.py",
+      "resident-runtime/intr_path_ingress.py",
+      "resident-runtime/intr_path_tvc_read.py",
+      "tests/test_intr_path_tvc_read.py",
+      "tests/fixtures/intr-path-tvc-read/**",
+      "resident-runtime/merge_transfer.py",
+      "resident-runtime/intr_destination_ingress.py",
+      "org-runtime/intr_protocol.py",
+      "data/intr-protocol/v1/protocol.json",
+      "tests/fixtures/intr-protocol/destinations/**",
+      "tests/test_intr_path_transfer.py",
+      "tests/test_intr_path_ingress.py",
+      "tests/test_intr_path_public_ledger_read.py",
+      "tests/fixtures/intr-path-ingress/**",
+      "tests/fixtures/intr-path-transfer/**",
+      "docs/INTR_PATH_TRANSFER_V1.md"
+     ]
+    },
+    "push": {
+     "paths": [
+      ".github/workflows/intr-path-transfer.yml",
+      ".github/workflows/intr-path-ingress.yml",
+      "tools/tasks/folded/intr-path-transfer-validation.yml",
+      "tools/tasks/steps/intr-path-transfer-validation.unit/**",
+      ".github/workflows/organization-ledger-writer.yml",
+      ".stegverse/intr-path-transfer/**",
+      "resident-runtime/intr_path_transfer.py",
+      "resident-runtime/intr_path_ingress.py",
+      "resident-runtime/intr_path_tvc_read.py",
+      "tests/test_intr_path_tvc_read.py",
+      "tests/fixtures/intr-path-tvc-read/**",
+      "tests/test_intr_path_transfer.py",
+      "tests/test_intr_path_ingress.py",
+      "tests/test_intr_path_public_ledger_read.py",
+      "tests/fixtures/intr-path-ingress/**",
+      "tests/fixtures/intr-path-transfer/**"
+     ]
+    }
    }
   },
   {
@@ -261,6 +419,54 @@
     "fetch_depth": "0",
     "persist_credentials": "true",
     "timeout_minutes": 30
+   },
+   "path_filters": {
+    "pull_request": {
+     "paths": [
+      ".github/workflows/intr-path-transfer.yml",
+      ".github/workflows/intr-path-ingress.yml",
+      "tools/tasks/folded/intr-path-transfer-validation.yml",
+      "tools/tasks/steps/intr-path-transfer-validation.dry-run/**",
+      ".github/workflows/organization-ledger-writer.yml",
+      ".stegverse/intr-path-transfer/**",
+      "resident-runtime/intr_path_transfer.py",
+      "resident-runtime/intr_path_ingress.py",
+      "resident-runtime/intr_path_tvc_read.py",
+      "tests/test_intr_path_tvc_read.py",
+      "tests/fixtures/intr-path-tvc-read/**",
+      "resident-runtime/merge_transfer.py",
+      "resident-runtime/intr_destination_ingress.py",
+      "org-runtime/intr_protocol.py",
+      "data/intr-protocol/v1/protocol.json",
+      "tests/fixtures/intr-protocol/destinations/**",
+      "tests/test_intr_path_transfer.py",
+      "tests/test_intr_path_ingress.py",
+      "tests/test_intr_path_public_ledger_read.py",
+      "tests/fixtures/intr-path-ingress/**",
+      "tests/fixtures/intr-path-transfer/**",
+      "docs/INTR_PATH_TRANSFER_V1.md"
+     ]
+    },
+    "push": {
+     "paths": [
+      ".github/workflows/intr-path-transfer.yml",
+      ".github/workflows/intr-path-ingress.yml",
+      "tools/tasks/folded/intr-path-transfer-validation.yml",
+      "tools/tasks/steps/intr-path-transfer-validation.dry-run/**",
+      ".github/workflows/organization-ledger-writer.yml",
+      ".stegverse/intr-path-transfer/**",
+      "resident-runtime/intr_path_transfer.py",
+      "resident-runtime/intr_path_ingress.py",
+      "resident-runtime/intr_path_tvc_read.py",
+      "tests/test_intr_path_tvc_read.py",
+      "tests/fixtures/intr-path-tvc-read/**",
+      "tests/test_intr_path_transfer.py",
+      "tests/test_intr_path_ingress.py",
+      "tests/test_intr_path_public_ledger_read.py",
+      "tests/fixtures/intr-path-ingress/**",
+      "tests/fixtures/intr-path-transfer/**"
+     ]
+    }
    }
   },
   {
@@ -312,6 +518,38 @@
     "fetch_depth": "1",
     "persist_credentials": "true",
     "timeout_minutes": 30
+   },
+   "path_filters": {
+    "pull_request": {
+     "paths": [
+      "data/organization-role-runtime-reality-deployment.json",
+      "data/organization-role-exemption-register.json",
+      "org-boundary/registry/services.json",
+      "org-boundary/runtime/manifest_selection.py",
+      "org-boundary/runtime/process_boundary.py",
+      "org-boundary/tests/test_manifest_bound_conformance.py",
+      "org-kernel/kernel.py",
+      "control/organization-runtime.json",
+      "resident-runtime/activation-manifest.json",
+      "tools/tasks/folded/manifest-bound-conformance-validation.yml",
+      "tools/tasks/steps/manifest-bound-conformance-validation.validate/**"
+     ]
+    },
+    "push": {
+     "paths": [
+      "data/organization-role-runtime-reality-deployment.json",
+      "data/organization-role-exemption-register.json",
+      "org-boundary/registry/services.json",
+      "org-boundary/runtime/manifest_selection.py",
+      "org-boundary/runtime/process_boundary.py",
+      "org-boundary/tests/test_manifest_bound_conformance.py",
+      "org-kernel/kernel.py",
+      "control/organization-runtime.json",
+      "resident-runtime/activation-manifest.json",
+      "tools/tasks/folded/manifest-bound-conformance-validation.yml",
+      "tools/tasks/steps/manifest-bound-conformance-validation.validate/**"
+     ]
+    }
    }
   },
   {
@@ -358,6 +596,38 @@
     "fetch_depth": "1",
     "persist_credentials": "true",
     "timeout_minutes": 30
+   },
+   "path_filters": {
+    "pull_request": {
+     "paths": [
+      "docs/CANONICAL_NODE_INGRESS_CONTRACT_001.json",
+      "org-boundary/runtime/node_standing.py",
+      "org-boundary/runtime/process_boundary.py",
+      "org-boundary/runtime/intr_transport.py",
+      "org-boundary/tests/test_process_boundary.py",
+      "org-kernel/kernel.py",
+      "org-kernel/tests/test_kernel.py",
+      "resident-runtime/ecosystem_control.py",
+      "resident-runtime/federation_gateway_transport.py",
+      "tools/tasks/folded/node-standing-ingress-validation.yml",
+      "tools/tasks/steps/node-standing-ingress-validation.validate/**"
+     ]
+    },
+    "push": {
+     "paths": [
+      "docs/CANONICAL_NODE_INGRESS_CONTRACT_001.json",
+      "org-boundary/runtime/node_standing.py",
+      "org-boundary/runtime/process_boundary.py",
+      "org-boundary/runtime/intr_transport.py",
+      "org-boundary/tests/test_process_boundary.py",
+      "org-kernel/kernel.py",
+      "org-kernel/tests/test_kernel.py",
+      "resident-runtime/ecosystem_control.py",
+      "resident-runtime/federation_gateway_transport.py",
+      "tools/tasks/folded/node-standing-ingress-validation.yml",
+      "tools/tasks/steps/node-standing-ingress-validation.validate/**"
+     ]
+    }
    }
   },
   {
@@ -392,6 +662,22 @@
     "fetch_depth": "1",
     "persist_credentials": "true",
     "timeout_minutes": 30
+   },
+   "path_filters": {
+    "pull_request": {
+     "paths": [
+      "org-boundary/**",
+      "tools/tasks/folded/org-boundary-execution.yml",
+      "tools/tasks/steps/org-boundary-execution.execute/**"
+     ]
+    },
+    "push": {
+     "paths": [
+      "org-boundary/**",
+      "tools/tasks/folded/org-boundary-execution.yml",
+      "tools/tasks/steps/org-boundary-execution.execute/**"
+     ]
+    }
    }
   },
   {
@@ -443,6 +729,24 @@
     "fetch_depth": "1",
     "persist_credentials": "true",
     "timeout_minutes": 30
+   },
+   "path_filters": {
+    "pull_request": {
+     "paths": [
+      "org-runtime/**",
+      "ORG_RESIDENT_RUNTIME_INTR_BOUNDARY_MIRROR_HANDOFF.md",
+      "tools/tasks/folded/org-runtime-boundary.yml",
+      "tools/tasks/steps/org-runtime-boundary.validate/**"
+     ]
+    },
+    "push": {
+     "paths": [
+      "org-runtime/**",
+      "ORG_RESIDENT_RUNTIME_INTR_BOUNDARY_MIRROR_HANDOFF.md",
+      "tools/tasks/folded/org-runtime-boundary.yml",
+      "tools/tasks/steps/org-runtime-boundary.validate/**"
+     ]
+    }
    }
   },
   {
@@ -494,6 +798,38 @@
     "fetch_depth": "1",
     "persist_credentials": "true",
     "timeout_minutes": 30
+   },
+   "path_filters": {
+    "pull_request": {
+     "paths": [
+      "resident-runtime/release_organization_batch.py",
+      "resident-runtime/propagate_repository_receipts.py",
+      "resident-runtime/tests/test_organization_batch_release.py",
+      "resident-runtime/organization_egress_boundary.py",
+      "resident-runtime/aggregate_repo_transition.py",
+      ".stegverse/transition-ledger/org-contract.json",
+      "org-boundary/registry/federation.json",
+      "data/organization-role-runtime-reality-deployment.json",
+      "data/organization-role-exemption-register.json",
+      "tools/tasks/folded/organization-batch-release-validation.yml",
+      "tools/tasks/steps/organization-batch-release-validation.validate/**"
+     ]
+    },
+    "push": {
+     "paths": [
+      "resident-runtime/release_organization_batch.py",
+      "resident-runtime/propagate_repository_receipts.py",
+      "resident-runtime/tests/test_organization_batch_release.py",
+      "resident-runtime/organization_egress_boundary.py",
+      "resident-runtime/aggregate_repo_transition.py",
+      ".stegverse/transition-ledger/org-contract.json",
+      "org-boundary/registry/federation.json",
+      "data/organization-role-runtime-reality-deployment.json",
+      "data/organization-role-exemption-register.json",
+      "tools/tasks/folded/organization-batch-release-validation.yml",
+      "tools/tasks/steps/organization-batch-release-validation.validate/**"
+     ]
+    }
    }
   },
   {
@@ -540,6 +876,48 @@
     "fetch_depth": "1",
     "persist_credentials": "true",
     "timeout_minutes": 30
+   },
+   "path_filters": {
+    "pull_request": {
+     "paths": [
+      ".stegverse/transition-ledger/**",
+      "resident-runtime/organization_egress_boundary.py",
+      "resident-runtime/aggregate_repo_transition.py",
+      "resident-runtime/ledger_store.py",
+      "resident-runtime/tests/test_organization_egress_boundary.py",
+      "resident-runtime/tests/test_origin_attestation_seam.py",
+      "resident-runtime/tests/test_cli_epoch_parsing.py",
+      "resident-runtime/intr_destination_ingress.py",
+      "resident-runtime/propagate_repository_receipts.py",
+      "resident-runtime/release_organization_batch.py",
+      "org-boundary/runtime/origin_attestation.py",
+      "org-runtime/interlock-intr.json",
+      "org-runtime/runtime_boundary.py",
+      "org-kernel/kernel.py",
+      "tools/tasks/folded/organization-egress-boundary-validation.yml",
+      "tools/tasks/steps/organization-egress-boundary-validation.validate/**"
+     ]
+    },
+    "push": {
+     "paths": [
+      ".stegverse/transition-ledger/**",
+      "resident-runtime/organization_egress_boundary.py",
+      "resident-runtime/aggregate_repo_transition.py",
+      "resident-runtime/ledger_store.py",
+      "resident-runtime/tests/test_organization_egress_boundary.py",
+      "resident-runtime/tests/test_origin_attestation_seam.py",
+      "resident-runtime/tests/test_cli_epoch_parsing.py",
+      "resident-runtime/intr_destination_ingress.py",
+      "resident-runtime/propagate_repository_receipts.py",
+      "resident-runtime/release_organization_batch.py",
+      "org-boundary/runtime/origin_attestation.py",
+      "org-runtime/interlock-intr.json",
+      "org-runtime/runtime_boundary.py",
+      "org-kernel/kernel.py",
+      "tools/tasks/folded/organization-egress-boundary-validation.yml",
+      "tools/tasks/steps/organization-egress-boundary-validation.validate/**"
+     ]
+    }
    }
   },
   {
@@ -555,6 +933,11 @@
      "name": "Workflow files equal the registered surfaces; catalog verifies ALLOW",
      "run_file": "tools/tasks/steps/workflow-surface-registry.validate/01-registry.sh",
      "run_sha256": "811824e88664923006be2eeb35632d710f5504145967f61632ad9e8fbdcb35ca"
+    },
+    {
+     "name": "Folded groups keep their original path filters (NOT_SELECTED, never skipped)",
+     "run_file": "tools/tasks/steps/workflow-surface-registry.validate/02-original-path-filters.sh",
+     "run_sha256": "9db82fbdf49b831995929ec2919b6ead95a650d1b9929cfb760742654aa3dbc7"
     }
    ],
    "artifacts": [],
